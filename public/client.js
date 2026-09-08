@@ -214,7 +214,14 @@ document.querySelector('.chat-item').addEventListener('click', () => app.classLi
 document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 document.querySelector('#menuBtn').addEventListener('click', () => showToast('WhatsApp menu'));
-document.querySelector('#chatSearchBtn').addEventListener('click', () => document.querySelector('#searchInput').focus());
+document.querySelector('#chatSearchBtn').addEventListener('click', () => {
+  if (window.innerWidth <= 760) {
+    app.classList.remove('chat-open');
+    setTimeout(() => document.querySelector('#searchInput').focus(), 50);
+  } else {
+    document.querySelector('#searchInput').focus();
+  }
+});
 document.querySelector('#searchInput').addEventListener('input', e => {
   const q=e.target.value.toLowerCase();
   document.querySelectorAll('.message').forEach(m => m.style.display = !q || m.textContent.toLowerCase().includes(q) ? '' : 'none');
