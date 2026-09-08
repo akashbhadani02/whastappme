@@ -105,6 +105,8 @@ io.on('connection', async (socket) => {
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     try {
       const saved = await broadcastSaved('message', msg);
       if (typeof ack === 'function') ack({ ok: true, message: saved });
@@ -116,6 +118,8 @@ io.on('connection', async (socket) => {
 
   socket.on('media', async (msg, ack) => {
     if (!msg || !msg.data || !msg.type || !msg.id) return;
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     try {
       const saved = await broadcastSaved('media', msg);
       if (typeof ack === 'function') ack({ ok: true, message: saved });
@@ -182,6 +186,20 @@ io.on('connection', async (socket) => {
       console.error('Failed to save read receipt:', error.message);
     }
     io.emit('message-read', { id: data.id, userId: readerId });
+  });
+
+  socket.on('message-delivered', async (data) => {
+    if (!data || !data.id || !socket.userId) return;
+    const receiverId = String(socket.userId);
+    try {
+      const collection = await getCollection();
+      if (collection) {
+        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
+      }
+    } catch (error) {
+      console.error('Failed to save delivery receipt:', error.message);
+    }
+    io.emit('message-delivered', { id: data.id, userId: receiverId });
   });
 
   socket.on('clear-chat', async () => {

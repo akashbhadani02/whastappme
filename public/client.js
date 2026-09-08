@@ -38,10 +38,26 @@ const onlineStatus = document.querySelector('#onlineStatus');
 
 let pendingAction = null;
 const messages = new Map();
+const deletedIds = new Set();
+const readSent = new Set();
+let lastRenderedDate = '';
+let chatOpen = window.innerWidth > 760;
 const emojis = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😎','🤩','🥳','🤔','🤗','🤭','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱','😴','😌','🤓','😛','😜','🤪','🤑','🤠','👍','👎','👏','🙏','❤️','🔥','🎉','💯','😂','🤣','😢','😭','😡','❤️‍🔥','💔'];
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+function dateKey(msg) {
+  const d = msg.createdAt ? new Date(msg.createdAt) : new Date();
+  return d.toISOString().slice(0,10);
+}
+function dateLabel(key) {
+  const d = new Date(key + 'T00:00:00');
+  const today = new Date(); today.setHours(0,0,0,0);
+  const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
+  if (d.getTime() === today.getTime()) return 'TODAY';
+  if (d.getTime() === yesterday.getTime()) return 'YESTERDAY';
+  return d.toLocaleDateString([], {day:'numeric', month:'long', year:'numeric'});
 }
 
 function id() {
@@ -87,8 +103,7 @@ passwordModal.addEventListener('click', e => { if (e.target === passwordModal) c
 function sendMessage(text) {
   const message = text.trim();
   if (!message) return;
-  const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text' };
-  renderMessage(msg, 'outgoing');
+  const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [] , readBy: [] };
   socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be saved'); });
   textarea.value = '';
   autoResize();
@@ -106,7 +121,14 @@ textarea.addEventListener('input', autoResize);
 function autoResize() { textarea.style.height='auto'; textarea.style.height=Math.min(textarea.scrollHeight,120)+'px'; }
 
 function renderMessage(msg, direction) {
-  if (!msg || !msg.id || messages.has(msg.id)) return;
+  if (!msg || !msg.id || deletedIds.has(msg.id) || messages.has(msg.id)) return;
+  if (msg.createdAt) {
+    const key = dateKey(msg);
+    if (key !== lastRenderedDate) {
+      const sep = document.createElement('div'); sep.className='date-separator'; sep.textContent=dateLabel(key);
+      messageArea.appendChild(sep); lastRenderedDate = key;
+    }
+  }
   messages.set(msg.id, msg);
 
   const el = document.createElement('div');
@@ -167,12 +189,13 @@ function deleteMessage(messageId, broadcast=true) {
   const el=document.querySelector(`.message[data-id="${CSS.escape(messageId)}"]`);
   if (el) el.remove();
   messages.delete(messageId);
-  if (broadcast) socket.emit('delete-message', {id:messageId});
+  deletedIds.add(messageId);
+  if (broadcast) socket.emit('delete-message', {id:messageId}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
   updatePreview('Message deleted');
 }
 
 function clearChat(broadcast=true) {
-  messageArea.innerHTML=''; messages.clear();
+  messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
   updatePreview('No messages yet');
   if (broadcast) socket.emit('clear-chat', {by:name});
 }
@@ -186,8 +209,8 @@ fileInput.addEventListener('change', e => {
   if (file.size > 8 * 1024 * 1024) { showToast('Please choose a file smaller than 8 MB'); fileInput.value=''; return; }
   const reader=new FileReader();
   reader.onload=() => {
-    const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now()};
-    renderMessage(msg,'outgoing'); socket.emit('media',msg, (result) => { if (!result || !result.ok) showToast('Media could not be saved'); }); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
+    const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now(),createdAt:new Date().toISOString(),deliveredTo:[],readBy:[]};
+    socket.emit('media',msg, (result) => { if (!result || !result.ok) showToast('Media could not be saved'); }); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
   };
   reader.readAsDataURL(file);
 });
@@ -235,7 +258,8 @@ socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
 
 function markMessageRead(msg) {
-  if (!msg || !msg.id || msg.userId === userId) return;
+  if (!msg || !msg.id || msg.userId === userId || readSent.has(msg.id) || !chatOpen) return;
+  readSent.add(msg.id);
   socket.emit('message-read', { id: msg.id, userId });
 }
 
@@ -245,6 +269,13 @@ function markVisibleMessagesRead() {
     if (msg.userId !== userId) markMessageRead(msg);
   });
 }
+
+socket.on('message-delivered', data => {
+  if (!data || !data.id || !data.userId) return;
+  const msg = messages.get(data.id); if (!msg) return;
+  msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
+  if (!msg.deliveredTo.includes(data.userId)) msg.deliveredTo.push(data.userId);
+});
 
 socket.on('message-read', data => {
   if (!data || !data.id || !data.userId) return;
@@ -288,7 +319,7 @@ socket.on('connect', () => {
 });
 socket.on('disconnect', () => { onlineStatus.textContent='connecting…'; });
 
-document.addEventListener('visibilitychange', markVisibleMessagesRead);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 
@@ -301,8 +332,11 @@ emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classL
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
-document.querySelector('#backBtn').addEventListener('click', () => app.classList.remove('chat-open'));
-document.querySelector('.chat-item').addEventListener('click', () => app.classList.add('chat-open'));
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
+function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
+document.querySelector('#backBtn').addEventListener('click', closeChat);
+document.querySelector('.chat-item').addEventListener('click', () => openChat());
+window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
 document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 const nameModal = document.querySelector('#nameModal');
@@ -386,5 +420,6 @@ document.querySelector('#searchInput').addEventListener('input', e => {
   document.querySelectorAll('.message').forEach(m => m.style.display = !q || m.textContent.toLowerCase().includes(q) ? '' : 'none');
 });
 
-if (window.innerWidth <= 760) app.classList.remove('chat-open'); else app.classList.add('chat-open');
+if (window.innerWidth <= 760) { app.classList.remove('chat-open'); chatOpen=false; } else { app.classList.add('chat-open'); chatOpen=true; }
+window.addEventListener('resize', () => { if (window.innerWidth > 760) { app.classList.add('chat-open'); chatOpen=true; } });
 updatePreview('Messages are end-to-end styled for this demo');
