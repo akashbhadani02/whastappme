@@ -23,7 +23,7 @@ const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const CHATS_COLLECTION_NAME = 'chats';
-const CHAT_ADMIN_PASSWORD = process.env.CHAT_ADMIN_PASSWORD || 'deoxy';
+const CONTROL_PASSWORD = process.env.CHAT_CONTROL_PASSWORD || 'deoxy';
 
 function getVapidKeys() {
   // Prefer an explicit VAPID private key. If it is not configured, derive a stable
@@ -60,8 +60,8 @@ async function ensureDefaultChat() {
   if (!chats) return null;
   let main = await chats.findOne({ _id: 'main' });
   if (!main) {
-    const hp = hashChatPassword('deoxy');
-    main = { _id: 'main', name: 'WhatsApp', passwordHash: hp.hash, passwordSalt: hp.salt, passwordPlain: 'deoxy', createdAt: new Date() };
+    const hp = hashChatPassword('kmkm');
+    main = { _id: 'main', name: 'WhatsApp', passwordHash: hp.hash, passwordSalt: hp.salt, passwordPlain: 'kmkm', createdAt: new Date() };
     await chats.insertOne(main);
   }
   return main;
@@ -250,16 +250,45 @@ app.get('/api/chats', async (req, res) => {
 
 app.get('/api/chat-passwords', async (req, res) => {
   try {
-    const adminPassword = String(req.headers['x-chat-admin-password'] || '');
-    if (adminPassword !== CHAT_ADMIN_PASSWORD) return res.status(403).json({ ok: false, chats: [], error: 'Admin password required' });
+    const supplied = String(req.headers['x-control-password'] || '');
+    if (supplied !== CONTROL_PASSWORD) return res.status(401).json({ ok: false, error: 'Control password required' });
     const chats = await getChatsCollection();
-    if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp', password: 'deoxy' }] });
+    if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp', password: 'kmkm' }] });
     await ensureDefaultChat();
     const rows = await chats.find({}, { projection: { _id: 1, name: 1, passwordPlain: 1 } }).sort({ createdAt: 1 }).toArray();
-    res.json({ ok: true, chats: rows.map(c => ({ id: String(c._id), name: c.name, password: c.passwordPlain || '' })) });
+    res.json({
+      ok: true,
+      controlPassword: CONTROL_PASSWORD,
+      chats: rows.map(c => ({ id: String(c._id), name: c.name, password: c.passwordPlain || '' })),
+      actionPasswords: { passwords: CONTROL_PASSWORD, delete: CONTROL_PASSWORD, download: 'Each group/chat password' }
+    });
   } catch (error) {
     console.error('Failed to load chat passwords:', error.message);
     res.status(500).json({ ok: false, chats: [] });
+  }
+});
+
+app.delete('/api/chats/:id', async (req, res) => {
+  try {
+    const supplied = String(req.headers['x-control-password'] || '');
+    if (supplied !== CONTROL_PASSWORD) return res.status(401).json({ ok: false, error: 'Wrong delete password' });
+    const chatId = String(req.params.id || '');
+    if (!chatId || chatId === 'main') return res.status(400).json({ ok: false, error: 'Main chat cannot be deleted' });
+    const chats = await getChatsCollection();
+    const collection = await getCollection();
+    if (!chats || !collection) return res.status(503).json({ ok: false, error: 'MongoDB is required' });
+    const chat = await chats.findOne({ _id: chatId });
+    if (!chat) return res.status(404).json({ ok: false, error: 'Group not found' });
+
+    await collection.deleteMany({ chatId });
+    await chats.deleteOne({ _id: chatId });
+    const payload = { id: chatId, name: chat.name || 'Chat' };
+    io.emit('chat-deleted', payload);
+    await publishRealtimeEvent('chat-deleted', payload);
+    res.json({ ok: true, chat: payload });
+  } catch (error) {
+    console.error('Delete chat failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Could not delete group' });
   }
 });
 
@@ -460,35 +489,6 @@ io.on('connection', async (socket) => {
       uploads.delete(String(data.uploadId));
       try { await (await getMediaBucket()).delete(upload.fileId); } catch (_) {}
       if (typeof ack === 'function') ack({ ok: false });
-    }
-  });
-
-  socket.on('delete-chat', async (data, ack) => {
-    const chatId = String(data?.chatId || '');
-    const adminPassword = String(data?.adminPassword || '');
-    if (!chatId || chatId === 'main') {
-      return typeof ack === 'function' && ack({ ok: false, error: 'Main group cannot be deleted' });
-    }
-    if (adminPassword !== CHAT_ADMIN_PASSWORD) {
-      return typeof ack === 'function' && ack({ ok: false, error: 'Wrong admin password' });
-    }
-    try {
-      const chats = await getChatsCollection();
-      if (!chats) return typeof ack === 'function' && ack({ ok: false, error: 'MongoDB is required' });
-      const chat = await chats.findOne({ _id: chatId });
-      if (!chat) return typeof ack === 'function' && ack({ ok: false, error: 'Group not found' });
-
-      const collection = await getCollection();
-      if (collection) await collection.deleteMany({ chatId });
-      await chats.deleteOne({ _id: chatId });
-
-      const event = { chatId, name: chat.name };
-      io.emit('chat-deleted', event);
-      await publishRealtimeEvent('chat-deleted', event);
-      if (typeof ack === 'function') ack({ ok: true, chat: event });
-    } catch (error) {
-      console.error('Delete chat failed:', error.message);
-      if (typeof ack === 'function') ack({ ok: false, error: 'Could not delete group' });
     }
   });
 

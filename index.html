@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#00a884">
   <title>WhatsApp</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#075e54">
 </head>
 <body>
   <main class="app-shell">
@@ -19,6 +21,7 @@
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
+      <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button></div>
       <div class="search-wrap">
         <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">
@@ -31,9 +34,9 @@
       </div>
       <div class="chat-list" id="chatList">
         <button class="chat-item active" data-chat="main">
-          <div class="avatar">W</div>
+          <div class="avatar group-avatar" id="groupAvatarList">W</div>
           <div class="chat-summary">
-            <div class="chat-line"><strong>WhatsApp</strong><span id="listTime"></span></div>
+            <div class="chat-line"><strong id="groupNameList">WhatsApp</strong><span id="listTime"></span></div>
             <div class="chat-line preview"><span id="listPreview">Messages are end-to-end styled for this demo</span><span class="unread-dot"></span></div>
           </div>
         </button>
@@ -44,9 +47,9 @@
     <section class="chat-panel">
       <header class="chat-header">
         <button class="back-btn" id="backBtn" aria-label="Back">‹</button>
-        <div class="avatar">W</div>
+        <div class="avatar group-avatar" id="groupAvatarHeader">W</div>
         <div class="contact-info">
-          <strong>WhatsApp</strong>
+          <strong id="groupNameHeader">WhatsApp</strong>
           <span id="onlineStatus">online</span>
         </div>
         <div class="header-actions">
@@ -75,19 +78,35 @@
       <button class="modal-close" id="nameClose" aria-label="Close">×</button>
       <div class="lock-icon">👤</div>
       <h3 id="nameTitle">Change your name</h3>
-      <p>Choose the name other people will see in chat.</p>
-      <input id="nameInput" type="text" maxlength="40" autocomplete="name" placeholder="Your name">
+      <p id="nameHelp">Choose the name other users will see.</p>
+      <input id="nameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
     </div>
   </div>
 
-  <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true">
+  <div class="modal hidden" id="groupNameModal" role="dialog" aria-modal="true" aria-labelledby="groupNameTitle">
     <div class="modal-card">
-      <button class="modal-close" id="passwordsClose">×</button>
-      <h3>Chat passwords</h3>
-      <p>All chat names and their saved passwords.</p>
-      <div id="passwordsList" class="passwords-list"></div>
+      <button class="modal-close" id="groupNameClose" aria-label="Close">×</button>
+      <div class="lock-icon">👥</div>
+      <h3 id="groupNameTitle">Change group name</h3>
+      <p>Choose the group name everyone will see.</p>
+      <input id="groupNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Group name">
+      <div class="password-error" id="groupNameError"></div>
+      <button class="primary-btn" id="groupNameSave">Save group name</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="newChatModal" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
+    <div class="modal-card">
+      <button class="modal-close" id="newChatClose" aria-label="Close">×</button>
+      <div class="lock-icon">💬</div>
+      <h3 id="newChatTitle">New chat</h3>
+      <p>Create a chat with its own password.</p>
+      <input id="newChatNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Chat name">
+      <div class="password-field" style="margin-top:10px"><input id="newChatPasswordInput" type="password" autocomplete="new-password" placeholder="Chat password"><button type="button" class="password-toggle" data-target="newChatPasswordInput" aria-label="Show password">👁</button></div>
+      <div class="password-error" id="newChatError"></div>
+      <button class="primary-btn" id="newChatSave">Create chat</button>
     </div>
   </div>
 
@@ -97,7 +116,7 @@
       <div class="lock-icon">🔒</div>
       <h3 id="passwordTitle">Password required</h3>
       <p id="passwordText">Enter password to continue.</p>
-      <input id="passwordInput" type="password" autocomplete="off" placeholder="Password">
+      <div class="password-field"><input id="passwordInput" type="password" autocomplete="off" placeholder="Password"><button type="button" class="password-toggle" data-target="passwordInput" aria-label="Show password">👁</button></div>
       <div class="password-error" id="passwordError"></div>
       <button class="primary-btn" id="passwordSubmit">Continue</button>
     </div>
