@@ -15,7 +15,6 @@
       <div class="sidebar-top">
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
-          <button class="passwords-action" id="passwordsBtn" type="button" title="Chat passwords" aria-label="Chat passwords">🔑 Passwords</button>
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
           <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
@@ -97,43 +96,18 @@
     </div>
   </div>
 
-  <div class="modal hidden" id="newChatModal" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
-    <div class="modal-card">
-      <button class="modal-close" id="newChatClose" aria-label="Close">×</button>
-      <div class="lock-icon">💬</div>
-      <h3 id="newChatTitle">New chat</h3>
-      <p>Create a chat with its own password.</p>
-      <input id="newChatNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Chat name">
-      <div class="password-field" style="margin-top:10px"><input id="newChatPasswordInput" type="password" autocomplete="new-password" placeholder="Chat password"><button type="button" class="password-toggle" data-target="newChatPasswordInput" aria-label="Show password">👁</button></div>
-      <div class="password-error" id="newChatError"></div>
-      <button class="primary-btn" id="newChatSave">Create chat</button>
-    </div>
-  </div>
-
   <div class="modal hidden" id="passwordModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" id="passwordClose">×</button>
       <div class="lock-icon">🔒</div>
       <h3 id="passwordTitle">Password required</h3>
       <p id="passwordText">Enter password to continue.</p>
-      <div class="password-field"><input id="passwordInput" type="password" autocomplete="off" placeholder="Password"><button type="button" class="password-toggle" data-target="passwordInput" aria-label="Show password">👁</button></div>
+      <input id="passwordInput" type="password" autocomplete="off" placeholder="Password">
       <div class="password-error" id="passwordError"></div>
       <button class="primary-btn" id="passwordSubmit">Continue</button>
     </div>
   </div>
 
-
-  <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true" aria-labelledby="passwordsTitle">
-    <div class="modal-card passwords-card">
-      <button class="modal-close" id="passwordsClose" aria-label="Close">×</button>
-      <div class="lock-icon">🔑</div>
-      <h3 id="passwordsTitle">Group passwords</h3>
-      <p>Enter the main password to view all group names and passwords.</p>
-      <div class="passwords-list" id="passwordsList"></div>
-      <div class="password-error" id="passwordsError"></div>
-      <button class="primary-btn" id="passwordsUnlock">View passwords</button>
-    </div>
-  </div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>

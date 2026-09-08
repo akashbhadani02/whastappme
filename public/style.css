@@ -43,25 +43,3 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 .avatar[title="Change your name"]{cursor:pointer}
 
 .app-menu{position:absolute;right:16px;top:58px;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:50;padding:6px;min-width:190px}.app-menu.hidden{display:none}.app-menu button{width:100%;text-align:left;border:0;background:transparent;padding:11px 13px;border-radius:7px;font-size:14px;cursor:pointer}.app-menu button:hover{background:#f0f2f5}
-
-
-.password-field { position: relative; width: 100%; }
-.password-field input { width: 100%; padding-right: 48px; box-sizing: border-box; }
-.password-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; cursor: pointer; font-size: 18px; line-height: 1; padding: 8px; }
-.password-toggle:hover { opacity: .75; }
-
-.passwords-action{height:38px;border:0;border-radius:19px;padding:0 12px;background:#d9fdd3;color:#075e54;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}.passwords-action:hover{background:#c9f7c2}.passwords-action:active{transform:scale(.97)}
-@media (max-width:420px){.passwords-action{padding:0 8px;font-size:12px}.top-actions{gap:2px}}
-@media (max-width:340px){.passwords-action{padding:0 7px;font-size:11px}.top-actions #statusBtn{display:none}}
-
-.passwords-card{width:min(94vw,520px);max-height:86vh;overflow:auto}
-.passwords-list{display:flex;flex-direction:column;gap:10px;margin:14px 0}
-.password-row{padding:12px;border:1px solid #e2e6e8;border-radius:12px;background:#f7f9fa}
-.password-chat-name{font-weight:700;color:#075e54;margin-bottom:8px}
-.password-value-wrap{position:relative}
-.chat-password-value{width:100%;box-sizing:border-box;padding:10px 45px 10px 12px;border:1px solid #d1d7db;border-radius:8px;background:#fff}
-.password-actions-label{font-size:11px;color:#667781;margin-top:6px}
-.main-password-badge{display:inline-block;margin-top:8px;padding:5px 8px;border-radius:6px;background:#d9fdd3;color:#075e54;font-weight:700;font-size:11px}
-.delete-group-btn{margin-top:9px;border:0;border-radius:8px;padding:8px 11px;background:#ffe5e5;color:#b42318;font-weight:700;cursor:pointer}
-.delete-group-btn:hover{background:#ffd3d3}
-.passwords-empty{text-align:center;color:#667781;padding:18px}
