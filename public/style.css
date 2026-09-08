@@ -32,8 +32,3 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 @media (max-width:420px){.avatar{width:40px;height:40px;font-size:16px}.sidebar-top .avatar{width:40px;height:40px}.top-actions .icon-btn{width:38px;height:38px;font-size:22px}.filter{font-size:12px;padding:7px 12px}.chat-line strong{font-size:15px}.chat-line span{font-size:11px}.chat-item{padding:10px}.chat-header .contact-info strong{font-size:15px}.chat-header .contact-info span{font-size:11px}.chat-bg{padding-left:7px;padding-right:7px}.message{max-width:92%;padding:6px 8px 5px}.composer{padding-left:5px;padding-right:5px}.composer .round-btn{width:36px}.emoji-panel.open{grid-template-columns:repeat(7,1fr)}}
 @media (max-width:340px){.top-actions #statusBtn{display:none}.composer #emojiBtn{display:none}.chat-bg{padding-left:5px;padding-right:5px}.message{max-width:94%}}
 @media (pointer:coarse){.message-more{opacity:1}.icon-btn,.round-btn,.send-btn{touch-action:manipulation}}
-
-/* Editable profile name */
-#nameInput{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d1d7db;border-radius:8px;font-size:16px;outline:none;margin-top:8px}
-#nameInput:focus{border-color:var(--wa-green);box-shadow:0 0 0 2px rgba(0,168,132,.12)}
-#nameError{min-height:20px;margin-top:6px}
