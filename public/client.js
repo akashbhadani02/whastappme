@@ -737,10 +737,28 @@ emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classL
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
-function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
-function closeChat(){ chatOpen=false; currentChatPassword=''; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
-document.querySelector('#backBtn').addEventListener('click', closeChat);
-window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
+// Open/close chat safely on both mobile and laptop.
+function openChat(push=true){
+  chatOpen=true;
+  app.classList.add('chat-open');
+  app.classList.remove('chat-closed');
+  if(push && window.innerWidth<=760 && location.hash !== '#chat') history.pushState({chat:true}, '', '#chat');
+  setTimeout(markVisibleMessagesRead, 50);
+}
+function closeChat(){
+  chatOpen=false;
+  currentChatPassword='';
+  app.classList.remove('chat-open');
+  app.classList.add('chat-closed');
+  // Do not call history.back(): it can leave the app or fail when there is no history entry.
+  if(location.hash === '#chat') history.replaceState(history.state, '', location.pathname + location.search);
+  const list=document.querySelector('#chatList');
+  if(list) list.scrollTop=0;
+}
+const backBtn=document.querySelector('#backBtn');
+backBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); closeChat(); });
+backBtn?.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); closeChat(); }, {passive:false});
+window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); app.classList.add('chat-closed'); });
 
 
 function renderChatList() {
