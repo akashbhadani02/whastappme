@@ -238,7 +238,11 @@ function updateTicks(msg) {
 
 function receiveMessage(msg) {
   if (!msg || !msg.id) return;
-  renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming');
+  const isIncoming = msg.userId !== userId;
+  renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
+  if (isIncoming) {
+    socket.emit('message-delivered', { id: msg.id, userId });
+  }
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
   if (msg.userId !== userId && document.visibilityState === 'visible') markMessageRead(msg);
@@ -288,17 +292,52 @@ socket.on('message-read', data => {
 
 async function syncMessages() {
   try {
-    const url = lastSyncAt ? `/api/messages?after=${encodeURIComponent(lastSyncAt)}` : '/api/messages';
-    const response = await fetch(url, { cache: 'no-store' });
+    // Fetch the complete current group state so every device can recover not only
+    // new messages, but also deletes, clears, renames and read receipts even when
+    // Vercel routes two users to different server instances.
+    const response = await fetch('/api/messages', { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
-    if (Array.isArray(data.messages)) data.messages.forEach(receiveMessage);
+    if (!Array.isArray(data.messages)) return;
+
+    const serverIds = new Set(data.messages.map(m => m && m.id).filter(Boolean));
+    const localIds = Array.from(messages.keys());
+    localIds.forEach(id => {
+      if (!serverIds.has(id)) deleteMessage(id, false);
+    });
+
+    data.messages.forEach(msg => {
+      if (!msg || !msg.id) return;
+      const existing = messages.get(msg.id);
+      if (!existing) {
+        receiveMessage(msg);
+        return;
+      }
+      // Merge persisted receipt/name changes into the already-rendered message.
+      existing.user = msg.user || existing.user;
+      existing.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+      existing.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      const sender = el && el.querySelector('.sender');
+      if (sender && existing.user) sender.textContent = existing.user;
+      updateTicks(existing);
+    });
+
+    if (data.messages.length) {
+      const last = data.messages[data.messages.length - 1];
+      if (last.createdAt) lastSyncAt = new Date(last.createdAt).toISOString();
+    } else {
+      lastSyncAt = '';
+    }
   } catch (_) {
-    // Socket.IO remains the primary realtime channel; polling is a recovery path.
+    // Socket.IO remains the fast realtime channel; this sync is the cross-instance
+    // recovery path and also keeps deletes/read receipts consistent everywhere.
   }
 }
 
-setInterval(syncMessages, 3000);
+// Frequent reconciliation keeps all devices in the same group state, including
+// users connected to different Vercel instances.
+setInterval(syncMessages, 1000);
 
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
