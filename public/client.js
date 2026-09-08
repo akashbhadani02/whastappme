@@ -142,11 +142,12 @@ function renderMessage(msg, direction) {
   const content = document.createElement('div');
   if (msg.type === 'image' || msg.type === 'video') {
     const wrap = document.createElement('div'); wrap.className='media-wrap';
+    const mediaUrl = msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
     if (msg.type === 'image') {
-      const img=document.createElement('img'); img.src=msg.data; img.alt='Photo'; img.loading='lazy'; wrap.appendChild(img);
+      const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; wrap.appendChild(img);
     } else {
-      const video=document.createElement('video'); video.controls=true; video.preload='metadata';
-      const source=document.createElement('source'); source.src=msg.data; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
+      const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.setAttribute('controlsList','nodownload'); video.disablePictureInPicture=true; video.addEventListener('contextmenu', e => e.preventDefault());
+      const source=document.createElement('source'); source.src=mediaUrl; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
@@ -206,17 +207,44 @@ attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
   const file=e.target.files[0]; if (!file) return;
   if (!/^image\/(png|jpe?g|gif|webp)|video\/(mp4|webm|ogg)$/.test(file.type)) { showToast('Only image and video files are allowed'); fileInput.value=''; return; }
-  if (file.size > 8 * 1024 * 1024) { showToast('Please choose a file smaller than 8 MB'); fileInput.value=''; return; }
-  const reader=new FileReader();
-  reader.onload=() => {
-    const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now(),createdAt:new Date().toISOString(),deliveredTo:[],readBy:[]};
-    socket.emit('media',msg, (result) => { if (!result || !result.ok) showToast('Media could not be saved'); }); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
-  };
-  reader.readAsDataURL(file);
+  uploadMedia(file).finally(() => { fileInput.value=''; });
 });
 
+async function uploadMedia(file) {
+  if (!socket.connected) { showToast('Connecting… please try again'); return; }
+  const uploadId = id();
+  const msgId = id();
+  const type = file.type.startsWith('image/') ? 'image' : 'video';
+  const meta = { uploadId, id: msgId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+  try {
+    const started = await emitAck('media-start', meta);
+    if (!started.ok) throw new Error('start');
+    const chunkSize = 1024 * 1024;
+    let sent = 0;
+    while (sent < file.size) {
+      const chunk = await file.slice(sent, sent + chunkSize).arrayBuffer();
+      const result = await emitAck('media-chunk', { uploadId, chunk });
+      if (!result.ok) throw new Error('chunk');
+      sent += chunk.byteLength;
+      showToast(`Uploading ${Math.round((sent / file.size) * 100)}%`);
+    }
+    const result = await emitAck('media-end', { uploadId });
+    if (!result.ok) throw new Error('finish');
+    updatePreview(type === 'image' ? '📷 Photo' : '🎥 Video');
+  } catch (error) {
+    showToast('Media upload failed');
+  }
+}
+
+function emitAck(event, data) {
+  return new Promise(resolve => socket.emit(event, data, result => resolve(result || {ok:false})));
+}
+
 function downloadMedia(msg) {
-  const a=document.createElement('a'); a.href=msg.data; a.download=`whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`; document.body.appendChild(a); a.click(); a.remove(); showToast('Download started');
+  const a=document.createElement('a');
+  a.href=msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
+  a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
+  document.body.appendChild(a); a.click(); a.remove(); showToast('Download started');
 }
 function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==='jpeg'?'jpg':(ext || type); }
 
