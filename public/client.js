@@ -48,6 +48,24 @@ const groupNameList = document.querySelector('#groupNameList');
 const groupNameHeader = document.querySelector('#groupNameHeader');
 const groupAvatarList = document.querySelector('#groupAvatarList');
 const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
+const menuBtn = document.querySelector('#menuBtn');
+const appMenu = document.querySelector('#appMenu');
+const installAppBtn = document.querySelector('#installAppBtn');
+
+menuBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  appMenu?.classList.toggle('hidden');
+});
+document.addEventListener('click', () => appMenu?.classList.add('hidden'));
+installAppBtn?.addEventListener('click', () => {
+  appMenu?.classList.add('hidden');
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (isAndroid) {
+    window.location.href = '/whatsapp.apk';
+  } else {
+    showToast('Android phone પર આ shortcutથી WhatsApp APK install કરો.');
+  }
+});
 
 let pendingAction = null;
 const messages = new Map();

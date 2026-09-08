@@ -41,3 +41,5 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 #nameInput:focus{border-color:var(--wa-green);box-shadow:0 0 0 2px rgba(0,168,132,.12)}
 #nameError{min-height:20px;margin-top:6px}
 .avatar[title="Change your name"]{cursor:pointer}
+
+.app-menu{position:absolute;right:16px;top:58px;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:50;padding:6px;min-width:190px}.app-menu.hidden{display:none}.app-menu button{width:100%;text-align:left;border:0;background:transparent;padding:11px 13px;border-radius:7px;font-size:14px;cursor:pointer}.app-menu button:hover{background:#f0f2f5}
