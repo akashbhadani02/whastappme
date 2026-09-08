@@ -54,17 +54,6 @@ async function getChatsCollection() {
   const db = await getDb();
   return db ? db.collection(CHATS_COLLECTION_NAME) : null;
 }
-async function ensureDefaultChat() {
-  const chats = await getChatsCollection();
-  if (!chats) return null;
-  let main = await chats.findOne({ _id: 'main' });
-  if (!main) {
-    const hp = hashChatPassword('kmkm');
-    main = { _id: 'main', name: 'WhatsApp', passwordHash: hp.hash, passwordSalt: hp.salt, passwordPlain: 'kmkm', createdAt: new Date() };
-    await chats.insertOne(main);
-  }
-  return main;
-}
 async function getAuthorizedChat(socket, chatId) {
   const id = String(chatId || 'main');
   if (!socket.authorizedChats || !socket.authorizedChats.has(id)) return false;
@@ -237,7 +226,6 @@ app.get('/api/chats', async (req, res) => {
   try {
     const chats = await getChatsCollection();
     if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp' }] });
-    await ensureDefaultChat();
     const rows = await chats.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1 }).toArray();
     res.json({ ok: true, chats: rows.map(c => ({ id: String(c._id), name: c.name })) });
   } catch (error) {
@@ -251,7 +239,6 @@ app.get('/api/chat-passwords', async (req, res) => {
   try {
     const chats = await getChatsCollection();
     if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp', password: 'kmkm' }] });
-    await ensureDefaultChat();
     const rows = await chats.find({}, { projection: { _id: 1, name: 1, passwordPlain: 1 } }).sort({ createdAt: 1 }).toArray();
     res.json({ ok: true, chats: rows.map(c => ({ id: String(c._id), name: c.name, password: c.passwordPlain || '' })) });
   } catch (error) {
@@ -357,8 +344,8 @@ io.on('connection', async (socket) => {
 
   socket.on('delete-chat', async (data, ack) => {
     const chatId = String(data?.chatId || '');
-    if (!chatId || chatId === 'main') {
-      if (typeof ack === 'function') ack({ ok: false, error: 'The main chat cannot be deleted' });
+    if (!chatId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Chat id is required' });
       return;
     }
     if (!(await getAuthorizedChat(socket, chatId))) {
@@ -379,12 +366,16 @@ io.on('connection', async (socket) => {
       }
 
       // Remove all persisted messages/media belonging to this chat first.
+      // The original/default chat may contain legacy messages without chatId.
+      const chatMessageQuery = chatId === 'main'
+        ? { $or: [{ chatId: 'main' }, { chatId: { $exists: false } }] }
+        : { chatId };
       if (collection) {
         const mediaMessages = await collection.find(
-          { chatId, mediaId: { $exists: true } },
+          { ...chatMessageQuery, mediaId: { $exists: true } },
           { projection: { mediaId: 1 } }
         ).toArray();
-        await collection.deleteMany({ chatId });
+        await collection.deleteMany(chatMessageQuery);
         let bucket = null;
         try { bucket = await getMediaBucket(); } catch (_) {}
         if (bucket) {
@@ -430,7 +421,6 @@ io.on('connection', async (socket) => {
     }
   });
 
-  await ensureDefaultChat().catch(() => {});
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id || !(await getAuthorizedChat(socket, msg.chatId))) return;

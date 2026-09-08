@@ -85,8 +85,8 @@ installAppBtn?.addEventListener('click', () => {
 
 
 async function deleteChatWithPassword(chat, password) {
-  if (!chat || chat.id === 'main') {
-    showToast('Main chat cannot be deleted');
+  if (!chat) {
+    showToast('Chat not found');
     return;
   }
   if (!confirm(`Delete group “${chat.name}”?\n\nAll messages and media in this group will be permanently deleted for everyone.`)) return;
@@ -114,7 +114,7 @@ async function loadChatPasswords() {
       const safeName = String(row.name || 'Chat').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
       const safePass = pass.replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
       const unavailable = !pass;
-      return `<div class="password-row" data-chat-id="${String(row.id || '').replace(/\"/g,'&quot;')}"><div class="password-chat-name">${safeName}</div><div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="text" value="${safePass}" placeholder="${unavailable ? 'Password not available' : ''}" readonly><button class="password-copy" type="button" data-password="${safePass}" ${unavailable ? 'disabled' : ''} title="Copy password" aria-label="Copy password">📋</button><button class="password-delete-btn" type="button" title="Delete group" aria-label="Delete group" ${row.id === 'main' || unavailable ? 'disabled' : ''}>🗑️</button></div></div>`;
+      return `<div class="password-row" data-chat-id="${String(row.id || '').replace(/\"/g,'&quot;')}"><div class="password-chat-name">${safeName}</div><div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="text" value="${safePass}" placeholder="${unavailable ? 'Password not available' : ''}" readonly><button class="password-copy" type="button" data-password="${safePass}" ${unavailable ? 'disabled' : ''} title="Copy password" aria-label="Copy password">📋</button><button class="password-delete-btn" type="button" title="Delete group" aria-label="Delete group" ${unavailable ? 'disabled' : ''}>🗑️</button></div></div>`;
     }).join('');
 
     passwordsList.querySelectorAll('.password-copy').forEach(btn => btn.addEventListener('click', async () => {
@@ -762,9 +762,18 @@ async function loadChats() {
     const res = await fetch('/api/chats', {cache:'no-store'}); const data = await res.json();
     if (Array.isArray(data.chats)) data.chats.forEach(chat => chats.set(String(chat.id), {id:String(chat.id), name:String(chat.name || 'Chat')}));
   } catch (_) {}
-  if (!chats.size) chats.set('main',{id:'main',name:'WhatsApp'});
-  if (!chats.has(currentChatId)) currentChatId='main';
-  const current=chats.get(currentChatId) || chats.get('main');
+  if (!chats.size) {
+    currentChatId = '';
+    currentChatPassword = '';
+    groupName = 'WhatsApp';
+    localStorage.removeItem('wa_current_chat_id');
+    localStorage.removeItem('wa_group_name');
+    renderChatList(); updateGroupNameUI();
+    closeChat();
+    return;
+  }
+  if (!chats.has(currentChatId)) currentChatId = [...chats.keys()][0];
+  const current=chats.get(currentChatId);
   currentChatId = current.id;
   currentChatPassword = '';
   groupName = current.name;
@@ -781,21 +790,28 @@ socket.on('chat-deleted', deleted => {
   chats.delete(chatId);
   localStorage.removeItem(`wa_chat_password_${chatId}`);
   if (currentChatId === chatId) {
-    currentChatId = 'main';
     currentChatPassword = '';
-    const main = chats.get('main') || { id: 'main', name: 'WhatsApp' };
-    chats.set('main', main);
-    groupName = main.name;
-    localStorage.setItem('wa_current_chat_id', 'main');
-    localStorage.setItem('wa_group_name', groupName);
     messages.clear();
     document.querySelector('#messages').innerHTML = '';
-    updateGroupNameUI();
-    renderChatList();
     closeChat();
-    socket.emit('join-chat', { chatId: 'main', password: currentChatPassword });
-    syncMessages();
-    showToast('Group deleted');
+    const next = chats.values().next().value;
+    if (next) {
+      currentChatId = next.id;
+      groupName = next.name;
+      localStorage.setItem('wa_current_chat_id', currentChatId);
+      localStorage.setItem('wa_group_name', groupName);
+      updateGroupNameUI();
+      renderChatList();
+      openStoredChat(next);
+    } else {
+      currentChatId = '';
+      groupName = 'WhatsApp';
+      localStorage.removeItem('wa_current_chat_id');
+      localStorage.removeItem('wa_group_name');
+      updateGroupNameUI();
+      renderChatList();
+      showToast('Chat deleted');
+    }
   } else {
     renderChatList();
     showToast(`“${deleted?.name || 'Group'}” deleted`);
