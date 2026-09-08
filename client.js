@@ -67,12 +67,6 @@ const passwordsBtn = document.querySelector('#passwordsBtn');
 const passwordsModal = document.querySelector('#passwordsModal');
 const passwordsClose = document.querySelector('#passwordsClose');
 const passwordsList = document.querySelector('#passwordsList');
-const passwordsGateModal = document.querySelector('#passwordsGateModal');
-const passwordsGateInput = document.querySelector('#passwordsGateInput');
-const passwordsGateSubmit = document.querySelector('#passwordsGateSubmit');
-const passwordsGateClose = document.querySelector('#passwordsGateClose');
-const passwordsGateError = document.querySelector('#passwordsGateError');
-const PASSWORDS_GATE_PASSWORD = 'deoxy';
 
 menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -138,37 +132,7 @@ async function loadChatPasswords() {
     }));
   } catch (_) { passwordsList.innerHTML = '<div class="passwords-empty">Could not load passwords</div>'; }
 }
-function openPasswordsGate() {
-  if (!passwordsGateModal) return;
-  passwordsGateInput.value = '';
-  passwordsGateError.textContent = '';
-  passwordsGateModal.classList.remove('hidden');
-  setTimeout(() => passwordsGateInput?.focus(), 0);
-}
-
-function closePasswordsGate() {
-  passwordsGateModal?.classList.add('hidden');
-  if (passwordsGateInput) passwordsGateInput.value = '';
-  if (passwordsGateError) passwordsGateError.textContent = '';
-}
-
-function verifyPasswordsGate() {
-  const value = passwordsGateInput?.value || '';
-  if (value !== PASSWORDS_GATE_PASSWORD) {
-    if (passwordsGateError) passwordsGateError.textContent = 'Wrong password';
-    passwordsGateInput?.focus();
-    return;
-  }
-  closePasswordsGate();
-  passwordsModal?.classList.remove('hidden');
-  loadChatPasswords();
-}
-
-passwordsBtn?.addEventListener('click', openPasswordsGate);
-passwordsGateSubmit?.addEventListener('click', verifyPasswordsGate);
-passwordsGateClose?.addEventListener('click', closePasswordsGate);
-passwordsGateInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyPasswordsGate(); });
-passwordsGateModal?.addEventListener('click', e => { if (e.target === passwordsGateModal) closePasswordsGate(); });
+passwordsBtn?.addEventListener('click', () => { passwordsModal?.classList.remove('hidden'); loadChatPasswords(); });
 passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
 passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
 
@@ -375,7 +339,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'kmkm'));
+    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg)));
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
@@ -398,7 +362,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id), 'kmkm');
+    requestPassword('Delete message','Enter this chat password to delete this message.', () => deleteMessage(msg.id));
   });
   menu.appendChild(del); el.appendChild(menu);
   more.addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')); menu.classList.toggle('open'); });
@@ -425,7 +389,7 @@ function clearChat(broadcast=true) {
   if (broadcast) socket.emit('clear-chat', {by:name, chatId:currentChatId});
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true), 'kmkm'));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
@@ -725,46 +689,23 @@ emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classL
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
-// Open/close chat safely on both mobile and laptop.
-function openChat(push=true){
-  chatOpen=true;
-  app.classList.add('chat-open');
-  app.classList.remove('chat-closed');
-  if(push && window.innerWidth<=760 && location.hash !== '#chat') history.pushState({chat:true}, '', '#chat');
-  setTimeout(markVisibleMessagesRead, 50);
-}
-function closeChat(){
-  chatOpen=false;
-  currentChatPassword='';
-  app.classList.remove('chat-open');
-  app.classList.add('chat-closed');
-  // Do not call history.back(): it can leave the app or fail when there is no history entry.
-  if(location.hash === '#chat') history.replaceState(history.state, '', location.pathname + location.search);
-  const list=document.querySelector('#chatList');
-  if(list) list.scrollTop=0;
-}
-const backBtn=document.querySelector('#backBtn');
-backBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); closeChat(); });
-backBtn?.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); closeChat(); }, {passive:false});
-window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); app.classList.add('chat-closed'); });
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
+function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
+document.querySelector('#backBtn').addEventListener('click', closeChat);
+window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
 
 
 function renderChatList() {
   const list = document.querySelector('#chatList');
   list.innerHTML = '';
   chats.forEach(chat => {
-    const item = document.createElement('div');
+    const item = document.createElement('button');
     item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
     item.dataset.chat = chat.id;
     item.innerHTML = `<div class="avatar group-avatar">${firstCharacter(chat.name)}</div><div class="chat-summary"><div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>Tap to open this chat</span><span class="unread-dot"></span></div></div>`;
     item.querySelector('strong').textContent = chat.name;
     item.querySelector('.group-avatar').addEventListener('click', e => { e.stopPropagation(); currentChatId = chat.id; groupName = chat.name; openGroupNameModal(); });
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('.group-avatar')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openStoredChat(chat);
-    });
+    item.addEventListener('click', () => openStoredChat(chat));
     list.appendChild(item);
   });
 }
@@ -772,14 +713,14 @@ function renderChatList() {
 function openStoredChat(chat) {
   // Do not show another chat's messages while the password is being checked.
   messages.clear();
-  document.querySelector('#messageArea').innerHTML = '';
+  document.querySelector('#messages').innerHTML = '';
   const open = password => {
     waitForSocket(20000).then(ok => {
       if (!ok) { showToast('Connecting… try again'); return; }
       socket.emit('join-chat', { chatId: chat.id, password }, result => {
         if (!result?.ok) {
           messages.clear();
-          document.querySelector('#messageArea').innerHTML = '';
+          document.querySelector('#messages').innerHTML = '';
           showToast(result?.error || 'Wrong password');
           return;
         }
@@ -851,7 +792,7 @@ socket.on('chat-deleted', deleted => {
   if (currentChatId === chatId) {
     currentChatPassword = '';
     messages.clear();
-    document.querySelector('#messageArea').innerHTML = '';
+    document.querySelector('#messages').innerHTML = '';
     closeChat();
     const next = chats.values().next().value;
     if (next) {

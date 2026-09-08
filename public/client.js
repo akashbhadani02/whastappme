@@ -1,16 +1,4 @@
-// Vercel/static fallback: the UI must keep working even when Socket.IO is unavailable.
-const realtimeAvailable = typeof window.io === 'function';
-const offlineSocket = {
-  connected: true,
-  on(){}, once(){}, off(){}, connect(){ this.connected = true; },
-  emit(event, data, ack){
-    if (typeof data === 'function') { ack = data; data = undefined; }
-    if (event === 'join-chat') return typeof ack === 'function' && ack({ok:true, offline:true});
-    if (event === 'create-chat') return typeof ack === 'function' && ack({ok:false, error:'Server connection is required to create a new chat'});
-    if (typeof ack === 'function') ack({ok:true, offline:true});
-  }
-};
-const socket = realtimeAvailable ? io({
+const socket = io({
   transports: ['websocket', 'polling'],
   reconnection: true,
   reconnectionAttempts: Infinity,
@@ -18,7 +6,7 @@ const socket = realtimeAvailable ? io({
   reconnectionDelayMax: 5000,
   randomizationFactor: 0.2,
   timeout: 20000,
-}) : offlineSocket;
+});
 
 let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
 let currentChatPassword = '';
@@ -387,7 +375,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'kmkm'));
+    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg)));
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
@@ -410,7 +398,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id), 'kmkm');
+    requestPassword('Delete message','Enter this chat password to delete this message.', () => deleteMessage(msg.id));
   });
   menu.appendChild(del); el.appendChild(menu);
   more.addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')); menu.classList.toggle('open'); });
@@ -437,7 +425,7 @@ function clearChat(broadcast=true) {
   if (broadcast) socket.emit('clear-chat', {by:name, chatId:currentChatId});
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true), 'kmkm'));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
@@ -737,46 +725,23 @@ emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classL
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
-// Open/close chat safely on both mobile and laptop.
-function openChat(push=true){
-  chatOpen=true;
-  app.classList.add('chat-open');
-  app.classList.remove('chat-closed');
-  if(push && window.innerWidth<=760 && location.hash !== '#chat') history.pushState({chat:true}, '', '#chat');
-  setTimeout(markVisibleMessagesRead, 50);
-}
-function closeChat(){
-  chatOpen=false;
-  currentChatPassword='';
-  app.classList.remove('chat-open');
-  app.classList.add('chat-closed');
-  // Do not call history.back(): it can leave the app or fail when there is no history entry.
-  if(location.hash === '#chat') history.replaceState(history.state, '', location.pathname + location.search);
-  const list=document.querySelector('#chatList');
-  if(list) list.scrollTop=0;
-}
-const backBtn=document.querySelector('#backBtn');
-backBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); closeChat(); });
-backBtn?.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); closeChat(); }, {passive:false});
-window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); app.classList.add('chat-closed'); });
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
+function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
+document.querySelector('#backBtn').addEventListener('click', closeChat);
+window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
 
 
 function renderChatList() {
   const list = document.querySelector('#chatList');
   list.innerHTML = '';
   chats.forEach(chat => {
-    const item = document.createElement('div');
+    const item = document.createElement('button');
     item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
     item.dataset.chat = chat.id;
     item.innerHTML = `<div class="avatar group-avatar">${firstCharacter(chat.name)}</div><div class="chat-summary"><div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>Tap to open this chat</span><span class="unread-dot"></span></div></div>`;
     item.querySelector('strong').textContent = chat.name;
     item.querySelector('.group-avatar').addEventListener('click', e => { e.stopPropagation(); currentChatId = chat.id; groupName = chat.name; openGroupNameModal(); });
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('.group-avatar')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openStoredChat(chat);
-    });
+    item.addEventListener('click', () => openStoredChat(chat));
     list.appendChild(item);
   });
 }
@@ -786,9 +751,9 @@ function openStoredChat(chat) {
   messages.clear();
   document.querySelector('#messages').innerHTML = '';
   const open = password => {
-    // Open immediately. On Vercel/static mode Socket.IO may not exist, but the
-    // chat screen and password UI should still be fully clickable on laptop/mobile.
-    const join = () => socket.emit('join-chat', { chatId: chat.id, password }, result => {
+    waitForSocket(20000).then(ok => {
+      if (!ok) { showToast('Connecting… try again'); return; }
+      socket.emit('join-chat', { chatId: chat.id, password }, result => {
         if (!result?.ok) {
           messages.clear();
           document.querySelector('#messages').innerHTML = '';
@@ -804,15 +769,10 @@ function openStoredChat(chat) {
         updateGroupNameUI();
         renderChatList();
         openChat();
-        if (realtimeAvailable) syncMessages();
+        syncMessages();
       });
-    if (realtimeAvailable) {
-      waitForSocket(5000).then(ok => { if (ok) join(); else join(); });
-    } else {
-      join();
-    }
+    });
   };
-  // Always show the password popup immediately when a chat is clicked.
   requestPassword('Chat password', `Enter password for “${chat.name}”.`, open, '__ANY__');
 }
 
@@ -839,10 +799,6 @@ async function loadChats() {
     if (Array.isArray(data.chats)) data.chats.forEach(chat => chats.set(String(chat.id), {id:String(chat.id), name:String(chat.name || 'Chat')}));
   } catch (_) {}
   if (!chats.size) {
-    // Static/Vercel fallback so the interface never becomes dead when the API is unavailable.
-    chats.set('main', { id:'main', name: localStorage.getItem('wa_fallback_chat_name') || 'WhatsApp' });
-  }
-  if (!chats.size) {
     currentChatId = '';
     currentChatPassword = '';
     groupName = 'WhatsApp';
@@ -861,7 +817,7 @@ async function loadChats() {
   localStorage.setItem('wa_group_name', groupName);
   localStorage.removeItem(`wa_chat_password_${currentChatId}`);
   renderChatList(); updateGroupNameUI();
-  // Do not auto-open: user can click the chat and get the password popup.
+  openStoredChat(current);
 }
 socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
 socket.on('chat-deleted', deleted => {
