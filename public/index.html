@@ -110,6 +110,18 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="passwordsGateModal" role="dialog" aria-modal="true" aria-labelledby="passwordsGateTitle">
+    <div class="modal-card">
+      <button class="modal-close" id="passwordsGateClose" type="button" aria-label="Close">×</button>
+      <div class="lock-icon">🔐</div>
+      <h3 id="passwordsGateTitle">Password required</h3>
+      <p>Enter the password to open the chat passwords list.</p>
+      <div class="password-field"><input id="passwordsGateInput" type="password" autocomplete="off" placeholder="Password"><button type="button" class="password-toggle" data-target="passwordsGateInput" aria-label="Show password">👁</button></div>
+      <div class="password-error" id="passwordsGateError"></div>
+      <button class="primary-btn" id="passwordsGateSubmit" type="button">Continue</button>
+    </div>
+  </div>
+
   <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true" aria-labelledby="passwordsTitle">
     <div class="modal-card">
       <button class="modal-close" id="passwordsClose" type="button" aria-label="Close">×</button>
@@ -133,6 +145,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js?v=20260908-password-rules"></script>
+  <script src="/client.js?v=20260908-passwords-gate"></script>
 </body>
 </html>
