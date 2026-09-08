@@ -1,4 +1,12 @@
-const socket = io();
+const socket = io({
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  randomizationFactor: 0.2,
+  timeout: 20000,
+});
 
 const PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -447,12 +455,33 @@ socket.on('user-renamed', data => {
 });
 socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
 socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
+let disconnectTimer = null;
+function setOnlineStatus(state) {
+  clearTimeout(disconnectTimer);
+  if (state === 'online') {
+    onlineStatus.textContent = 'online';
+    onlineStatus.classList.remove('offline');
+    onlineStatus.classList.add('online');
+    return;
+  }
+  // Do not flash 'connecting…' for tiny transport reconnects. Show it only
+  // when the connection has actually been down for a short period.
+  disconnectTimer = setTimeout(() => {
+    if (!socket.connected) {
+      onlineStatus.textContent = 'connecting…';
+      onlineStatus.classList.remove('online');
+      onlineStatus.classList.add('offline');
+    }
+  }, 1500);
+}
 socket.on('connect', () => {
-  onlineStatus.textContent='online';
+  setOnlineStatus('online');
   socket.emit('register-user', { userId });
   syncMessages().finally(markVisibleMessagesRead);
 });
-socket.on('disconnect', () => { onlineStatus.textContent='connecting…'; });
+socket.on('disconnect', () => setOnlineStatus('connecting'));
+socket.on('reconnect', () => setOnlineStatus('online'));
+socket.on('connect_error', () => setOnlineStatus('connecting'));
 
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
