@@ -53,3 +53,23 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 .passwords-action{height:38px;border:0;border-radius:19px;padding:0 12px;background:#d9fdd3;color:#075e54;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}.passwords-action:hover{background:#c9f7c2}.passwords-action:active{transform:scale(.97)}
 @media (max-width:420px){.passwords-action{padding:0 8px;font-size:12px}.top-actions{gap:2px}}
 @media (max-width:340px){.passwords-action{padding:0 7px;font-size:11px}.top-actions #statusBtn{display:none}}
+
+
+/* Group password manager */
+.passwords-card { width: min(620px, calc(100vw - 28px)); }
+.passwords-list { margin-top: 14px; display: grid; gap: 10px; max-height: 58vh; overflow-y: auto; }
+.password-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid rgba(0,0,0,.08); border-radius:14px; background:#f8fafb; }
+.password-chat-info { min-width:0; flex:1; }
+.password-chat-name { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:8px; }
+.password-value-wrap { display:flex; align-items:center; gap:6px; max-width:100%; }
+.chat-password-value { width:180px; max-width:100%; border:1px solid #d7dce0; border-radius:9px; padding:8px 10px; background:#fff; font:inherit; }
+.main-group-badge { padding:5px 9px; border-radius:999px; font-size:12px; font-weight:700; background:#e6f4ea; color:#187a3b; white-space:nowrap; }
+.delete-group-btn { border:0; border-radius:9px; padding:8px 11px; cursor:pointer; font-weight:700; background:#ffe8e8; color:#b42318; white-space:nowrap; }
+.delete-group-btn:hover { filter:brightness(.96); }
+.passwords-empty { padding:20px; text-align:center; color:#687078; }
+@media (max-width: 520px) {
+  .password-row { align-items:flex-start; flex-direction:column; }
+  .password-chat-info { width:100%; }
+  .password-value-wrap, .chat-password-value { width:100%; }
+  .delete-group-btn { width:100%; }
+}
