@@ -355,6 +355,58 @@ io.on('connection', async (socket) => {
     }
   });
 
+  socket.on('delete-chat', async (data, ack) => {
+    const chatId = String(data?.chatId || '');
+    if (!chatId || chatId === 'main') {
+      if (typeof ack === 'function') ack({ ok: false, error: 'The main chat cannot be deleted' });
+      return;
+    }
+    if (!(await getAuthorizedChat(socket, chatId))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Chat password required' });
+      return;
+    }
+    try {
+      const chats = await getChatsCollection();
+      const collection = await getCollection();
+      if (!chats) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'MongoDB is required' });
+        return;
+      }
+      const chat = await chats.findOne({ _id: chatId });
+      if (!chat) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Chat not found' });
+        return;
+      }
+
+      // Remove all persisted messages/media belonging to this chat first.
+      if (collection) {
+        const mediaMessages = await collection.find(
+          { chatId, mediaId: { $exists: true } },
+          { projection: { mediaId: 1 } }
+        ).toArray();
+        await collection.deleteMany({ chatId });
+        let bucket = null;
+        try { bucket = await getMediaBucket(); } catch (_) {}
+        if (bucket) {
+          for (const item of mediaMessages) {
+            try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
+          }
+        }
+      }
+
+      await chats.deleteOne({ _id: chatId });
+
+      const deleted = { chatId, name: String(chat.name || 'Chat') };
+      io.emit('chat-deleted', deleted);
+      await publishRealtimeEvent('chat-deleted', deleted);
+
+      if (typeof ack === 'function') ack({ ok: true, chat: deleted });
+    } catch (error) {
+      console.error('Delete chat failed:', error.message);
+      if (typeof ack === 'function') ack({ ok: false, error: 'Could not delete chat' });
+    }
+  });
+
   socket.on('create-chat', async (data, ack) => {
     const name = String(data?.name || '').trim().slice(0, 60);
     const password = String(data?.password || '');

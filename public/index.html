@@ -110,6 +110,15 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true" aria-labelledby="passwordsTitle">
+    <div class="modal-card">
+      <button class="modal-close" id="passwordsClose" type="button" aria-label="Close">×</button>
+      <h3 id="passwordsTitle">Chat passwords</h3>
+      <p>All chat names and their saved passwords.</p>
+      <div id="passwordsList" class="passwords-list"></div>
+    </div>
+  </div>
+
   <div class="modal hidden" id="passwordModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" id="passwordClose">×</button>
@@ -124,6 +133,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js"></script>
+  <script src="/client.js?v=20260908-password-rules"></script>
 </body>
 </html>
