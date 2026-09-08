@@ -1,26 +1,43 @@
 # WhatsApp app — MongoDB + Vercel deployment
 
-## 1. GitHub
+## Notifications on mobile
+
+Mobile notifications need **Web Push**, not only `new Notification()` from the page. This build registers a Service Worker and stores each phone/browser push subscription in MongoDB.
+
+### Required
+
+1. Deploy the app over **HTTPS** (Vercel provides HTTPS).
+2. Keep `MONGODB_URI` configured because push subscriptions are stored in MongoDB.
+3. On the phone, open the deployed site in Chrome/Edge/Safari.
+4. Allow notifications when prompted.
+5. For **iPhone/iPad**, add the site to the Home Screen and open it as the installed web app before enabling notifications. iOS web push requires an installed Home Screen web app.
+
+### VAPID
+
+The server derives a stable VAPID key from `MONGODB_URI`, so no extra VAPID secret is required for this project. If you want an explicit VAPID private key, set `VAPID_PRIVATE_KEY` and optionally `VAPID_SUBJECT` in Vercel Environment Variables.
+
+## GitHub
+
 Upload the contents of this folder to the **root** of the GitHub repository. Do not upload the outer folder as an extra nesting level.
 
-## 2. Vercel
+## Vercel
+
 Import/connect the GitHub repository. Keep Root Directory at the repository root. The included `vercel.json` points Vercel at `api/index.js` and routes the app through the Express + Socket.IO server.
 
-## 3. MongoDB
-Create a MongoDB Atlas database, then in Vercel go to **Project Settings → Environment Variables** and add:
+## MongoDB
+
+In Vercel → Project Settings → Environment Variables add:
 
 - `MONGODB_URI` = your MongoDB connection string
 - `MONGODB_DB` = `wassup` (optional)
 
 Do not put the real connection string in GitHub, source files, or this ZIP.
 
-After saving the variables, redeploy the project.
+After saving variables, redeploy the project.
 
-## 4. Health check
-Open `/api/health`. With MongoDB configured it should return JSON with `mongodb: true`.
+## Notification behavior
 
-## Notes
-- Messages and media are stored in MongoDB.
-- The app keeps the most recent 100 messages for the chat history sent to a new client.
-- Media is currently stored as base64 inside MongoDB. The UI limits individual media files to 8 MB; for a production app, object storage (such as Vercel Blob or S3) is preferable for large media.
-- The password in the browser is not a secure authentication mechanism. Use real server-side authentication for production.
+- A new text/photo/video message sends a Web Push notification to subscribed users other than the sender.
+- Notification delivery works when the mobile browser/PWA is in the background or the app is not currently open, subject to browser/OS notification settings.
+- Clicking the notification opens the chat.
+- Invalid/expired subscriptions are removed automatically.

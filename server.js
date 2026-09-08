@@ -3,6 +3,8 @@ const path = require('path');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const { MongoClient, GridFSBucket, ObjectId } = require('mongodb');
+const webpush = require('web-push');
+const crypto = require('crypto');
 
 const app = express();
 const httpServer = createServer(app);
@@ -19,6 +21,20 @@ const COLLECTION_NAME = 'messages';
 const MEDIA_BUCKET_NAME = 'media';
 const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
+const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
+
+function getVapidKeys() {
+  // Prefer an explicit VAPID private key. If it is not configured, derive a stable
+  // server-only key from MONGODB_URI so deployments do not need another secret.
+  const privateKey = process.env.VAPID_PRIVATE_KEY || crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid').digest().toString('base64url');
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.setPrivateKey(Buffer.from(privateKey, 'base64url'));
+  const publicKey = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
+  return { privateKey, publicKey };
+}
+
+const vapid = getVapidKeys();
+try { webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapid.publicKey, vapid.privateKey); } catch (error) { console.error('VAPID setup failed:', error.message); }
 
 let mongoClientPromise = null;
 let dbPromise = null;
@@ -102,6 +118,39 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
+app.get('/api/push/public-key', (req, res) => {
+  res.json({ ok: true, publicKey: vapid.publicKey });
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    const sub = req.body && req.body.subscription;
+    const userId = req.body && String(req.body.userId || '');
+    if (!sub || !sub.endpoint || !userId) return res.status(400).json({ ok: false });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok: false });
+    await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).updateOne(
+      { endpoint: sub.endpoint },
+      { $set: { userId, subscription: sub, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Push subscription save failed:', error.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.post('/api/push/unsubscribe', async (req, res) => {
+  try {
+    const endpoint = req.body && req.body.endpoint;
+    if (!endpoint) return res.json({ ok: true });
+    const db = await getDb();
+    if (db) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ endpoint });
+    res.json({ ok: true });
+  } catch (error) { res.status(500).json({ ok: false }); }
+});
+
 app.get('/api/group', async (req, res) => {
   try {
     const collection = await getGroupSettingsCollection();
@@ -174,10 +223,39 @@ async function saveMessage(msg) {
   return saved;
 }
 
+async function sendPushToOtherUsers(msg) {
+  if (!MONGODB_URI || !msg || !msg.id) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
+    if (!docs.length) return;
+    const body = msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message');
+    const payload = JSON.stringify({
+      title: msg.groupName || 'WhatsApp',
+      body: `${msg.user || 'New message'}: ${body}`,
+      messageId: msg.id,
+      url: '/#chat'
+    });
+    await Promise.all(docs.map(async (doc) => {
+      try {
+        await webpush.sendNotification(doc.subscription, payload, { TTL: 120, urgency: 'high' });
+      } catch (error) {
+        if (error.statusCode === 404 || error.statusCode === 410) {
+          await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
+        }
+      }
+    }));
+  } catch (error) {
+    console.error('Web push failed:', error.message);
+  }
+}
+
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   io.emit(event, saved);
   publishRealtimeEvent(event, saved);
+  if (event === 'message' || event === 'media') sendPushToOtherUsers(saved);
   return saved;
 }
 

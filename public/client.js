@@ -68,6 +68,40 @@ async function enableNotifications() {
   try { return (await Notification.requestPermission()) === 'granted'; } catch (_) { return false; }
 }
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const raw = atob((base64String + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
+
+async function setupWebPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
+  if (Notification.permission !== 'granted') return false;
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+    const response = await fetch('/api/push/public-key', { cache: 'no-store' });
+    const data = await response.json();
+    if (!data.publicKey) return false;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(data.publicKey)
+      });
+    }
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, subscription })
+    });
+    return true;
+  } catch (error) {
+    console.warn('Web push setup failed:', error);
+    return false;
+  }
+}
+
 function notifyIncomingMessage(msg) {
   if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
   // Don't interrupt users who are actively looking at the open chat.
@@ -90,11 +124,12 @@ function notifyIncomingMessage(msg) {
 function notificationSetup() {
   if (!('Notification' in window)) return;
   // Browsers generally allow the permission prompt only from a user gesture.
-  const once = () => { enableNotifications(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
+  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
   document.addEventListener('pointerdown', once, { once: true });
   document.addEventListener('keydown', once, { once: true });
 }
 notificationSetup();
+if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
