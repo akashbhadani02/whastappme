@@ -94,6 +94,19 @@ io.on('connection', async (socket) => {
     socket.broadcast.emit('message', msg);
   });
 
+  socket.on('rename-user', async (data) => {
+    if (!data || !data.userId || !data.name) return;
+    const nextName = String(data.name).trim().slice(0, 40);
+    if (!nextName) return;
+    try {
+      const collection = await getCollection();
+      if (collection) await collection.updateMany({ userId: data.userId }, { $set: { user: nextName } });
+    } catch (error) {
+      console.error('Failed to rename user in MongoDB:', error.message);
+    }
+    socket.broadcast.emit('user-renamed', { userId: data.userId, name: nextName });
+  });
+
   socket.on('media', async (msg) => {
     if (!msg || !msg.data || !msg.type || !msg.id) return;
     try {

@@ -2,6 +2,11 @@ const socket = io();
 
 const PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let userId = localStorage.getItem('wa_user_id') || '';
+if (!userId) {
+  userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  localStorage.setItem('wa_user_id', userId);
+}
 let name = localStorage.getItem('wa_name') || '';
 while (!name) {
   name = (prompt('Please enter your name:') || '').trim();
@@ -82,7 +87,7 @@ passwordModal.addEventListener('click', e => { if (e.target === passwordModal) c
 function sendMessage(text) {
   const message = text.trim();
   if (!message) return;
-  const msg = { id: id(), senderId: socketId, user: name, message, time: now(), type: 'text' };
+  const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text' };
   renderMessage(msg, 'outgoing');
   socket.emit('message', msg);
   textarea.value = '';
@@ -176,7 +181,7 @@ fileInput.addEventListener('change', e => {
   if (file.size > 8 * 1024 * 1024) { showToast('Please choose a file smaller than 8 MB'); fileInput.value=''; return; }
   const reader=new FileReader();
   reader.onload=() => {
-    const msg={id:id(),senderId:socketId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now()};
+    const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now()};
     renderMessage(msg,'outgoing'); socket.emit('media',msg); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
   };
   reader.readAsDataURL(file);
@@ -189,12 +194,22 @@ function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==
 
 socket.on('history', history => {
   if (!Array.isArray(history)) return;
-  history.forEach(msg => renderMessage(msg, msg.senderId === socketId ? 'outgoing' : 'incoming'));
+  history.forEach(msg => renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'));
   if (history.length) updatePreview(history[history.length - 1].message || (history[history.length - 1].type === 'image' ? '📷 Photo' : history[history.length - 1].type === 'video' ? '🎥 Video' : 'New message'));
 });
 
-socket.on('message', msg => { renderMessage(msg,'incoming'); updatePreview(msg.message || 'New message'); });
-socket.on('media', msg => { renderMessage(msg,'incoming'); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); });
+socket.on('message', msg => { renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'); updatePreview(msg.message || 'New message'); });
+socket.on('media', msg => { renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); });
+socket.on('user-renamed', data => {
+  if (!data || !data.userId || !data.name) return;
+  messages.forEach(msg => {
+    if (msg.userId !== data.userId) return;
+    msg.user = data.name;
+    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+    const sender = el && el.querySelector('.sender');
+    if (sender) sender.textContent = data.name;
+  });
+});
 socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
 socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
 socket.on('connect', () => { onlineStatus.textContent='online'; });
@@ -213,7 +228,65 @@ document.querySelector('#backBtn').addEventListener('click', () => app.classList
 document.querySelector('.chat-item').addEventListener('click', () => app.classList.add('chat-open'));
 document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
-document.querySelector('#menuBtn').addEventListener('click', () => showToast('WhatsApp menu'));
+const nameModal = document.querySelector('#nameModal');
+const nameInput = document.querySelector('#nameInput');
+const nameSave = document.querySelector('#nameSave');
+const nameClose = document.querySelector('#nameClose');
+const nameError = document.querySelector('#nameError');
+const meAvatar = document.querySelector('.me-avatar');
+
+function updateMyNameUI() {
+  if (meAvatar) meAvatar.textContent = (name.trim()[0] || 'W').toUpperCase();
+  if (nameInput) nameInput.value = name;
+}
+
+function openNameModal() {
+  nameInput.value = name;
+  nameError.textContent = '';
+  nameModal.classList.remove('hidden');
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+}
+
+function closeNameModal() {
+  nameModal.classList.add('hidden');
+  nameError.textContent = '';
+}
+
+function renameRenderedMessages(nextName) {
+  messages.forEach(msg => {
+    if (msg.userId !== userId) return;
+    msg.user = nextName;
+    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+    if (!el) return;
+    const sender = el.querySelector('.sender');
+    if (sender) sender.textContent = nextName;
+  });
+}
+
+function saveName() {
+  const nextName = nameInput.value.trim();
+  if (!nextName) {
+    nameError.textContent = 'Please enter a name';
+    nameInput.focus();
+    return;
+  }
+  if (nextName === name) { closeNameModal(); return; }
+  name = nextName;
+  localStorage.setItem('wa_name', name);
+  updateMyNameUI();
+  renameRenderedMessages(name);
+  socket.emit('rename-user', { userId, name });
+  closeNameModal();
+  showToast(`Your name is now ${name}`);
+}
+
+updateMyNameUI();
+nameSave.addEventListener('click', saveName);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+nameClose.addEventListener('click', closeNameModal);
+nameModal.addEventListener('click', e => { if (e.target === nameModal) closeNameModal(); });
+
+document.querySelector('#menuBtn').addEventListener('click', openNameModal);
 document.querySelector('#chatSearchBtn').addEventListener('click', () => {
   if (window.innerWidth <= 760) {
     app.classList.remove('chat-open');
