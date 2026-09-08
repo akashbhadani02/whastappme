@@ -40,3 +40,4 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 #nameInput{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d1d7db;border-radius:8px;font-size:16px;outline:none;margin-top:8px}
 #nameInput:focus{border-color:var(--wa-green);box-shadow:0 0 0 2px rgba(0,168,132,.12)}
 #nameError{min-height:20px;margin-top:6px}
+.avatar[title="Change your name"]{cursor:pointer}

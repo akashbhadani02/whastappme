@@ -30,9 +30,9 @@
       </div>
       <div class="chat-list" id="chatList">
         <button class="chat-item active" data-chat="main">
-          <div class="avatar">W</div>
+          <div class="avatar group-avatar" id="groupAvatarList">W</div>
           <div class="chat-summary">
-            <div class="chat-line"><strong>WhatsApp</strong><span id="listTime"></span></div>
+            <div class="chat-line"><strong id="groupNameList">WhatsApp</strong><span id="listTime"></span></div>
             <div class="chat-line preview"><span id="listPreview">Messages are end-to-end styled for this demo</span><span class="unread-dot"></span></div>
           </div>
         </button>
@@ -43,9 +43,9 @@
     <section class="chat-panel">
       <header class="chat-header">
         <button class="back-btn" id="backBtn" aria-label="Back">‹</button>
-        <div class="avatar">W</div>
+        <div class="avatar group-avatar" id="groupAvatarHeader">W</div>
         <div class="contact-info">
-          <strong>WhatsApp</strong>
+          <strong id="groupNameHeader">WhatsApp</strong>
           <span id="onlineStatus">online</span>
         </div>
         <div class="header-actions">
@@ -74,10 +74,22 @@
       <button class="modal-close" id="nameClose" aria-label="Close">×</button>
       <div class="lock-icon">👤</div>
       <h3 id="nameTitle">Change your name</h3>
-      <p>Choose the name other people will see in chat.</p>
-      <input id="nameInput" type="text" maxlength="40" autocomplete="name" placeholder="Your name">
+      <p id="nameHelp">Choose the name other users will see.</p>
+      <input id="nameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="groupNameModal" role="dialog" aria-modal="true" aria-labelledby="groupNameTitle">
+    <div class="modal-card">
+      <button class="modal-close" id="groupNameClose" aria-label="Close">×</button>
+      <div class="lock-icon">👥</div>
+      <h3 id="groupNameTitle">Change group name</h3>
+      <p>Choose the group name everyone will see.</p>
+      <input id="groupNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Group name">
+      <div class="password-error" id="groupNameError"></div>
+      <button class="primary-btn" id="groupNameSave">Save group name</button>
     </div>
   </div>
 

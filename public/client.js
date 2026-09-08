@@ -16,6 +16,7 @@ if (!userId) {
   localStorage.setItem('wa_user_id', userId);
 }
 let name = localStorage.getItem('wa_name') || '';
+let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 while (!name) {
   name = (prompt('Please enter your name:') || '').trim();
 }
@@ -43,6 +44,10 @@ const toast = document.querySelector('#toast');
 const listPreview = document.querySelector('#listPreview');
 const listTime = document.querySelector('#listTime');
 const onlineStatus = document.querySelector('#onlineStatus');
+const groupNameList = document.querySelector('#groupNameList');
+const groupNameHeader = document.querySelector('#groupNameHeader');
+const groupAvatarList = document.querySelector('#groupAvatarList');
+const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
 
 let pendingAction = null;
 const messages = new Map();
@@ -51,6 +56,45 @@ const readSent = new Set();
 let lastRenderedDate = '';
 let chatOpen = window.innerWidth > 760;
 const emojis = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😎','🤩','🥳','🤔','🤗','🤭','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱','😴','😌','🤓','😛','😜','🤪','🤑','🤠','👍','👎','👏','🙏','❤️','🔥','🎉','💯','😂','🤣','😢','😭','😡','❤️‍🔥','💔'];
+
+
+let notificationPermissionRequested = false;
+
+async function enableNotifications() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied' || notificationPermissionRequested) return false;
+  notificationPermissionRequested = true;
+  try { return (await Notification.requestPermission()) === 'granted'; } catch (_) { return false; }
+}
+
+function notifyIncomingMessage(msg) {
+  if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
+  // Don't interrupt users who are actively looking at the open chat.
+  if (document.visibilityState === 'visible' && chatOpen) return;
+  const sender = msg.user || 'New message';
+  let body = msg.message || '';
+  if (!body) body = msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message';
+  try {
+    const n = new Notification(groupName || 'WhatsApp', {
+      body: `${sender}: ${body}`,
+      tag: `wa-${msg.id}`,
+      renotify: true,
+      icon: '/icon.svg',
+      badge: '/icon.svg'
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch (_) {}
+}
+
+function notificationSetup() {
+  if (!('Notification' in window)) return;
+  // Browsers generally allow the permission prompt only from a user gesture.
+  const once = () => { enableNotifications(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
+  document.addEventListener('pointerdown', once, { once: true });
+  document.addEventListener('keydown', once, { once: true });
+}
+notificationSetup();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -349,7 +393,10 @@ function receiveMessage(msg) {
   }
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
-  if (msg.userId !== userId && document.visibilityState === 'visible') markMessageRead(msg);
+  if (msg.userId !== userId) {
+    notifyIncomingMessage(msg);
+    if (document.visibilityState === 'visible') markMessageRead(msg);
+  }
 }
 
 
@@ -443,6 +490,17 @@ async function syncMessages() {
 // users connected to different Vercel instances.
 setInterval(syncMessages, 1000);
 
+socket.on('group-renamed', data => {
+  if (!data || !data.name) return;
+  groupName = String(data.name);
+  localStorage.setItem('wa_group_name', groupName);
+  updateGroupNameUI();
+});
+
+fetch('/api/group').then(r => r.json()).then(data => {
+  if (data && data.name) { groupName = String(data.name); localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
+}).catch(() => updateGroupNameUI());
+
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
   messages.forEach(msg => {
@@ -508,15 +566,38 @@ const nameInput = document.querySelector('#nameInput');
 const nameSave = document.querySelector('#nameSave');
 const nameClose = document.querySelector('#nameClose');
 const nameError = document.querySelector('#nameError');
-const meAvatar = document.querySelector('.me-avatar');
+const nameTitle = document.querySelector('#nameTitle');
+const nameHelp = document.querySelector('#nameHelp');
+const meAvatar = document.querySelector('#profileAvatar');
 
-function updateMyNameUI() {
-  if (meAvatar) meAvatar.textContent = (name.trim()[0] || 'W').toUpperCase();
-  if (nameInput) nameInput.value = name;
+const groupNameModal = document.querySelector('#groupNameModal');
+const groupNameInput = document.querySelector('#groupNameInput');
+const groupNameSave = document.querySelector('#groupNameSave');
+const groupNameClose = document.querySelector('#groupNameClose');
+const groupNameError = document.querySelector('#groupNameError');
+
+function firstCharacter(value, fallback = 'W') {
+  const text = String(value || '').trim();
+  return text ? Array.from(text)[0].toUpperCase() : fallback;
 }
 
-function openNameModal() {
+function updateMyNameUI() {
+  if (meAvatar) meAvatar.textContent = firstCharacter(name);
+}
+
+function updateGroupNameUI() {
+  if (groupNameList) groupNameList.textContent = groupName;
+  if (groupNameHeader) groupNameHeader.textContent = groupName;
+  const initial = firstCharacter(groupName);
+  if (groupAvatarList) groupAvatarList.textContent = initial;
+  if (groupAvatarHeader) groupAvatarHeader.textContent = initial;
+}
+
+function openUserNameModal() {
   nameInput.value = name;
+  nameTitle.textContent = 'Change your name';
+  nameHelp.textContent = 'Choose the name other users will see.';
+  nameInput.placeholder = 'Your name';
   nameError.textContent = '';
   nameModal.classList.remove('hidden');
   setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
@@ -525,6 +606,18 @@ function openNameModal() {
 function closeNameModal() {
   nameModal.classList.add('hidden');
   nameError.textContent = '';
+}
+
+function openGroupNameModal() {
+  groupNameInput.value = groupName;
+  groupNameError.textContent = '';
+  groupNameModal.classList.remove('hidden');
+  setTimeout(() => { groupNameInput.focus(); groupNameInput.select(); }, 50);
+}
+
+function closeGroupNameModal() {
+  groupNameModal.classList.add('hidden');
+  groupNameError.textContent = '';
 }
 
 function renameRenderedMessages(nextName) {
@@ -538,10 +631,10 @@ function renameRenderedMessages(nextName) {
   });
 }
 
-function saveName() {
-  const nextName = nameInput.value.trim();
+function saveUserName() {
+  const nextName = nameInput.value.trim().slice(0, 40);
   if (!nextName) {
-    nameError.textContent = 'Please enter a name';
+    nameError.textContent = 'Please enter your name';
     nameInput.focus();
     return;
   }
@@ -550,27 +643,61 @@ function saveName() {
   localStorage.setItem('wa_name', name);
   updateMyNameUI();
   renameRenderedMessages(name);
-  socket.emit('rename-user', { userId, name }, (result) => {
-    if (!result || !result.ok) {
-      showToast('Name changed locally; sync will retry');
-      return;
-    }
-    // Refresh from the server after rename so old/new messages stay in sync.
-    syncMessages();
+  socket.emit('rename-user', { userId, name }, result => {
+    if (!result || !result.ok) showToast('Name sync will retry');
   });
   closeNameModal();
   showToast(`Your name is now ${name}`);
 }
 
+function saveGroupName() {
+  const nextName = groupNameInput.value.trim().slice(0, 60);
+  if (!nextName) {
+    groupNameError.textContent = 'Please enter a group name';
+    groupNameInput.focus();
+    return;
+  }
+  if (nextName === groupName) { closeGroupNameModal(); return; }
+  groupName = nextName;
+  localStorage.setItem('wa_group_name', groupName);
+  updateGroupNameUI();
+  socket.emit('rename-group', { name: groupName }, result => {
+    if (!result || !result.ok) showToast('Group name sync will retry');
+  });
+  closeGroupNameModal();
+  showToast(`Group name is now ${groupName}`);
+}
+
 updateMyNameUI();
-nameSave.addEventListener('click', saveName);
-nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+updateGroupNameUI();
+nameSave.addEventListener('click', saveUserName);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveUserName(); });
 nameClose.addEventListener('click', closeNameModal);
 nameModal.addEventListener('click', e => { if (e.target === nameModal) closeNameModal(); });
+groupNameSave.addEventListener('click', saveGroupName);
+groupNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveGroupName(); });
+groupNameClose.addEventListener('click', closeGroupNameModal);
+groupNameModal.addEventListener('click', e => { if (e.target === groupNameModal) closeGroupNameModal(); });
 
-document.querySelector('#menuBtn').addEventListener('click', openNameModal);
-const profileAvatar = document.querySelector('#profileAvatar');
-if (profileAvatar) profileAvatar.addEventListener('click', openNameModal);
+meAvatar.addEventListener('click', openUserNameModal);
+meAvatar.setAttribute('title', 'Change your name');
+meAvatar.setAttribute('aria-label', 'Change your name');
+meAvatar.style.cursor = 'pointer';
+
+document.querySelectorAll('.chat-item .avatar, .chat-header .avatar').forEach(avatar => {
+  avatar.addEventListener('click', openGroupNameModal);
+  avatar.setAttribute('title', 'Change group name');
+  avatar.setAttribute('aria-label', 'Change group name');
+  avatar.style.cursor = 'pointer';
+});
+
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    openUserNameModal();
+  }
+});
+
 document.querySelector('#chatSearchBtn').addEventListener('click', () => {
   if (window.innerWidth <= 760) {
     app.classList.remove('chat-open');

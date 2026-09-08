@@ -18,6 +18,7 @@ const DB_NAME = process.env.MONGODB_DB || 'wassup';
 const COLLECTION_NAME = 'messages';
 const MEDIA_BUCKET_NAME = 'media';
 const EVENTS_COLLECTION_NAME = 'realtime_events';
+const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 
 let mongoClientPromise = null;
 let dbPromise = null;
@@ -100,6 +101,17 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+app.get('/api/group', async (req, res) => {
+  try {
+    const collection = await getGroupSettingsCollection();
+    const doc = await collection.findOne({ _id: 'main' });
+    res.json({ ok: true, name: doc?.name || 'WhatsApp' });
+  } catch (error) {
+    console.error('Failed to load group name:', error.message);
+    res.json({ ok: true, name: 'WhatsApp' });
+  }
+});
 
 app.get('/api/media/:id', async (req, res) => {
   try {
@@ -260,6 +272,22 @@ io.on('connection', async (socket) => {
       console.error('Media upload finalize failed:', error.message);
       uploads.delete(String(data.uploadId));
       try { await (await getMediaBucket()).delete(upload.fileId); } catch (_) {}
+      if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
+  socket.on('rename-group', async (data, ack) => {
+    const nextName = String(data?.name || '').trim().slice(0, 60);
+    if (!nextName) { if (typeof ack === 'function') ack({ ok: false }); return; }
+    try {
+      const collection = await getGroupSettingsCollection();
+      await collection.updateOne({ _id: 'main' }, { $set: { name: nextName, updatedAt: new Date() } }, { upsert: true });
+      const event = { name: nextName };
+      io.emit('group-renamed', event);
+      await publishRealtimeEvent('group-renamed', event);
+      if (typeof ack === 'function') ack({ ok: true });
+    } catch (error) {
+      console.error('Group rename failed:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
     }
   });
