@@ -10,6 +10,39 @@ localStorage.setItem('wa_name', name);
 
 document.title = 'WhatsApp';
 
+function updateMyNameUI() {
+  if (meAvatar) meAvatar.textContent = (name.trim()[0] || 'W').toUpperCase();
+  if (nameInput) nameInput.value = name;
+}
+
+function openNameModal() {
+  nameInput.value = name;
+  nameError.textContent = '';
+  nameModal.classList.remove('hidden');
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+}
+
+function closeNameModal() {
+  nameModal.classList.add('hidden');
+  nameError.textContent = '';
+}
+
+function saveName() {
+  const nextName = nameInput.value.trim();
+  if (!nextName) {
+    nameError.textContent = 'Please enter a name';
+    nameInput.focus();
+    return;
+  }
+  name = nextName;
+  localStorage.setItem('wa_name', name);
+  updateMyNameUI();
+  closeNameModal();
+  showToast(`Your name is now ${name}`);
+}
+
+updateMyNameUI();
+
 const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
@@ -27,6 +60,12 @@ const passwordTitle = document.querySelector('#passwordTitle');
 const passwordText = document.querySelector('#passwordText');
 const passwordError = document.querySelector('#passwordError');
 const toast = document.querySelector('#toast');
+const nameModal = document.querySelector('#nameModal');
+const nameInput = document.querySelector('#nameInput');
+const nameSave = document.querySelector('#nameSave');
+const nameClose = document.querySelector('#nameClose');
+const nameError = document.querySelector('#nameError');
+const meAvatar = document.querySelector('.me-avatar');
 const listPreview = document.querySelector('#listPreview');
 const listTime = document.querySelector('#listTime');
 const onlineStatus = document.querySelector('#onlineStatus');
@@ -78,6 +117,10 @@ passwordSubmit.addEventListener('click', () => {
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
 passwordClose.addEventListener('click', closePassword);
 passwordModal.addEventListener('click', e => { if (e.target === passwordModal) closePassword(); });
+nameSave.addEventListener('click', saveName);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+nameClose.addEventListener('click', closeNameModal);
+nameModal.addEventListener('click', e => { if (e.target === nameModal) closeNameModal(); });
 
 function sendMessage(text) {
   const message = text.trim();
@@ -213,7 +256,7 @@ document.querySelector('#backBtn').addEventListener('click', () => app.classList
 document.querySelector('.chat-item').addEventListener('click', () => app.classList.add('chat-open'));
 document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
-document.querySelector('#menuBtn').addEventListener('click', () => showToast('WhatsApp menu'));
+document.querySelector('#menuBtn').addEventListener('click', openNameModal);
 document.querySelector('#chatSearchBtn').addEventListener('click', () => {
   if (window.innerWidth <= 760) {
     app.classList.remove('chat-open');
