@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#00a884">
+  <title>WhatsApp</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="avatar me-avatar">W</div>
+        <div class="top-actions">
+          <button class="icon-btn" id="statusBtn" title="Status">◉</button>
+          <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
+          <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
+        </div>
+      </div>
+      <div class="search-wrap">
+        <span>⌕</span>
+        <input id="searchInput" type="search" placeholder="Search or start new chat">
+      </div>
+      <div class="filter-row">
+        <button class="filter active">All</button>
+        <button class="filter">Unread</button>
+        <button class="filter">Favourites</button>
+        <button class="filter">Groups</button>
+      </div>
+      <div class="chat-list" id="chatList">
+        <button class="chat-item active" data-chat="main">
+          <div class="avatar">W</div>
+          <div class="chat-summary">
+            <div class="chat-line"><strong>WhatsApp</strong><span id="listTime"></span></div>
+            <div class="chat-line preview"><span id="listPreview">Messages are end-to-end styled for this demo</span><span class="unread-dot"></span></div>
+          </div>
+        </button>
+      </div>
+      <div class="sidebar-footer">🔒 Your messages are private on this device</div>
+    </aside>
+
+    <section class="chat-panel">
+      <header class="chat-header">
+        <button class="back-btn" id="backBtn" aria-label="Back">‹</button>
+        <div class="avatar">W</div>
+        <div class="contact-info">
+          <strong>WhatsApp</strong>
+          <span id="onlineStatus">online</span>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" id="chatSearchBtn" title="Search">⌕</button>
+          <button class="icon-btn" id="clearChatBtn" title="Clear chat">⋮</button>
+        </div>
+      </header>
+
+      <div class="chat-bg" id="messageArea" aria-live="polite"></div>
+
+      <div class="typing-bar" id="typingBar">typing…</div>
+
+      <footer class="composer">
+        <button class="round-btn" id="emojiBtn" title="Emoji">☺</button>
+        <button class="round-btn" id="attachBtn" title="Attach">＋</button>
+        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+        <textarea id="textarea" rows="1" maxlength="5000" placeholder="Type a message"></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">➤</button>
+      </footer>
+      <div class="emoji-panel" id="emojiPanel"></div>
+    </section>
+  </main>
+
+  <div class="modal hidden" id="passwordModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" id="passwordClose">×</button>
+      <div class="lock-icon">🔒</div>
+      <h3 id="passwordTitle">Password required</h3>
+      <p id="passwordText">Enter password to continue.</p>
+      <input id="passwordInput" type="password" autocomplete="off" placeholder="Password">
+      <div class="password-error" id="passwordError"></div>
+      <button class="primary-btn" id="passwordSubmit">Continue</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+</body>
+</html>
