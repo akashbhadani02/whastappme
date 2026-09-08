@@ -9,8 +9,7 @@ const socket = io({
 });
 
 let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
-let currentChatPassword = '';
-// Chat passwords are never persisted in the browser. Every visit/open requires entry.
+let currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
 let pendingPasswordExpected = '';
 const chats = new Map();
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -67,12 +66,6 @@ const passwordsBtn = document.querySelector('#passwordsBtn');
 const passwordsModal = document.querySelector('#passwordsModal');
 const passwordsClose = document.querySelector('#passwordsClose');
 const passwordsList = document.querySelector('#passwordsList');
-const passwordsGateModal = document.querySelector('#passwordsGateModal');
-const passwordsGateInput = document.querySelector('#passwordsGateInput');
-const passwordsGateSubmit = document.querySelector('#passwordsGateSubmit');
-const passwordsGateClose = document.querySelector('#passwordsGateClose');
-const passwordsGateError = document.querySelector('#passwordsGateError');
-const PASSWORDS_GATE_PASSWORD = 'deoxy';
 
 menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -90,22 +83,6 @@ installAppBtn?.addEventListener('click', () => {
 });
 
 
-async function deleteChatWithPassword(chat, password) {
-  if (!chat) {
-    showToast('Chat not found');
-    return;
-  }
-  if (!confirm(`Delete group “${chat.name}”?\n\nAll messages and media in this group will be permanently deleted for everyone.`)) return;
-  const ok = await waitForSocket(20000);
-  if (!ok) { showToast('Connecting… try again'); return; }
-  socket.emit('join-chat', { chatId: chat.id, password }, joinResult => {
-    if (!joinResult?.ok) { showToast(joinResult?.error || 'Wrong password'); return; }
-    socket.emit('delete-chat', { chatId: chat.id }, result => {
-      if (!result?.ok) showToast(result?.error || 'Could not delete group');
-    });
-  });
-}
-
 async function loadChatPasswords() {
   if (!passwordsList) return;
   passwordsList.innerHTML = '<div class="passwords-empty">Loading…</div>';
@@ -116,59 +93,18 @@ async function loadChatPasswords() {
     if (!rows.length) { passwordsList.innerHTML = '<div class="passwords-empty">No chats found</div>'; return; }
     passwordsList.innerHTML = rows.map((row, i) => {
       const id = `chat-pass-${i}`;
-      const pass = String(row.password || '');
-      const safeName = String(row.name || 'Chat').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
-      const safePass = pass.replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
-      const unavailable = !pass;
-      return `<div class="password-row" data-chat-id="${String(row.id || '').replace(/\"/g,'&quot;')}"><div class="password-chat-name">${safeName}</div><div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="text" value="${safePass}" placeholder="${unavailable ? 'Password not available' : ''}" readonly><button class="password-copy" type="button" data-password="${safePass}" ${unavailable ? 'disabled' : ''} title="Copy password" aria-label="Copy password">📋</button><button class="password-delete-btn" type="button" title="Delete group" aria-label="Delete group" ${unavailable ? 'disabled' : ''}>🗑️</button></div></div>`;
+      const pass = row.password || '';
+      const safeName = String(row.name || 'Chat').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
+      const display = pass ? pass.replace(/</g,'&lt;').replace(/>/g,'&gt;') : 'Not available (old chat password was stored only as a hash)';
+      return `<div class="password-row"><div class="password-chat-name">${safeName}</div><div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="password" value="${pass.replace(/\"/g,'&quot;')}" placeholder="${display}" readonly><button class="password-toggle chat-password-toggle" type="button" data-target="${id}" title="Show password" aria-label="Show password">👁</button></div></div>`;
     }).join('');
-
-    passwordsList.querySelectorAll('.password-copy').forEach(btn => btn.addEventListener('click', async () => {
-      if (btn.disabled) return;
-      try { await navigator.clipboard.writeText(btn.dataset.password || ''); showToast('Password copied'); }
-      catch (_) { showToast('Could not copy password'); }
-    }));
-    passwordsList.querySelectorAll('.password-delete-btn').forEach(btn => btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      const row = btn.closest('.password-row');
-      const chatId = row?.dataset.chatId || '';
-      const chat = chats.get(chatId);
-      const input = row?.querySelector('.chat-password-value');
-      if (chat && input) deleteChatWithPassword(chat, input.value);
+    passwordsList.querySelectorAll('.chat-password-toggle').forEach(btn => btn.addEventListener('click', () => {
+      const input = document.getElementById(btn.dataset.target); if (!input) return;
+      const show = input.type === 'password'; input.type = show ? 'text' : 'password'; btn.textContent = show ? '🙈' : '👁'; btn.title = show ? 'Hide password' : 'Show password';
     }));
   } catch (_) { passwordsList.innerHTML = '<div class="passwords-empty">Could not load passwords</div>'; }
 }
-function openPasswordsGate() {
-  if (!passwordsGateModal) return;
-  passwordsGateInput.value = '';
-  passwordsGateError.textContent = '';
-  passwordsGateModal.classList.remove('hidden');
-  setTimeout(() => passwordsGateInput?.focus(), 0);
-}
-
-function closePasswordsGate() {
-  passwordsGateModal?.classList.add('hidden');
-  if (passwordsGateInput) passwordsGateInput.value = '';
-  if (passwordsGateError) passwordsGateError.textContent = '';
-}
-
-function verifyPasswordsGate() {
-  const value = passwordsGateInput?.value || '';
-  if (value !== PASSWORDS_GATE_PASSWORD) {
-    if (passwordsGateError) passwordsGateError.textContent = 'Wrong password';
-    passwordsGateInput?.focus();
-    return;
-  }
-  closePasswordsGate();
-  passwordsModal?.classList.remove('hidden');
-  loadChatPasswords();
-}
-
-passwordsBtn?.addEventListener('click', openPasswordsGate);
-passwordsGateSubmit?.addEventListener('click', verifyPasswordsGate);
-passwordsGateClose?.addEventListener('click', closePasswordsGate);
-passwordsGateInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyPasswordsGate(); });
-passwordsGateModal?.addEventListener('click', e => { if (e.target === passwordsGateModal) closePasswordsGate(); });
+passwordsBtn?.addEventListener('click', () => { passwordsModal?.classList.remove('hidden'); loadChatPasswords(); });
 passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
 passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
 
@@ -305,9 +241,8 @@ passwordSubmit.addEventListener('click', () => {
     return;
   }
   const action = pendingAction;
-  const enteredPassword = passwordInput.value;
   closePassword();
-  if (action) action(enteredPassword);
+  if (action) action();
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
 passwordClose.addEventListener('click', closePassword);
@@ -747,33 +682,20 @@ function renderChatList() {
 }
 
 function openStoredChat(chat) {
-  // Do not show another chat's messages while the password is being checked.
-  messages.clear();
-  document.querySelector('#messages').innerHTML = '';
+  const saved = localStorage.getItem(`wa_chat_password_${chat.id}`);
   const open = password => {
-    waitForSocket(20000).then(ok => {
-      if (!ok) { showToast('Connecting… try again'); return; }
-      socket.emit('join-chat', { chatId: chat.id, password }, result => {
-        if (!result?.ok) {
-          messages.clear();
-          document.querySelector('#messages').innerHTML = '';
-          showToast(result?.error || 'Wrong password');
-          return;
-        }
-        currentChatId = chat.id;
-        currentChatPassword = password;
-        localStorage.setItem('wa_current_chat_id', currentChatId);
-        localStorage.removeItem(`wa_chat_password_${chat.id}`);
-        groupName = chat.name;
-        localStorage.setItem('wa_group_name', groupName);
-        updateGroupNameUI();
-        renderChatList();
-        openChat();
-        syncMessages();
-      });
-    });
+    currentChatId = chat.id; currentChatPassword = password;
+    localStorage.setItem('wa_current_chat_id', currentChatId);
+    localStorage.setItem(`wa_chat_password_${chat.id}`, password);
+    groupName = chat.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); renderChatList();
+    waitForSocket(20000).then(ok => { if (ok) socket.emit('join-chat', { chatId: currentChatId, password: currentChatPassword }, result => { if (!result?.ok) showToast(result?.error || 'Wrong password'); }); });
+    openChat();
   };
-  requestPassword('Chat password', `Enter password for “${chat.name}”.`, open, '__ANY__');
+  if (saved) open(saved); else requestPassword('Chat password', `Enter password for “${chat.name}”.`, () => open(passwordInput.value), '');
+  if (!saved) {
+    pendingAction = () => open(passwordInput.value);
+    pendingPasswordExpected = '__ANY__';
+  }
 }
 
 function openNewChatModal() {
@@ -788,7 +710,7 @@ newChatSave?.addEventListener('click', () => {
   if (!chatName || !password) { newChatError.textContent='Chat name and password are required'; return; }
   socket.emit('create-chat', { name: chatName, password }, result => {
     if (!result?.ok) { newChatError.textContent=result?.error || 'Could not create chat'; return; }
-    const chat=result.chat; chats.set(chat.id, chat); localStorage.removeItem(`wa_chat_password_${chat.id}`); currentChatId=chat.id; currentChatPassword=password; groupName=chat.name; localStorage.setItem('wa_current_chat_id',currentChatId); localStorage.setItem('wa_group_name',groupName); renderChatList(); updateGroupNameUI(); closeNewChatModal(); openChat(); showToast('New chat created');
+    const chat=result.chat; chats.set(chat.id, chat); localStorage.setItem(`wa_chat_password_${chat.id}`, password); currentChatId=chat.id; currentChatPassword=password; groupName=chat.name; localStorage.setItem('wa_current_chat_id',currentChatId); localStorage.setItem('wa_group_name',groupName); renderChatList(); updateGroupNameUI(); closeNewChatModal(); openChat(); showToast('New chat created');
   });
 });
 newChatPasswordInput?.addEventListener('keydown', e => { if(e.key==='Enter') newChatSave.click(); });
@@ -798,61 +720,14 @@ async function loadChats() {
     const res = await fetch('/api/chats', {cache:'no-store'}); const data = await res.json();
     if (Array.isArray(data.chats)) data.chats.forEach(chat => chats.set(String(chat.id), {id:String(chat.id), name:String(chat.name || 'Chat')}));
   } catch (_) {}
-  if (!chats.size) {
-    currentChatId = '';
-    currentChatPassword = '';
-    groupName = 'WhatsApp';
-    localStorage.removeItem('wa_current_chat_id');
-    localStorage.removeItem('wa_group_name');
-    renderChatList(); updateGroupNameUI();
-    closeChat();
-    return;
-  }
-  if (!chats.has(currentChatId)) currentChatId = [...chats.keys()][0];
-  const current=chats.get(currentChatId);
-  currentChatId = current.id;
-  currentChatPassword = '';
-  groupName = current.name;
-  localStorage.setItem('wa_current_chat_id', currentChatId);
-  localStorage.setItem('wa_group_name', groupName);
-  localStorage.removeItem(`wa_chat_password_${currentChatId}`);
+  if (!chats.size) chats.set('main',{id:'main',name:'WhatsApp'});
+  if (!chats.has(currentChatId)) currentChatId='main';
+  const current=chats.get(currentChatId) || chats.get('main'); currentChatId=current.id; groupName=current.name;
+  currentChatPassword=localStorage.getItem(`wa_chat_password_${currentChatId}`) || (currentChatId==='main' ? 'kmkm' : '');
   renderChatList(); updateGroupNameUI();
-  openStoredChat(current);
+  if (currentChatPassword) socket.emit('join-chat',{chatId:currentChatId,password:currentChatPassword});
 }
 socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
-socket.on('chat-deleted', deleted => {
-  const chatId = String(deleted?.chatId || '');
-  if (!chatId) return;
-  chats.delete(chatId);
-  localStorage.removeItem(`wa_chat_password_${chatId}`);
-  if (currentChatId === chatId) {
-    currentChatPassword = '';
-    messages.clear();
-    document.querySelector('#messages').innerHTML = '';
-    closeChat();
-    const next = chats.values().next().value;
-    if (next) {
-      currentChatId = next.id;
-      groupName = next.name;
-      localStorage.setItem('wa_current_chat_id', currentChatId);
-      localStorage.setItem('wa_group_name', groupName);
-      updateGroupNameUI();
-      renderChatList();
-      openStoredChat(next);
-    } else {
-      currentChatId = '';
-      groupName = 'WhatsApp';
-      localStorage.removeItem('wa_current_chat_id');
-      localStorage.removeItem('wa_group_name');
-      updateGroupNameUI();
-      renderChatList();
-      showToast('Chat deleted');
-    }
-  } else {
-    renderChatList();
-    showToast(`“${deleted?.name || 'Group'}” deleted`);
-  }
-});
 loadChats();
 
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
