@@ -138,7 +138,12 @@ function renderMessage(msg, direction) {
 
   const meta=document.createElement('div'); meta.className='meta';
   meta.appendChild(document.createTextNode(msg.time || now()));
-  if (direction === 'outgoing') { const ticks=document.createElement('span'); ticks.className='ticks read'; ticks.textContent='✓✓'; meta.appendChild(ticks); }
+  if (direction === 'outgoing') {
+    const ticks=document.createElement('span');
+    ticks.className='ticks' + (isMessageRead(msg) ? ' read' : '');
+    ticks.textContent='✓✓';
+    meta.appendChild(ticks);
+  }
   el.appendChild(meta);
 
   const more=document.createElement('button'); more.className='message-more'; more.textContent='⌄'; more.title='Message options';
@@ -194,12 +199,28 @@ function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==
 
 let lastSyncAt = '';
 
+function isMessageRead(msg) {
+  return Array.isArray(msg.readBy) && msg.readBy.some(id => id && id !== msg.userId);
+}
+
+function updateTicks(msg) {
+  const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+  if (!el || msg.userId !== userId) return;
+  const ticks = el.querySelector('.ticks');
+  if (!ticks) return;
+  const read = isMessageRead(msg);
+  ticks.textContent = '✓✓';
+  ticks.classList.toggle('read', read);
+}
+
 function receiveMessage(msg) {
   if (!msg || !msg.id) return;
   renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming');
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
+  if (msg.userId !== userId && document.visibilityState === 'visible') markMessageRead(msg);
 }
+
 
 socket.on('history', history => {
   if (!Array.isArray(history)) return;
@@ -212,6 +233,27 @@ socket.on('history', history => {
 
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
+
+function markMessageRead(msg) {
+  if (!msg || !msg.id || msg.userId === userId) return;
+  socket.emit('message-read', { id: msg.id, userId });
+}
+
+function markVisibleMessagesRead() {
+  if (document.visibilityState !== 'visible') return;
+  messages.forEach(msg => {
+    if (msg.userId !== userId) markMessageRead(msg);
+  });
+}
+
+socket.on('message-read', data => {
+  if (!data || !data.id || !data.userId) return;
+  const msg = messages.get(data.id);
+  if (!msg) return;
+  msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+  if (!msg.readBy.includes(data.userId)) msg.readBy.push(data.userId);
+  updateTicks(msg);
+});
 
 async function syncMessages() {
   try {
@@ -239,8 +281,16 @@ socket.on('user-renamed', data => {
 });
 socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
 socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
-socket.on('connect', () => { onlineStatus.textContent='online'; syncMessages(); });
+socket.on('connect', () => {
+  onlineStatus.textContent='online';
+  socket.emit('register-user', { userId });
+  syncMessages().finally(markVisibleMessagesRead);
+});
 socket.on('disconnect', () => { onlineStatus.textContent='connecting…'; });
+
+document.addEventListener('visibilitychange', markVisibleMessagesRead);
+messageArea.addEventListener('scroll', markVisibleMessagesRead);
+window.addEventListener('focus', markVisibleMessagesRead);
 
 function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }
 function updatePreview(text){ listPreview.textContent=text; listTime.textContent=now(); }

@@ -91,6 +91,10 @@ async function broadcastSaved(event, msg) {
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
 
+  socket.on('register-user', (data) => {
+    socket.userId = data && data.userId ? String(data.userId) : '';
+  });
+
   try {
     const history = await loadMessages('');
     socket.emit('history', history);
@@ -145,15 +149,39 @@ io.on('connection', async (socket) => {
       });
   });
 
-  socket.on('delete-message', async (data) => {
+  socket.on('delete-message', (data, ack) => {
     if (!data || !data.id) return;
+
+    // Remove it from every open client immediately; do not wait for MongoDB.
+    io.emit('delete-message', { id: data.id });
+    if (typeof ack === 'function') ack({ ok: true });
+
+    // Persist the deletion in the background.
+    getCollection()
+      .then((collection) => {
+        if (!collection) return;
+        return collection.deleteOne({ id: data.id });
+      })
+      .catch((error) => {
+        console.error('Failed to delete message:', error.message);
+      });
+  });
+
+  socket.on('message-read', async (data) => {
+    if (!data || !data.id || !data.userId) return;
+    const readerId = String(data.userId);
     try {
       const collection = await getCollection();
-      if (collection) await collection.deleteOne({ id: data.id });
-      io.emit('delete-message', { id: data.id });
+      if (collection) {
+        await collection.updateOne(
+          { id: data.id },
+          { $addToSet: { readBy: readerId } }
+        );
+      }
     } catch (error) {
-      console.error('Failed to delete message:', error.message);
+      console.error('Failed to save read receipt:', error.message);
     }
+    io.emit('message-read', { id: data.id, userId: readerId });
   });
 
   socket.on('clear-chat', async () => {
