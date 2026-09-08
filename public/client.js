@@ -8,7 +8,7 @@ while (!name) {
 }
 localStorage.setItem('wa_name', name);
 
-document.title = 'WhatsApp - ' + name;
+document.title = 'WhatsApp';
 
 const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
