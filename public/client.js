@@ -287,6 +287,8 @@ nameClose.addEventListener('click', closeNameModal);
 nameModal.addEventListener('click', e => { if (e.target === nameModal) closeNameModal(); });
 
 document.querySelector('#menuBtn').addEventListener('click', openNameModal);
+const profileAvatar = document.querySelector('#profileAvatar');
+if (profileAvatar) profileAvatar.addEventListener('click', openNameModal);
 document.querySelector('#chatSearchBtn').addEventListener('click', () => {
   if (window.innerWidth <= 760) {
     app.classList.remove('chat-open');
