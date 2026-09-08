@@ -17,16 +17,18 @@ const MONGODB_URI = process.env.MONGODB_URI || '';
 const DB_NAME = process.env.MONGODB_DB || 'wassup';
 const COLLECTION_NAME = 'messages';
 const MEDIA_BUCKET_NAME = 'media';
+const EVENTS_COLLECTION_NAME = 'realtime_events';
 
 let mongoClientPromise = null;
 let dbPromise = null;
 let mediaBucket = null;
+let realtimeWatchStarted = false;
 
-async function getCollection() {
+async function getDb() {
   if (!MONGODB_URI) return null;
   if (!mongoClientPromise) {
     const client = new MongoClient(MONGODB_URI, {
-      maxPoolSize: 10,
+      maxPoolSize: 20,
       serverSelectionTimeoutMS: 8000,
     });
     mongoClientPromise = client.connect().catch((error) => {
@@ -35,9 +37,58 @@ async function getCollection() {
     });
   }
   const client = await mongoClientPromise;
-  const db = client.db(DB_NAME);
+  return client.db(DB_NAME);
+}
+
+async function startRealtimeBridge() {
+  if (!MONGODB_URI || realtimeWatchStarted) return;
+  const db = await getDb();
+  if (!db) return;
+  realtimeWatchStarted = true;
+  const events = db.collection(EVENTS_COLLECTION_NAME);
+  try {
+    await events.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 });
+  } catch (_) {}
+
+  const stream = events.watch([{ $match: { operationType: 'insert' } }], {
+    fullDocument: 'default',
+  });
+  stream.on('change', (change) => {
+    const event = change.fullDocument;
+    if (!event || !event.event) return;
+    const payload = event.payload;
+    if (event.event === 'clear-chat') io.emit('clear-chat');
+    else if (payload !== undefined) io.emit(event.event, payload);
+  });
+  stream.on('error', (error) => {
+    console.error('Realtime MongoDB bridge stopped:', error.message);
+    realtimeWatchStarted = false;
+    try { stream.close(); } catch (_) {}
+    setTimeout(() => startRealtimeBridge().catch(() => {}), 1500);
+  });
+}
+
+async function getCollection() {
+  const db = await getDb();
+  if (!db) return null;
   mediaBucket = mediaBucket || new GridFSBucket(db, { bucketName: MEDIA_BUCKET_NAME });
+  startRealtimeBridge().catch((error) => console.error('Realtime bridge start failed:', error.message));
   return db.collection(COLLECTION_NAME);
+}
+
+async function publishRealtimeEvent(event, payload) {
+  if (!MONGODB_URI) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.collection(EVENTS_COLLECTION_NAME).insertOne({
+      event,
+      payload: payload === undefined ? null : payload,
+      createdAt: new Date(),
+    });
+  } catch (error) {
+    console.error('Failed to publish realtime event:', error.message);
+  }
 }
 
 async function getMediaBucket() {
@@ -114,6 +165,7 @@ async function saveMessage(msg) {
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   io.emit(event, saved);
+  publishRealtimeEvent(event, saved);
   return saved;
 }
 
@@ -219,7 +271,9 @@ io.on('connection', async (socket) => {
 
     // Do not block the Socket.IO connection while updating old messages.
     // Broadcast the new name immediately so chat messaging continues normally.
-    io.emit('user-renamed', { userId: data.userId, name: nextName });
+    const renameEvent = { userId: data.userId, name: nextName };
+    io.emit('user-renamed', renameEvent);
+    publishRealtimeEvent('user-renamed', renameEvent);
     if (typeof ack === 'function') ack({ ok: true });
 
     // Persist the rename in the background.
@@ -236,27 +290,27 @@ io.on('connection', async (socket) => {
       });
   });
 
-  socket.on('delete-message', (data, ack) => {
+  socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
-
-    // Remove it from every open client immediately; do not wait for MongoDB.
-    io.emit('delete-message', { id: data.id });
-    if (typeof ack === 'function') ack({ ok: true });
-
-    // Persist the deletion in the background.
-    getCollection()
-      .then(async (collection) => {
-        if (!collection) return;
+    const deleteEvent = { id: data.id };
+    try {
+      const collection = await getCollection();
+      if (collection) {
         const existing = await collection.findOne({ id: data.id });
-        const result = await collection.deleteOne({ id: data.id });
+        await collection.deleteOne({ id: data.id });
         if (existing && existing.mediaId) {
           try { await (await getMediaBucket()).delete(new ObjectId(existing.mediaId)); } catch (_) {}
         }
-        return result;
-      })
-      .catch((error) => {
-        console.error('Failed to delete message:', error.message);
-      });
+      }
+      // Persist first, then broadcast. This prevents another Vercel instance's
+      // reconciliation request from briefly re-adding a just-deleted message.
+      io.emit('delete-message', deleteEvent);
+      publishRealtimeEvent('delete-message', deleteEvent);
+      if (typeof ack === 'function') ack({ ok: true });
+    } catch (error) {
+      console.error('Failed to delete message:', error.message);
+      if (typeof ack === 'function') ack({ ok: false });
+    }
   });
 
   socket.on('message-read', async (data) => {
@@ -273,7 +327,9 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save read receipt:', error.message);
     }
-    io.emit('message-read', { id: data.id, userId: readerId });
+    const readEvent = { id: data.id, userId: readerId };
+    io.emit('message-read', readEvent);
+    publishRealtimeEvent('message-read', readEvent);
   });
 
   socket.on('message-delivered', async (data) => {
@@ -287,7 +343,9 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
-    io.emit('message-delivered', { id: data.id, userId: receiverId });
+    const deliveredEvent = { id: data.id, userId: receiverId };
+    io.emit('message-delivered', deliveredEvent);
+    publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
   socket.on('clear-chat', async () => {
@@ -301,7 +359,9 @@ io.on('connection', async (socket) => {
           try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
         }
       }
+      // Persist first, then broadcast so every instance is immediately consistent.
       io.emit('clear-chat');
+      publishRealtimeEvent('clear-chat', null);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }
