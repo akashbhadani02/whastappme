@@ -726,7 +726,7 @@ document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && 
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
-function closeChat(){ chatOpen=false; currentChatPassword=''; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
+function closeChat(){ if (currentChatId) socket.emit('leave-chat', { chatId: currentChatId }); chatOpen=false; currentChatPassword=''; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
 document.querySelector('#backBtn').addEventListener('click', closeChat);
 window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
 
@@ -741,7 +741,7 @@ function renderChatList() {
     item.innerHTML = `<div class="avatar group-avatar">${firstCharacter(chat.name)}</div><div class="chat-summary"><div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>Tap to open this chat</span><span class="unread-dot"></span></div></div>`;
     item.querySelector('strong').textContent = chat.name;
     item.querySelector('.group-avatar').addEventListener('click', e => { e.stopPropagation(); currentChatId = chat.id; groupName = chat.name; openGroupNameModal(); });
-    item.addEventListener('click', () => openStoredChat(chat));
+    item.addEventListener('click', () => { currentChatPassword=''; openStoredChat(chat); });
     list.appendChild(item);
   });
 }

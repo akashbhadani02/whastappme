@@ -322,6 +322,13 @@ io.on('connection', async (socket) => {
 
   socket.authorizedChats = new Set();
 
+  socket.on('leave-chat', (data) => {
+    const chatId = String(data?.chatId || '');
+    if (!chatId) return;
+    socket.leave(`chat:${chatId}`);
+    socket.authorizedChats.delete(chatId);
+  });
+
   socket.on('join-chat', async (data, ack) => {
     const chatId = String(data?.chatId || 'main');
     const password = String(data?.password || '');
