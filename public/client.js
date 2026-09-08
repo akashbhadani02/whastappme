@@ -302,7 +302,14 @@ function saveName() {
   localStorage.setItem('wa_name', name);
   updateMyNameUI();
   renameRenderedMessages(name);
-  socket.emit('rename-user', { userId, name });
+  socket.emit('rename-user', { userId, name }, (result) => {
+    if (!result || !result.ok) {
+      showToast('Name changed locally; sync will retry');
+      return;
+    }
+    // Refresh from the server after rename so old/new messages stay in sync.
+    syncMessages();
+  });
   closeNameModal();
   showToast(`Your name is now ${name}`);
 }

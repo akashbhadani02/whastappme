@@ -121,17 +121,28 @@ io.on('connection', async (socket) => {
     }
   });
 
-  socket.on('rename-user', async (data) => {
+  socket.on('rename-user', (data, ack) => {
     if (!data || !data.userId || !data.name) return;
     const nextName = String(data.name).trim().slice(0, 40);
     if (!nextName) return;
-    try {
-      const collection = await getCollection();
-      if (collection) await collection.updateMany({ userId: data.userId }, { $set: { user: nextName } });
-    } catch (error) {
-      console.error('Failed to rename user in MongoDB:', error.message);
-    }
+
+    // Do not block the Socket.IO connection while updating old messages.
+    // Broadcast the new name immediately so chat messaging continues normally.
     io.emit('user-renamed', { userId: data.userId, name: nextName });
+    if (typeof ack === 'function') ack({ ok: true });
+
+    // Persist the rename in the background.
+    getCollection()
+      .then((collection) => {
+        if (!collection) return;
+        return collection.updateMany(
+          { userId: data.userId },
+          { $set: { user: nextName } }
+        );
+      })
+      .catch((error) => {
+        console.error('Failed to rename user in MongoDB:', error.message);
+      });
   });
 
   socket.on('delete-message', async (data) => {
