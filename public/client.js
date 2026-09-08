@@ -88,7 +88,8 @@ function sendMessage(text) {
   const message = text.trim();
   if (!message) return;
   const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text' };
-  socket.emit('message', msg);
+  renderMessage(msg, 'outgoing');
+  socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be saved'); });
   textarea.value = '';
   autoResize();
   updatePreview(message);
@@ -181,7 +182,7 @@ fileInput.addEventListener('change', e => {
   const reader=new FileReader();
   reader.onload=() => {
     const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now()};
-    socket.emit('media',msg); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
+    renderMessage(msg,'outgoing'); socket.emit('media',msg, (result) => { if (!result || !result.ok) showToast('Media could not be saved'); }); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
   };
   reader.readAsDataURL(file);
 });
@@ -191,14 +192,41 @@ function downloadMedia(msg) {
 }
 function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==='jpeg'?'jpg':(ext || type); }
 
+let lastSyncAt = '';
+
+function receiveMessage(msg) {
+  if (!msg || !msg.id) return;
+  renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming');
+  if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
+  updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
+}
+
 socket.on('history', history => {
   if (!Array.isArray(history)) return;
-  history.forEach(msg => renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'));
-  if (history.length) updatePreview(history[history.length - 1].message || (history[history.length - 1].type === 'image' ? '📷 Photo' : history[history.length - 1].type === 'video' ? '🎥 Video' : 'New message'));
+  history.forEach(receiveMessage);
+  if (history.length) {
+    const last = history[history.length - 1];
+    if (last.createdAt) lastSyncAt = new Date(last.createdAt).toISOString();
+  }
 });
 
-socket.on('message', msg => { renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'); updatePreview(msg.message || 'New message'); });
-socket.on('media', msg => { renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); });
+socket.on('message', receiveMessage);
+socket.on('media', receiveMessage);
+
+async function syncMessages() {
+  try {
+    const url = lastSyncAt ? `/api/messages?after=${encodeURIComponent(lastSyncAt)}` : '/api/messages';
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (Array.isArray(data.messages)) data.messages.forEach(receiveMessage);
+  } catch (_) {
+    // Socket.IO remains the primary realtime channel; polling is a recovery path.
+  }
+}
+
+setInterval(syncMessages, 3000);
+
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
   messages.forEach(msg => {
@@ -211,7 +239,7 @@ socket.on('user-renamed', data => {
 });
 socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
 socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
-socket.on('connect', () => { onlineStatus.textContent='online'; });
+socket.on('connect', () => { onlineStatus.textContent='online'; syncMessages(); });
 socket.on('disconnect', () => { onlineStatus.textContent='connecting…'; });
 
 function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }

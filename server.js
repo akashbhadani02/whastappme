@@ -7,7 +7,8 @@ const { MongoClient } = require('mongodb');
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  maxHttpBufferSize: 10 * 1024 * 1024,
+  maxHttpBufferSize: 12 * 1024 * 1024,
+  transports: ['websocket', 'polling'],
 });
 
 const PORT = process.env.PORT || 9999;
@@ -36,60 +37,88 @@ async function getCollection() {
 app.use(express.json({ limit: '12mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 app.get('/api/health', async (req, res) => {
   try {
     const collection = await getCollection();
-    if (!collection) return res.json({ ok: true, mongodb: false, message: 'Set MONGODB_URI to enable persistence.' });
+    if (!collection) return res.json({ ok: true, mongodb: false, realtime: true, message: 'Set MONGODB_URI to enable persistence.' });
     await collection.findOne({}, { projection: { _id: 1 } });
-    res.json({ ok: true, mongodb: true });
+    res.json({ ok: true, mongodb: true, realtime: true });
   } catch (error) {
     console.error('MongoDB health check failed:', error.message);
-    res.status(500).json({ ok: false, mongodb: false });
+    res.status(500).json({ ok: false, mongodb: false, realtime: true });
   }
 });
 
-async function loadAllMessages() {
+async function loadMessages(after) {
   const collection = await getCollection();
   if (!collection) return [];
+  const query = after ? { createdAt: { $gte: new Date(after) } } : {};
   return collection
-    .find({}, { projection: { _id: 0 } })
+    .find(query, { projection: { _id: 0 } })
     .sort({ createdAt: 1 })
     .toArray();
 }
 
+app.get('/api/messages', async (req, res) => {
+  try {
+    const after = typeof req.query.after === 'string' && req.query.after ? req.query.after : '';
+    const messages = await loadMessages(after);
+    res.json({ ok: true, messages });
+  } catch (error) {
+    console.error('Failed to load messages:', error.message);
+    res.status(500).json({ ok: false, messages: [] });
+  }
+});
+
 async function saveMessage(msg) {
   const collection = await getCollection();
-  if (!collection) return;
-  await collection.updateOne(
-    { id: msg.id },
-    { $setOnInsert: { ...msg, createdAt: new Date() } },
-    { upsert: true }
-  );
+  if (!collection) return { ...msg, createdAt: msg.createdAt || new Date().toISOString() };
+
+  const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
+  const saved = { ...msg, createdAt };
+  await collection.updateOne({ id: msg.id }, { $setOnInsert: saved }, { upsert: true });
+  return saved;
+}
+
+async function broadcastSaved(event, msg) {
+  const saved = await saveMessage(msg);
+  io.emit(event, saved);
+  return saved;
 }
 
 io.on('connection', async (socket) => {
-  console.log('New User Connected...', socket.id);
+  console.log('User connected:', socket.id);
 
   try {
-    const history = await loadAllMessages();
+    const history = await loadMessages('');
     socket.emit('history', history);
   } catch (error) {
-    console.error('Failed to load MongoDB history:', error.message);
+    console.error('Failed to load message history:', error.message);
     socket.emit('history', []);
   }
 
-  socket.on('message', async (msg) => {
+  socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
     try {
-      await saveMessage(msg);
+      const saved = await broadcastSaved('message', msg);
+      if (typeof ack === 'function') ack({ ok: true, message: saved });
     } catch (error) {
       console.error('Failed to save message:', error.message);
+      if (typeof ack === 'function') ack({ ok: false });
     }
-    io.emit('message', msg);
+  });
+
+  socket.on('media', async (msg, ack) => {
+    if (!msg || !msg.data || !msg.type || !msg.id) return;
+    try {
+      const saved = await broadcastSaved('media', msg);
+      if (typeof ack === 'function') ack({ ok: true, message: saved });
+    } catch (error) {
+      console.error('Failed to save media:', error.message);
+      if (typeof ack === 'function') ack({ ok: false });
+    }
   });
 
   socket.on('rename-user', async (data) => {
@@ -105,38 +134,28 @@ io.on('connection', async (socket) => {
     io.emit('user-renamed', { userId: data.userId, name: nextName });
   });
 
-  socket.on('media', async (msg) => {
-    if (!msg || !msg.data || !msg.type || !msg.id) return;
-    try {
-      await saveMessage(msg);
-    } catch (error) {
-      console.error('Failed to save media:', error.message);
-    }
-    io.emit('media', msg);
-  });
-
   socket.on('delete-message', async (data) => {
     if (!data || !data.id) return;
     try {
       const collection = await getCollection();
       if (collection) await collection.deleteOne({ id: data.id });
+      io.emit('delete-message', { id: data.id });
     } catch (error) {
       console.error('Failed to delete message:', error.message);
     }
-    io.emit('delete-message', { id: data.id });
   });
 
   socket.on('clear-chat', async () => {
     try {
       const collection = await getCollection();
       if (collection) await collection.deleteMany({});
+      io.emit('clear-chat');
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }
-    io.emit('clear-chat');
   });
 
-  socket.on('disconnect', () => console.log('User disconnected', socket.id));
+  socket.on('disconnect', (reason) => console.log('User disconnected:', socket.id, reason));
 });
 
 if (!process.env.VERCEL) {
