@@ -52,14 +52,13 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-async function loadRecentMessages() {
+async function loadAllMessages() {
   const collection = await getCollection();
   if (!collection) return [];
   return collection
     .find({}, { projection: { _id: 0 } })
-    .sort({ createdAt: 1, _id: 1 })
-    .toArray()
-    .then((rows) => rows.reverse());
+    .sort({ createdAt: 1 })
+    .toArray();
 }
 
 async function saveMessage(msg) {
@@ -76,7 +75,7 @@ io.on('connection', async (socket) => {
   console.log('New User Connected...', socket.id);
 
   try {
-    const history = await loadRecentMessages();
+    const history = await loadAllMessages();
     socket.emit('history', history);
   } catch (error) {
     console.error('Failed to load MongoDB history:', error.message);
@@ -90,7 +89,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save message:', error.message);
     }
-    socket.broadcast.emit('message', msg);
+    io.emit('message', msg);
   });
 
   socket.on('rename-user', async (data) => {
@@ -103,7 +102,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to rename user in MongoDB:', error.message);
     }
-    socket.broadcast.emit('user-renamed', { userId: data.userId, name: nextName });
+    io.emit('user-renamed', { userId: data.userId, name: nextName });
   });
 
   socket.on('media', async (msg) => {
@@ -113,7 +112,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save media:', error.message);
     }
-    socket.broadcast.emit('media', msg);
+    io.emit('media', msg);
   });
 
   socket.on('delete-message', async (data) => {
@@ -124,7 +123,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to delete message:', error.message);
     }
-    socket.broadcast.emit('delete-message', { id: data.id });
+    io.emit('delete-message', { id: data.id });
   });
 
   socket.on('clear-chat', async () => {
@@ -134,7 +133,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }
-    socket.broadcast.emit('clear-chat');
+    io.emit('clear-chat');
   });
 
   socket.on('disconnect', () => console.log('User disconnected', socket.id));

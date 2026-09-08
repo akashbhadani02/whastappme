@@ -24,9 +24,3 @@ Open `/api/health`. With MongoDB configured it should return JSON with `mongodb:
 - The app keeps the most recent 100 messages for the chat history sent to a new client.
 - Media is currently stored as base64 inside MongoDB. The UI limits individual media files to 8 MB; for a production app, object storage (such as Vercel Blob or S3) is preferable for large media.
 - The password in the browser is not a secure authentication mechanism. Use real server-side authentication for production.
-
-## Message persistence and sync
-- Messages are stored in MongoDB and are loaded for every device that connects.
-- Messages are not limited to the latest 100; they remain until Delete message or Clear chat removes them.
-- Delete and Clear chat events are broadcast to all connected devices.
-- Keep MONGODB_URI and MONGODB_DB configured in Vercel.

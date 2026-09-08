@@ -88,7 +88,6 @@ function sendMessage(text) {
   const message = text.trim();
   if (!message) return;
   const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text' };
-  renderMessage(msg, 'outgoing');
   socket.emit('message', msg);
   textarea.value = '';
   autoResize();
@@ -182,7 +181,7 @@ fileInput.addEventListener('change', e => {
   const reader=new FileReader();
   reader.onload=() => {
     const msg={id:id(),senderId:socketId,userId,user:name,type:file.type.startsWith('image/')?'image':'video',data:reader.result,mime:file.type,time:now()};
-    renderMessage(msg,'outgoing'); socket.emit('media',msg); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
+    socket.emit('media',msg); updatePreview(msg.type==='image'?'📷 Photo':'🎥 Video'); fileInput.value='';
   };
   reader.readAsDataURL(file);
 });
@@ -303,4 +302,4 @@ document.querySelector('#searchInput').addEventListener('input', e => {
 });
 
 if (window.innerWidth <= 760) app.classList.remove('chat-open'); else app.classList.add('chat-open');
-updatePreview('Messages stay until deleted or chat is cleared');
+updatePreview('Messages are end-to-end styled for this demo');
