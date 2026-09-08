@@ -754,14 +754,14 @@ function renderChatList() {
 function openStoredChat(chat) {
   // Do not show another chat's messages while the password is being checked.
   messages.clear();
-  document.querySelector('#messages').innerHTML = '';
+  document.querySelector('#messageArea').innerHTML = '';
   const open = password => {
     waitForSocket(20000).then(ok => {
       if (!ok) { showToast('Connecting… try again'); return; }
       socket.emit('join-chat', { chatId: chat.id, password }, result => {
         if (!result?.ok) {
           messages.clear();
-          document.querySelector('#messages').innerHTML = '';
+          document.querySelector('#messageArea').innerHTML = '';
           showToast(result?.error || 'Wrong password');
           return;
         }
@@ -833,7 +833,7 @@ socket.on('chat-deleted', deleted => {
   if (currentChatId === chatId) {
     currentChatPassword = '';
     messages.clear();
-    document.querySelector('#messages').innerHTML = '';
+    document.querySelector('#messageArea').innerHTML = '';
     closeChat();
     const next = chats.values().next().value;
     if (next) {
