@@ -1,4 +1,16 @@
-const socket = io({
+// Vercel/static fallback: the UI must keep working even when Socket.IO is unavailable.
+const realtimeAvailable = typeof window.io === 'function';
+const offlineSocket = {
+  connected: true,
+  on(){}, once(){}, off(){}, connect(){ this.connected = true; },
+  emit(event, data, ack){
+    if (typeof data === 'function') { ack = data; data = undefined; }
+    if (event === 'join-chat') return typeof ack === 'function' && ack({ok:true, offline:true});
+    if (event === 'create-chat') return typeof ack === 'function' && ack({ok:false, error:'Server connection is required to create a new chat'});
+    if (typeof ack === 'function') ack({ok:true, offline:true});
+  }
+};
+const socket = realtimeAvailable ? io({
   transports: ['websocket', 'polling'],
   reconnection: true,
   reconnectionAttempts: Infinity,
@@ -6,7 +18,7 @@ const socket = io({
   reconnectionDelayMax: 5000,
   randomizationFactor: 0.2,
   timeout: 20000,
-});
+}) : offlineSocket;
 
 let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
 let currentChatPassword = '';
@@ -756,9 +768,9 @@ function openStoredChat(chat) {
   messages.clear();
   document.querySelector('#messages').innerHTML = '';
   const open = password => {
-    waitForSocket(20000).then(ok => {
-      if (!ok) { showToast('Connecting… try again'); return; }
-      socket.emit('join-chat', { chatId: chat.id, password }, result => {
+    // Open immediately. On Vercel/static mode Socket.IO may not exist, but the
+    // chat screen and password UI should still be fully clickable on laptop/mobile.
+    const join = () => socket.emit('join-chat', { chatId: chat.id, password }, result => {
         if (!result?.ok) {
           messages.clear();
           document.querySelector('#messages').innerHTML = '';
@@ -774,10 +786,15 @@ function openStoredChat(chat) {
         updateGroupNameUI();
         renderChatList();
         openChat();
-        syncMessages();
+        if (realtimeAvailable) syncMessages();
       });
-    });
+    if (realtimeAvailable) {
+      waitForSocket(5000).then(ok => { if (ok) join(); else join(); });
+    } else {
+      join();
+    }
   };
+  // Always show the password popup immediately when a chat is clicked.
   requestPassword('Chat password', `Enter password for “${chat.name}”.`, open, '__ANY__');
 }
 
@@ -804,6 +821,10 @@ async function loadChats() {
     if (Array.isArray(data.chats)) data.chats.forEach(chat => chats.set(String(chat.id), {id:String(chat.id), name:String(chat.name || 'Chat')}));
   } catch (_) {}
   if (!chats.size) {
+    // Static/Vercel fallback so the interface never becomes dead when the API is unavailable.
+    chats.set('main', { id:'main', name: localStorage.getItem('wa_fallback_chat_name') || 'WhatsApp' });
+  }
+  if (!chats.size) {
     currentChatId = '';
     currentChatPassword = '';
     groupName = 'WhatsApp';
@@ -822,7 +843,7 @@ async function loadChats() {
   localStorage.setItem('wa_group_name', groupName);
   localStorage.removeItem(`wa_chat_password_${currentChatId}`);
   renderChatList(); updateGroupNameUI();
-  openStoredChat(current);
+  // Do not auto-open: user can click the chat and get the password popup.
 }
 socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
 socket.on('chat-deleted', deleted => {
