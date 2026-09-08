@@ -9,9 +9,8 @@ const socket = io({
 });
 
 let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
-let currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
+let currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'deoxy';
 let pendingPasswordExpected = '';
-const CONTROL_PASSWORD = 'deoxy';
 const chats = new Map();
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let userId = localStorage.getItem('wa_user_id') || '';
@@ -86,88 +85,64 @@ installAppBtn?.addEventListener('click', () => {
 
 async function loadChatPasswords() {
   if (!passwordsList) return;
-  requestPassword('Passwords', 'Enter the control password to view all group passwords.', async () => {
-    passwordsModal?.classList.remove('hidden');
-    passwordsList.innerHTML = '<div class="passwords-empty">Loading…</div>';
-    try {
-      const res = await fetch('/api/chat-passwords', {
-        cache: 'no-store',
-        headers: { 'X-Control-Password': CONTROL_PASSWORD }
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not load passwords');
-      const rows = Array.isArray(data.chats) ? data.chats : [];
-      if (!rows.length) {
-        passwordsList.innerHTML = '<div class="passwords-empty">No groups found</div>';
-        return;
-      }
-      const action = data.actionPasswords || {};
-      const actionBox = `<div class="password-action-box">
-        <div class="password-action-title">🔐 Action passwords</div>
-        <div class="password-action-row"><span>Passwords button</span><code>${CONTROL_PASSWORD}</code></div>
-        <div class="password-action-row"><span>Delete group</span><code>${CONTROL_PASSWORD}</code></div>
-        <div class="password-action-row"><span>Download media</span><code>Use that group/chat password</code></div>
-      </div>`;
-      passwordsList.innerHTML = actionBox + rows.map((row, i) => {
-        const id = `chat-pass-${i}`;
-        const pass = String(row.password || '');
-        const safeName = String(row.name || 'Chat').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
-        const safePass = pass.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const deleteButton = row.id === 'main' ? '' : `<button class="danger-btn delete-group-btn" type="button" data-chat-id="${String(row.id).replace(/"/g,'&quot;')}" data-chat-name="${safeName}">🗑 Delete</button>`;
-        return `<div class="password-row">
-          <div class="password-chat-name">${safeName}</div>
-          <div class="password-value-wrap">
-            <input id="${id}" class="chat-password-value" type="password" value="${safePass}" readonly>
-            <button class="password-toggle chat-password-toggle" type="button" data-target="${id}" title="Show password" aria-label="Show password">👁</button>
-            ${deleteButton}
-          </div>
-        </div>`;
-      }).join('');
-      passwordsList.querySelectorAll('.chat-password-toggle').forEach(btn => btn.addEventListener('click', () => {
-        const input = document.getElementById(btn.dataset.target); if (!input) return;
-        const show = input.type === 'password'; input.type = show ? 'text' : 'password';
-        btn.textContent = show ? '🙈' : '👁'; btn.title = show ? 'Hide password' : 'Show password';
-      }));
-      passwordsList.querySelectorAll('.delete-group-btn').forEach(btn => btn.addEventListener('click', () => {
-        const chatId = btn.dataset.chatId;
-        const chatName = btn.dataset.chatName;
-        requestPassword('Delete group', `Enter "${CONTROL_PASSWORD}" to permanently delete “${chatName}”.`, () => deleteGroup(chatId, chatName), CONTROL_PASSWORD);
-      }));
-    } catch (error) {
-      passwordsList.innerHTML = `<div class="passwords-empty">${String(error.message || 'Could not load passwords')}</div>`;
-    }
-  }, CONTROL_PASSWORD);
-}
-async function deleteGroup(chatId, chatName) {
+  passwordsList.innerHTML = '<div class="passwords-empty">Loading…</div>';
   try {
-    const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`, {
-      method: 'DELETE',
-      headers: { 'X-Control-Password': CONTROL_PASSWORD }
-    });
+    const res = await fetch('/api/chat-passwords', { cache: 'no-store' });
     const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Could not delete group');
+    const rows = Array.isArray(data.chats) ? data.chats : [];
+    if (!rows.length) { passwordsList.innerHTML = '<div class="passwords-empty">No groups found</div>'; return; }
+    passwordsList.innerHTML = rows.map((row, i) => {
+      const id = `chat-pass-${i}`;
+      const pass = String(row.password || '');
+      const safeName = String(row.name || 'Chat').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+      const safePass = pass.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return `<div class="password-row">
+        <div class="password-chat-name">👥 ${safeName}</div>
+        <div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="password" value="${safePass}" readonly>
+        <button class="password-toggle chat-password-toggle" type="button" data-target="${id}" title="Show password">👁</button></div>
+        <div class="password-actions-label">Used for: Delete • Download • Clear chat</div>
+        ${String(row.id) === 'main' ? '<div class="main-password-badge">MAIN PASSWORD: deoxy</div>' : `<button class="delete-group-btn" data-chat-id="${String(row.id).replace(/"/g,'&quot;')}" data-chat-name="${safeName}">🗑 Delete group</button>`}
+      </div>`;
+    }).join('');
+    passwordsList.querySelectorAll('.chat-password-toggle').forEach(btn => btn.addEventListener('click', () => {
+      const input = document.getElementById(btn.dataset.target); if (!input) return;
+      const show = input.type === 'password'; input.type = show ? 'text' : 'password'; btn.textContent = show ? '🙈' : '👁';
+    }));
+    passwordsList.querySelectorAll('.delete-group-btn').forEach(btn => btn.addEventListener('click', () => {
+      deleteGroupWithMainPassword(btn.dataset.chatId, btn.dataset.chatName);
+    }));
+  } catch (_) { passwordsList.innerHTML = '<div class="passwords-empty">Could not load passwords</div>'; }
+}
+async function unlockPasswordsPanel() {
+  const value = prompt('Enter main password to view group passwords:');
+  if (value !== 'deoxy') { showToast('Wrong main password'); return; }
+  passwordsModal?.classList.remove('hidden');
+  loadChatPasswords();
+}
+passwordsBtn?.addEventListener('click', unlockPasswordsPanel);
+passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
+passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
+
+function deleteGroupWithMainPassword(chatId, chatName) {
+  if (String(chatId) === 'main') { showToast('Main group cannot be deleted'); return; }
+  const pass = prompt(`Enter main password to delete “${chatName}”:`);
+  if (pass !== 'deoxy') { showToast('Wrong main password'); return; }
+  if (!confirm(`Delete group “${chatName}” and all its messages/media?`)) return;
+  socket.emit('delete-chat', { chatId: String(chatId), mainPassword: pass }, result => {
+    if (!result?.ok) { showToast(result?.error || 'Could not delete group'); return; }
     chats.delete(String(chatId));
     localStorage.removeItem(`wa_chat_password_${chatId}`);
     if (currentChatId === String(chatId)) {
-      currentChatId = 'main';
-      currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
-      groupName = 'WhatsApp';
-      localStorage.setItem('wa_current_chat_id', 'main');
-      localStorage.setItem('wa_group_name', 'WhatsApp');
-      updateGroupNameUI();
-      socket.emit('join-chat', { chatId: 'main', password: currentChatPassword });
-      openChat();
-    }
-    renderChatList();
-    await loadChatPasswords();
-    showToast(`“${chatName}” deleted`);
-  } catch (error) {
-    showToast(error.message || 'Could not delete group');
-  }
+      currentChatId = 'main'; currentChatPassword = 'deoxy'; groupName = 'WhatsApp';
+      localStorage.setItem('wa_current_chat_id','main');
+      localStorage.setItem('wa_chat_password_main','deoxy');
+      renderChatList(); updateGroupNameUI();
+      socket.emit('join-chat',{chatId:'main',password:'deoxy'});
+    } else renderChatList();
+    loadChatPasswords();
+    showToast('Group deleted');
+  });
 }
-passwordsBtn?.addEventListener('click', () => loadChatPasswords());
-passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
-passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
 
 let pendingAction = null;
 const messages = new Map();
@@ -784,26 +759,23 @@ async function loadChats() {
   if (!chats.size) chats.set('main',{id:'main',name:'WhatsApp'});
   if (!chats.has(currentChatId)) currentChatId='main';
   const current=chats.get(currentChatId) || chats.get('main'); currentChatId=current.id; groupName=current.name;
-  currentChatPassword=localStorage.getItem(`wa_chat_password_${currentChatId}`) || (currentChatId==='main' ? 'kmkm' : '');
+  currentChatPassword=localStorage.getItem(`wa_chat_password_${currentChatId}`) || (currentChatId==='main' ? 'deoxy' : '');
   renderChatList(); updateGroupNameUI();
   if (currentChatPassword) socket.emit('join-chat',{chatId:currentChatId,password:currentChatPassword});
 }
-socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
-socket.on('chat-deleted', chat => {
-  if (!chat?.id) return;
-  chats.delete(String(chat.id));
-  localStorage.removeItem(`wa_chat_password_${chat.id}`);
-  if (currentChatId === String(chat.id)) {
-    currentChatId = 'main';
-    currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
-    groupName = 'WhatsApp';
-    localStorage.setItem('wa_current_chat_id', 'main');
-    localStorage.setItem('wa_group_name', 'WhatsApp');
-    updateGroupNameUI();
-    openChat();
-  }
-  renderChatList();
+socket.on('chat-deleted', data => {
+  const chatId = String(data?.chatId || '');
+  if (!chatId) return;
+  chats.delete(chatId);
+  localStorage.removeItem(`wa_chat_password_${chatId}`);
+  if (currentChatId === chatId) {
+    currentChatId = 'main'; currentChatPassword = 'deoxy'; groupName = 'WhatsApp';
+    localStorage.setItem('wa_current_chat_id','main');
+    localStorage.setItem('wa_chat_password_main','deoxy');
+    renderChatList(); updateGroupNameUI();
+  } else renderChatList();
 });
+socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
 loadChats();
 
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 

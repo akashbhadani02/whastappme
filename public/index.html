@@ -122,6 +122,18 @@
     </div>
   </div>
 
+
+  <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true" aria-labelledby="passwordsTitle">
+    <div class="modal-card passwords-card">
+      <button class="modal-close" id="passwordsClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔑</div>
+      <h3 id="passwordsTitle">Group passwords</h3>
+      <p>Enter the main password to view all group names and passwords.</p>
+      <div class="passwords-list" id="passwordsList"></div>
+      <div class="password-error" id="passwordsError"></div>
+      <button class="primary-btn" id="passwordsUnlock">View passwords</button>
+    </div>
+  </div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
