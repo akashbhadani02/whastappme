@@ -11,6 +11,7 @@ const socket = io({
 let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
 let currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
 let pendingPasswordExpected = '';
+const PASSWORDS_BUTTON_PASSWORD = 'deoxy';
 const chats = new Map();
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let userId = localStorage.getItem('wa_user_id') || '';
@@ -104,7 +105,12 @@ async function loadChatPasswords() {
     }));
   } catch (_) { passwordsList.innerHTML = '<div class="passwords-empty">Could not load passwords</div>'; }
 }
-passwordsBtn?.addEventListener('click', () => { passwordsModal?.classList.remove('hidden'); loadChatPasswords(); });
+passwordsBtn?.addEventListener('click', () => {
+  requestPassword('Passwords button', 'Enter the password to open the saved chat passwords.', () => {
+    passwordsModal?.classList.remove('hidden');
+    loadChatPasswords();
+  }, PASSWORDS_BUTTON_PASSWORD);
+});
 passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
 passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
 
