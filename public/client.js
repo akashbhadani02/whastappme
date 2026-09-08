@@ -8,13 +8,17 @@ const socket = io({
   timeout: 20000,
 });
 
-const PASSWORD = 'kmkm';
+let currentChatId = localStorage.getItem('wa_current_chat_id') || 'main';
+let currentChatPassword = localStorage.getItem('wa_chat_password_main') || 'kmkm';
+let pendingPasswordExpected = '';
+const chats = new Map();
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
   localStorage.setItem('wa_user_id', userId);
 }
+try { window.AndroidWhatsApp?.setUserId(userId); } catch (_) {}
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 while (!name) {
@@ -51,6 +55,17 @@ const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
 const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
 const installAppBtn = document.querySelector('#installAppBtn');
+const newChatBtn = document.querySelector('#newChatBtn');
+const newChatModal = document.querySelector('#newChatModal');
+const newChatNameInput = document.querySelector('#newChatNameInput');
+const newChatPasswordInput = document.querySelector('#newChatPasswordInput');
+const newChatSave = document.querySelector('#newChatSave');
+const newChatClose = document.querySelector('#newChatClose');
+const newChatError = document.querySelector('#newChatError');
+const passwordsBtn = document.querySelector('#passwordsBtn');
+const passwordsModal = document.querySelector('#passwordsModal');
+const passwordsClose = document.querySelector('#passwordsClose');
+const passwordsList = document.querySelector('#passwordsList');
 
 menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -66,6 +81,32 @@ installAppBtn?.addEventListener('click', () => {
     showToast('Android phone પર આ shortcutથી WhatsApp APK install કરો.');
   }
 });
+
+
+async function loadChatPasswords() {
+  if (!passwordsList) return;
+  passwordsList.innerHTML = '<div class="passwords-empty">Loading…</div>';
+  try {
+    const res = await fetch('/api/chat-passwords', { cache: 'no-store' });
+    const data = await res.json();
+    const rows = Array.isArray(data.chats) ? data.chats : [];
+    if (!rows.length) { passwordsList.innerHTML = '<div class="passwords-empty">No chats found</div>'; return; }
+    passwordsList.innerHTML = rows.map((row, i) => {
+      const id = `chat-pass-${i}`;
+      const pass = row.password || '';
+      const safeName = String(row.name || 'Chat').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]));
+      const display = pass ? pass.replace(/</g,'&lt;').replace(/>/g,'&gt;') : 'Not available (old chat password was stored only as a hash)';
+      return `<div class="password-row"><div class="password-chat-name">${safeName}</div><div class="password-value-wrap"><input id="${id}" class="chat-password-value" type="password" value="${pass.replace(/\"/g,'&quot;')}" placeholder="${display}" readonly><button class="password-toggle chat-password-toggle" type="button" data-target="${id}" title="Show password" aria-label="Show password">👁</button></div></div>`;
+    }).join('');
+    passwordsList.querySelectorAll('.chat-password-toggle').forEach(btn => btn.addEventListener('click', () => {
+      const input = document.getElementById(btn.dataset.target); if (!input) return;
+      const show = input.type === 'password'; input.type = show ? 'text' : 'password'; btn.textContent = show ? '🙈' : '👁'; btn.title = show ? 'Hide password' : 'Show password';
+    }));
+  } catch (_) { passwordsList.innerHTML = '<div class="passwords-empty">Could not load passwords</div>'; }
+}
+passwordsBtn?.addEventListener('click', () => { passwordsModal?.classList.remove('hidden'); loadChatPasswords(); });
+passwordsClose?.addEventListener('click', () => passwordsModal?.classList.add('hidden'));
+passwordsModal?.addEventListener('click', e => { if (e.target === passwordsModal) passwordsModal.classList.add('hidden'); });
 
 let pendingAction = null;
 const messages = new Map();
@@ -176,8 +217,9 @@ function showToast(text) {
   showToast.t = setTimeout(() => toast.classList.remove('show'), 2200);
 }
 
-function requestPassword(title, text, action) {
+function requestPassword(title, text, action, expectedPassword = currentChatPassword) {
   pendingAction = action;
+  pendingPasswordExpected = String(expectedPassword || '');
   passwordTitle.textContent = title;
   passwordText.textContent = text;
   passwordInput.value = '';
@@ -189,10 +231,11 @@ function requestPassword(title, text, action) {
 function closePassword() {
   passwordModal.classList.add('hidden');
   pendingAction = null;
+  pendingPasswordExpected = '';
 }
 
 passwordSubmit.addEventListener('click', () => {
-  if (passwordInput.value !== PASSWORD) {
+  if (pendingPasswordExpected !== '__ANY__' && passwordInput.value !== pendingPasswordExpected) {
     passwordError.textContent = 'Wrong password';
     passwordInput.select();
     return;
@@ -205,10 +248,21 @@ passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') password
 passwordClose.addEventListener('click', closePassword);
 passwordModal.addEventListener('click', e => { if (e.target === passwordModal) closePassword(); });
 
+document.querySelectorAll('.password-toggle').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.target);
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.textContent = show ? '🙈' : '👁';
+    btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  });
+});
+
 function sendMessage(text) {
   const message = text.trim();
   if (!message) return;
-  const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [] , readBy: [] };
+  const msg = { id: id(), chatId: currentChatId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [] , readBy: [] };
   socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be saved'); });
   textarea.value = '';
   autoResize();
@@ -279,7 +333,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id));
+    requestPassword('Delete message','Enter this chat password to delete this message.', () => deleteMessage(msg.id));
   });
   menu.appendChild(del); el.appendChild(menu);
   more.addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')); menu.classList.toggle('open'); });
@@ -296,14 +350,14 @@ function deleteMessage(messageId, broadcast=true) {
   if (el) el.remove();
   messages.delete(messageId);
   deletedIds.add(messageId);
-  if (broadcast) socket.emit('delete-message', {id:messageId}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+  if (broadcast) socket.emit('delete-message', {id:messageId, chatId:currentChatId}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
   updatePreview('Message deleted');
 }
 
 function clearChat(broadcast=true) {
   messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
   updatePreview('No messages yet');
-  if (broadcast) socket.emit('clear-chat', {by:name});
+  if (broadcast) socket.emit('clear-chat', {by:name, chatId:currentChatId});
 }
 
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
@@ -362,7 +416,7 @@ async function uploadMedia(file) {
     if (!(await waitForSocket(20000))) throw new Error('connection');
     const uploadId = id();
     const msgId = id();
-    const meta = { uploadId, id: msgId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const meta = { uploadId, id: msgId, chatId: currentChatId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
     let started = await emitAck('media-start', meta, 120000, 3);
     if (!started.ok) throw new Error('start');
     const chunkSize = 512 * 1024;
@@ -442,7 +496,7 @@ function receiveMessage(msg) {
   const isIncoming = msg.userId !== userId;
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
   if (isIncoming) {
-    socket.emit('message-delivered', { id: msg.id, userId });
+    socket.emit('message-delivered', { id: msg.id, userId, chatId: currentChatId });
   }
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
@@ -453,8 +507,11 @@ function receiveMessage(msg) {
 }
 
 
-socket.on('history', history => {
-  if (!Array.isArray(history)) return;
+socket.on('history', payload => {
+  const history = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.messages) ? payload.messages : []);
+  const historyChatId = Array.isArray(payload) ? currentChatId : String(payload?.chatId || currentChatId);
+  if (historyChatId !== currentChatId) return;
+  messageArea.innerHTML=''; messages.clear(); deletedIds.clear(); lastRenderedDate='';
   history.forEach(receiveMessage);
   if (history.length) {
     const last = history[history.length - 1];
@@ -468,7 +525,7 @@ socket.on('media', receiveMessage);
 function markMessageRead(msg) {
   if (!msg || !msg.id || msg.userId === userId || readSent.has(msg.id) || !chatOpen) return;
   readSent.add(msg.id);
-  socket.emit('message-read', { id: msg.id, userId });
+  socket.emit('message-read', { id: msg.id, userId, chatId: currentChatId });
 }
 
 function markVisibleMessagesRead() {
@@ -499,7 +556,7 @@ async function syncMessages() {
     // Fetch the complete current group state so every device can recover not only
     // new messages, but also deletes, clears, renames and read receipts even when
     // Vercel routes two users to different server instances.
-    const response = await fetch('/api/messages', { cache: 'no-store' });
+    const response = await fetch(`/api/messages?chatId=${encodeURIComponent(currentChatId)}`, { cache: 'no-store', headers: { 'X-Chat-Password': currentChatPassword } });
     if (!response.ok) return;
     const data = await response.json();
     if (!Array.isArray(data.messages)) return;
@@ -544,15 +601,11 @@ async function syncMessages() {
 setInterval(syncMessages, 1000);
 
 socket.on('group-renamed', data => {
-  if (!data || !data.name) return;
+  if (!data || !data.name || String(data.chatId || currentChatId) !== currentChatId) return;
   groupName = String(data.name);
   localStorage.setItem('wa_group_name', groupName);
   updateGroupNameUI();
 });
-
-fetch('/api/group').then(r => r.json()).then(data => {
-  if (data && data.name) { groupName = String(data.name); localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
-}).catch(() => updateGroupNameUI());
 
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
@@ -564,8 +617,8 @@ socket.on('user-renamed', data => {
     if (sender) sender.textContent = data.name;
   });
 });
-socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
-socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
+socket.on('delete-message', data => { if (data && data.id && String(data.chatId || currentChatId) === currentChatId) deleteMessage(data.id,false); });
+socket.on('clear-chat', data => { if (!data || String(data.chatId || currentChatId) === currentChatId) { clearChat(false); showToast('Chat was cleared'); } });
 let disconnectTimer = null;
 function setOnlineStatus(state) {
   clearTimeout(disconnectTimer);
@@ -610,9 +663,73 @@ document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click'
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
 function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
 document.querySelector('#backBtn').addEventListener('click', closeChat);
-document.querySelector('.chat-item').addEventListener('click', () => openChat());
 window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
-document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
+
+
+function renderChatList() {
+  const list = document.querySelector('#chatList');
+  list.innerHTML = '';
+  chats.forEach(chat => {
+    const item = document.createElement('button');
+    item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+    item.dataset.chat = chat.id;
+    item.innerHTML = `<div class="avatar group-avatar">${firstCharacter(chat.name)}</div><div class="chat-summary"><div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>Tap to open this chat</span><span class="unread-dot"></span></div></div>`;
+    item.querySelector('strong').textContent = chat.name;
+    item.querySelector('.group-avatar').addEventListener('click', e => { e.stopPropagation(); currentChatId = chat.id; groupName = chat.name; openGroupNameModal(); });
+    item.addEventListener('click', () => openStoredChat(chat));
+    list.appendChild(item);
+  });
+}
+
+function openStoredChat(chat) {
+  const saved = localStorage.getItem(`wa_chat_password_${chat.id}`);
+  const open = password => {
+    currentChatId = chat.id; currentChatPassword = password;
+    localStorage.setItem('wa_current_chat_id', currentChatId);
+    localStorage.setItem(`wa_chat_password_${chat.id}`, password);
+    groupName = chat.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); renderChatList();
+    waitForSocket(20000).then(ok => { if (ok) socket.emit('join-chat', { chatId: currentChatId, password: currentChatPassword }, result => { if (!result?.ok) showToast(result?.error || 'Wrong password'); }); });
+    openChat();
+  };
+  if (saved) open(saved); else requestPassword('Chat password', `Enter password for “${chat.name}”.`, () => open(passwordInput.value), '');
+  if (!saved) {
+    pendingAction = () => open(passwordInput.value);
+    pendingPasswordExpected = '__ANY__';
+  }
+}
+
+function openNewChatModal() {
+  newChatNameInput.value=''; newChatPasswordInput.value=''; newChatError.textContent=''; newChatModal.classList.remove('hidden'); setTimeout(() => newChatNameInput.focus(), 50);
+}
+function closeNewChatModal(){ newChatModal.classList.add('hidden'); newChatError.textContent=''; }
+newChatBtn?.addEventListener('click', openNewChatModal);
+newChatClose?.addEventListener('click', closeNewChatModal);
+newChatModal?.addEventListener('click', e => { if (e.target === newChatModal) closeNewChatModal(); });
+newChatSave?.addEventListener('click', () => {
+  const chatName = newChatNameInput.value.trim(); const password = newChatPasswordInput.value;
+  if (!chatName || !password) { newChatError.textContent='Chat name and password are required'; return; }
+  socket.emit('create-chat', { name: chatName, password }, result => {
+    if (!result?.ok) { newChatError.textContent=result?.error || 'Could not create chat'; return; }
+    const chat=result.chat; chats.set(chat.id, chat); localStorage.setItem(`wa_chat_password_${chat.id}`, password); currentChatId=chat.id; currentChatPassword=password; groupName=chat.name; localStorage.setItem('wa_current_chat_id',currentChatId); localStorage.setItem('wa_group_name',groupName); renderChatList(); updateGroupNameUI(); closeNewChatModal(); openChat(); showToast('New chat created');
+  });
+});
+newChatPasswordInput?.addEventListener('keydown', e => { if(e.key==='Enter') newChatSave.click(); });
+
+async function loadChats() {
+  try {
+    const res = await fetch('/api/chats', {cache:'no-store'}); const data = await res.json();
+    if (Array.isArray(data.chats)) data.chats.forEach(chat => chats.set(String(chat.id), {id:String(chat.id), name:String(chat.name || 'Chat')}));
+  } catch (_) {}
+  if (!chats.size) chats.set('main',{id:'main',name:'WhatsApp'});
+  if (!chats.has(currentChatId)) currentChatId='main';
+  const current=chats.get(currentChatId) || chats.get('main'); currentChatId=current.id; groupName=current.name;
+  currentChatPassword=localStorage.getItem(`wa_chat_password_${currentChatId}`) || (currentChatId==='main' ? 'kmkm' : '');
+  renderChatList(); updateGroupNameUI();
+  if (currentChatPassword) socket.emit('join-chat',{chatId:currentChatId,password:currentChatPassword});
+}
+socket.on('chat-created', chat => { if (!chat?.id) return; chats.set(String(chat.id), {id:String(chat.id),name:String(chat.name||'Chat')}); renderChatList(); });
+loadChats();
+
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 const nameModal = document.querySelector('#nameModal');
 const nameInput = document.querySelector('#nameInput');
@@ -713,8 +830,9 @@ function saveGroupName() {
   if (nextName === groupName) { closeGroupNameModal(); return; }
   groupName = nextName;
   localStorage.setItem('wa_group_name', groupName);
+  if (chats.has(currentChatId)) { chats.get(currentChatId).name = groupName; renderChatList(); }
   updateGroupNameUI();
-  socket.emit('rename-group', { name: groupName }, result => {
+  socket.emit('rename-group', { name: groupName, chatId: currentChatId }, result => {
     if (!result || !result.ok) showToast('Group name sync will retry');
   });
   closeGroupNameModal();

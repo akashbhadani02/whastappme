@@ -15,6 +15,7 @@
       <div class="sidebar-top">
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
+          <button class="passwords-action" id="passwordsBtn" type="button" title="Chat passwords" aria-label="Chat passwords">🔑 Passwords</button>
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
           <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
@@ -22,7 +23,7 @@
       </div>
       <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button></div>
       <div class="search-wrap">
-        <span>⌕</span> 
+        <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">
       </div>
       <div class="filter-row">
@@ -96,13 +97,26 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="newChatModal" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
+    <div class="modal-card">
+      <button class="modal-close" id="newChatClose" aria-label="Close">×</button>
+      <div class="lock-icon">💬</div>
+      <h3 id="newChatTitle">New chat</h3>
+      <p>Create a chat with its own password.</p>
+      <input id="newChatNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Chat name">
+      <div class="password-field" style="margin-top:10px"><input id="newChatPasswordInput" type="password" autocomplete="new-password" placeholder="Chat password"><button type="button" class="password-toggle" data-target="newChatPasswordInput" aria-label="Show password">👁</button></div>
+      <div class="password-error" id="newChatError"></div>
+      <button class="primary-btn" id="newChatSave">Create chat</button>
+    </div>
+  </div>
+
   <div class="modal hidden" id="passwordModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" id="passwordClose">×</button>
       <div class="lock-icon">🔒</div>
       <h3 id="passwordTitle">Password required</h3>
       <p id="passwordText">Enter password to continue.</p>
-      <input id="passwordInput" type="password" autocomplete="off" placeholder="Password">
+      <div class="password-field"><input id="passwordInput" type="password" autocomplete="off" placeholder="Password"><button type="button" class="password-toggle" data-target="passwordInput" aria-label="Show password">👁</button></div>
       <div class="password-error" id="passwordError"></div>
       <button class="primary-btn" id="passwordSubmit">Continue</button>
     </div>

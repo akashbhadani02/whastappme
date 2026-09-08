@@ -22,6 +22,7 @@ const MEDIA_BUCKET_NAME = 'media';
 const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
+const CHATS_COLLECTION_NAME = 'chats';
 
 function getVapidKeys() {
   // Prefer an explicit VAPID private key. If it is not configured, derive a stable
@@ -40,6 +41,36 @@ let mongoClientPromise = null;
 let dbPromise = null;
 let mediaBucket = null;
 let realtimeWatchStarted = false;
+function hashChatPassword(password, salt) {
+  const actualSalt = salt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(String(password || ''), actualSalt, 120000, 32, 'sha256').toString('hex');
+  return { salt: actualSalt, hash };
+}
+function verifyChatPassword(password, salt, expectedHash) {
+  const actual = crypto.pbkdf2Sync(String(password || ''), String(salt), 120000, 32, 'sha256').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(String(expectedHash), 'hex'));
+}
+async function getChatsCollection() {
+  const db = await getDb();
+  return db ? db.collection(CHATS_COLLECTION_NAME) : null;
+}
+async function ensureDefaultChat() {
+  const chats = await getChatsCollection();
+  if (!chats) return null;
+  let main = await chats.findOne({ _id: 'main' });
+  if (!main) {
+    const hp = hashChatPassword('kmkm');
+    main = { _id: 'main', name: 'WhatsApp', passwordHash: hp.hash, passwordSalt: hp.salt, passwordPlain: 'kmkm', createdAt: new Date() };
+    await chats.insertOne(main);
+  }
+  return main;
+}
+async function getAuthorizedChat(socket, chatId) {
+  const id = String(chatId || 'main');
+  if (!socket.authorizedChats || !socket.authorizedChats.has(id)) return false;
+  return true;
+}
+
 
 async function getDb() {
   if (!MONGODB_URI) return null;
@@ -74,8 +105,9 @@ async function startRealtimeBridge() {
     const event = change.fullDocument;
     if (!event || !event.event) return;
     const payload = event.payload;
-    if (event.event === 'clear-chat') io.emit('clear-chat');
-    else if (payload !== undefined) io.emit(event.event, payload);
+    const chatId = payload && payload.chatId ? String(payload.chatId) : 'main';
+    if (event.event === 'clear-chat') io.to(`chat:${chatId}`).emit('clear-chat', payload || { chatId });
+    else if (payload !== undefined) io.to(`chat:${chatId}`).emit(event.event, payload);
   });
   stream.on('error', (error) => {
     console.error('Realtime MongoDB bridge stopped:', error.message);
@@ -192,20 +224,53 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-async function loadMessages(after) {
+async function loadMessages(after, chatId = 'main') {
   const collection = await getCollection();
   if (!collection) return [];
-  const query = after ? { createdAt: { $gte: new Date(after) } } : {};
-  return collection
-    .find(query, { projection: { _id: 0 } })
-    .sort({ createdAt: 1 })
-    .toArray();
+  const requestedChatId = String(chatId || 'main');
+  const query = requestedChatId === 'main' ? { $or: [{ chatId: 'main' }, { chatId: { $exists: false } }] } : { chatId: requestedChatId };
+  if (after) query.createdAt = { $gte: new Date(after) };
+  return collection.find(query, { projection: { _id: 0 } }).sort({ createdAt: 1 }).toArray();
 }
+
+app.get('/api/chats', async (req, res) => {
+  try {
+    const chats = await getChatsCollection();
+    if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp' }] });
+    await ensureDefaultChat();
+    const rows = await chats.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1 }).toArray();
+    res.json({ ok: true, chats: rows.map(c => ({ id: String(c._id), name: c.name })) });
+  } catch (error) {
+    console.error('Failed to load chats:', error.message);
+    res.status(500).json({ ok: false, chats: [] });
+  }
+});
+
+
+app.get('/api/chat-passwords', async (req, res) => {
+  try {
+    const chats = await getChatsCollection();
+    if (!chats) return res.json({ ok: true, chats: [{ id: 'main', name: 'WhatsApp', password: 'kmkm' }] });
+    await ensureDefaultChat();
+    const rows = await chats.find({}, { projection: { _id: 1, name: 1, passwordPlain: 1 } }).sort({ createdAt: 1 }).toArray();
+    res.json({ ok: true, chats: rows.map(c => ({ id: String(c._id), name: c.name, password: c.passwordPlain || '' })) });
+  } catch (error) {
+    console.error('Failed to load chat passwords:', error.message);
+    res.status(500).json({ ok: false, chats: [] });
+  }
+});
 
 app.get('/api/messages', async (req, res) => {
   try {
     const after = typeof req.query.after === 'string' && req.query.after ? req.query.after : '';
-    const messages = await loadMessages(after);
+    const chatId = typeof req.query.chatId === 'string' && req.query.chatId ? req.query.chatId : 'main';
+    const password = typeof req.headers['x-chat-password'] === 'string' ? req.headers['x-chat-password'] : '';
+    const chats = await getChatsCollection();
+    if (chats) {
+      const chat = await chats.findOne({ _id: chatId });
+      if (!chat || !verifyChatPassword(password, chat.passwordSalt, chat.passwordHash)) return res.status(403).json({ ok: false, messages: [] });
+    }
+    const messages = await loadMessages(after, chatId);
     res.json({ ok: true, messages });
   } catch (error) {
     console.error('Failed to load messages:', error.message);
@@ -253,7 +318,8 @@ async function sendPushToOtherUsers(msg) {
 
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
-  io.emit(event, saved);
+  const room = `chat:${String(saved.chatId || 'main')}`;
+  io.to(room).emit(event, saved);
   publishRealtimeEvent(event, saved);
   if (event === 'message' || event === 'media') sendPushToOtherUsers(saved);
   return saved;
@@ -267,19 +333,59 @@ io.on('connection', async (socket) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
   });
 
-  try {
-    const history = await loadMessages('');
-    socket.emit('history', history);
-  } catch (error) {
-    console.error('Failed to load message history:', error.message);
-    socket.emit('history', []);
-  }
+  socket.authorizedChats = new Set();
+
+  socket.on('join-chat', async (data, ack) => {
+    const chatId = String(data?.chatId || 'main');
+    const password = String(data?.password || '');
+    try {
+      const chats = await getChatsCollection();
+      let chat = chats ? await chats.findOne({ _id: chatId }) : null;
+      if (!chat && chatId === 'main' && !chats) chat = { _id: 'main', name: 'WhatsApp' };
+      if (!chat) return typeof ack === 'function' && ack({ ok: false, error: 'Chat not found' });
+      if (chats && !verifyChatPassword(password, chat.passwordSalt, chat.passwordHash)) return typeof ack === 'function' && ack({ ok: false, error: 'Wrong password' });
+      socket.join(`chat:${chatId}`);
+      socket.authorizedChats.add(chatId);
+      const history = await loadMessages('', chatId);
+      socket.emit('history', { chatId, messages: history });
+      if (typeof ack === 'function') ack({ ok: true, chat: { id: chatId, name: chat.name } });
+    } catch (error) {
+      console.error('Join chat failed:', error.message);
+      if (typeof ack === 'function') ack({ ok: false, error: 'Unable to open chat' });
+    }
+  });
+
+  socket.on('create-chat', async (data, ack) => {
+    const name = String(data?.name || '').trim().slice(0, 60);
+    const password = String(data?.password || '');
+    if (!name || password.length < 1) return typeof ack === 'function' && ack({ ok: false, error: 'Name and password are required' });
+    try {
+      const chats = await getChatsCollection();
+      if (!chats) return typeof ack === 'function' && ack({ ok: false, error: 'MongoDB is required' });
+      const chatId = crypto.randomUUID();
+      const hp = hashChatPassword(password);
+      await chats.insertOne({ _id: chatId, name, passwordHash: hp.hash, passwordSalt: hp.salt, passwordPlain: password, createdAt: new Date() });
+      const chat = { id: chatId, name };
+      io.emit('chat-created', chat);
+      await publishRealtimeEvent('chat-created', chat);
+      socket.join(`chat:${chatId}`);
+      socket.authorizedChats.add(chatId);
+      socket.emit('history', { chatId, messages: [] });
+      if (typeof ack === 'function') ack({ ok: true, chat });
+    } catch (error) {
+      console.error('Create chat failed:', error.message);
+      if (typeof ack === 'function') ack({ ok: false, error: 'Could not create chat' });
+    }
+  });
+
+  await ensureDefaultChat().catch(() => {});
 
   socket.on('message', async (msg, ack) => {
-    if (!msg || !msg.message || !msg.id) return;
+    if (!msg || !msg.message || !msg.id || !(await getAuthorizedChat(socket, msg.chatId))) return;
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
     msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     try {
+      msg.chatId = String(msg.chatId || 'main');
       const saved = await broadcastSaved('message', msg);
       if (typeof ack === 'function') ack({ ok: true, message: saved });
     } catch (error) {
@@ -290,7 +396,7 @@ io.on('connection', async (socket) => {
 
   socket.on('media-start', async (meta, ack) => {
     try {
-      if (!meta || !meta.uploadId || !meta.name || !meta.mime || !meta.type) {
+      if (!meta || !meta.uploadId || !meta.name || !meta.mime || !meta.type || !(await getAuthorizedChat(socket, meta.chatId))) {
         return typeof ack === 'function' && ack({ ok: false, error: 'Invalid upload' });
       }
       const bucket = await getMediaBucket();
@@ -340,7 +446,7 @@ io.on('connection', async (socket) => {
       const meta = upload.meta;
       const msg = {
         id: meta.id, senderId: meta.senderId, userId: meta.userId, user: meta.user,
-        type: meta.type, mime: meta.mime, mediaId: String(upload.fileId),
+        type: meta.type, chatId: String(meta.chatId || 'main'), mime: meta.mime, mediaId: String(upload.fileId),
         fileName: meta.name, fileSize: Number(meta.size || 0), time: meta.time,
         createdAt: meta.createdAt || new Date().toISOString(), deliveredTo: [], readBy: []
       };
@@ -358,10 +464,14 @@ io.on('connection', async (socket) => {
     const nextName = String(data?.name || '').trim().slice(0, 60);
     if (!nextName) { if (typeof ack === 'function') ack({ ok: false }); return; }
     try {
+      const chatId = String(data?.chatId || 'main');
+      if (!(await getAuthorizedChat(socket, chatId))) return typeof ack === 'function' && ack({ ok: false });
+      const chats = await getChatsCollection();
+      if (chats) await chats.updateOne({ _id: chatId }, { $set: { name: nextName, updatedAt: new Date() } });
       const collection = await getGroupSettingsCollection();
       await collection.updateOne({ _id: 'main' }, { $set: { name: nextName, updatedAt: new Date() } }, { upsert: true });
-      const event = { name: nextName };
-      io.emit('group-renamed', event);
+      const event = { chatId, name: nextName };
+      io.to(`chat:${chatId}`).emit('group-renamed', event);
       await publishRealtimeEvent('group-renamed', event);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
@@ -398,19 +508,20 @@ io.on('connection', async (socket) => {
 
   socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
-    const deleteEvent = { id: data.id };
+    const deleteEvent = { id: data.id, chatId: String(data.chatId || 'main') };
+    if (!(await getAuthorizedChat(socket, deleteEvent.chatId))) return;
     try {
       const collection = await getCollection();
       if (collection) {
-        const existing = await collection.findOne({ id: data.id });
-        await collection.deleteOne({ id: data.id });
+        const existing = await collection.findOne({ id: data.id, chatId: deleteEvent.chatId });
+        await collection.deleteOne({ id: data.id, chatId: deleteEvent.chatId });
         if (existing && existing.mediaId) {
           try { await (await getMediaBucket()).delete(new ObjectId(existing.mediaId)); } catch (_) {}
         }
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
-      io.emit('delete-message', deleteEvent);
+      io.to(`chat:${deleteEvent.chatId}`).emit('delete-message', deleteEvent);
       publishRealtimeEvent('delete-message', deleteEvent);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
@@ -421,53 +532,59 @@ io.on('connection', async (socket) => {
 
   socket.on('message-read', async (data) => {
     if (!data || !data.id || !data.userId) return;
+    const chatId = String(data.chatId || 'main');
+    if (!(await getAuthorizedChat(socket, chatId))) return;
     const readerId = String(data.userId);
     try {
       const collection = await getCollection();
       if (collection) {
         await collection.updateOne(
-          { id: data.id },
+          { id: data.id, chatId },
           { $addToSet: { readBy: readerId } }
         );
       }
     } catch (error) {
       console.error('Failed to save read receipt:', error.message);
     }
-    const readEvent = { id: data.id, userId: readerId };
-    io.emit('message-read', readEvent);
+    const readEvent = { id: data.id, userId: readerId, chatId };
+    io.to(`chat:${chatId}`).emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
   socket.on('message-delivered', async (data) => {
     if (!data || !data.id || !socket.userId) return;
+    const chatId = String(data.chatId || 'main');
+    if (!(await getAuthorizedChat(socket, chatId))) return;
     const receiverId = String(socket.userId);
     try {
       const collection = await getCollection();
       if (collection) {
-        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
+        await collection.updateOne({ id: data.id, chatId }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
-    const deliveredEvent = { id: data.id, userId: receiverId };
-    io.emit('message-delivered', deliveredEvent);
+    const deliveredEvent = { id: data.id, userId: receiverId, chatId };
+    io.to(`chat:${chatId}`).emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
-  socket.on('clear-chat', async () => {
+  socket.on('clear-chat', async (data) => {
+    const chatId = String(data?.chatId || 'main');
+    if (!(await getAuthorizedChat(socket, chatId))) return;
     try {
       const collection = await getCollection();
       if (collection) {
-        const mediaMessages = await collection.find({ mediaId: { $exists: true } }, { projection: { mediaId: 1 } }).toArray();
-        await collection.deleteMany({});
+        const mediaMessages = await collection.find({ chatId, mediaId: { $exists: true } }, { projection: { mediaId: 1 } }).toArray();
+        await collection.deleteMany({ chatId });
         const bucket = await getMediaBucket();
         for (const item of mediaMessages) {
           try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
         }
       }
       // Persist first, then broadcast so every instance is immediately consistent.
-      io.emit('clear-chat');
-      publishRealtimeEvent('clear-chat', null);
+      io.to(`chat:${chatId}`).emit('clear-chat', { chatId });
+      publishRealtimeEvent('clear-chat', { chatId });
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }

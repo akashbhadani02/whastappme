@@ -13,6 +13,7 @@
       <div class="sidebar-top">
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
+          <button class="passwords-action" id="passwordsBtn" type="button" title="Chat passwords" aria-label="Chat passwords">🔑 Passwords</button>
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
           <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
@@ -78,6 +79,15 @@
       <input id="nameInput" type="text" maxlength="40" autocomplete="name" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="passwordsModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" id="passwordsClose">×</button>
+      <h3>Chat passwords</h3>
+      <p>All chat names and their saved passwords.</p>
+      <div id="passwordsList" class="passwords-list"></div>
     </div>
   </div>
 
