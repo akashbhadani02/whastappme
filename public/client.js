@@ -210,34 +210,102 @@ fileInput.addEventListener('change', e => {
   uploadMedia(file).finally(() => { fileInput.value=''; });
 });
 
+function makeUploadBubble(file, type) {
+  const el = document.createElement('div');
+  el.className = 'message outgoing upload-message';
+  const content = document.createElement('div');
+  const wrap = document.createElement('div');
+  wrap.className = 'media-wrap upload-wrap';
+  const placeholder = document.createElement(type === 'video' ? 'div' : 'div');
+  placeholder.className = 'upload-placeholder';
+  placeholder.innerHTML = `<div class="upload-icon">${type === 'video' ? '🎥' : '📷'}</div><div class="upload-name"></div>`;
+  placeholder.querySelector('.upload-name').textContent = file.name;
+  const ring = document.createElement('div'); ring.className = 'upload-ring';
+  ring.innerHTML = '<svg viewBox="0 0 72 72" aria-hidden="true"><circle class="upload-track" cx="36" cy="36" r="31"></circle><circle class="upload-progress" cx="36" cy="36" r="31"></circle></svg><span class="upload-percent">0%</span>';
+  wrap.appendChild(placeholder); wrap.appendChild(ring);
+  content.appendChild(wrap); el.appendChild(content);
+  const meta=document.createElement('div'); meta.className='meta'; meta.textContent=now(); el.appendChild(meta);
+  messageArea.appendChild(el); scrollToBottom();
+  return { el, ring, percent: ring.querySelector('.upload-percent'), progress: ring.querySelector('.upload-progress') };
+}
+
+function setUploadProgress(ui, percent, text) {
+  if (!ui) return;
+  const value = Math.max(0, Math.min(100, percent));
+  ui.percent.textContent = text || `${Math.round(value)}%`;
+  const circumference = 2 * Math.PI * 31;
+  ui.progress.style.strokeDasharray = `${circumference}`;
+  ui.progress.style.strokeDashoffset = `${circumference * (1 - value / 100)}`;
+}
+
+async function waitForSocket(timeout=20000) {
+  if (socket.connected) return true;
+  return new Promise(resolve => {
+    let done = false;
+    const finish = value => { if (done) return; done = true; clearTimeout(timer); socket.off('connect', onConnect); resolve(value); };
+    const onConnect = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeout);
+    socket.once('connect', onConnect);
+    if (!socket.connected) socket.connect();
+  });
+}
+
 async function uploadMedia(file) {
-  if (!socket.connected) { showToast('Connecting… please try again'); return; }
-  const uploadId = id();
-  const msgId = id();
   const type = file.type.startsWith('image/') ? 'image' : 'video';
-  const meta = { uploadId, id: msgId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+  const ui = makeUploadBubble(file, type);
   try {
-    const started = await emitAck('media-start', meta);
+    if (!(await waitForSocket(20000))) throw new Error('connection');
+    const uploadId = id();
+    const msgId = id();
+    const meta = { uploadId, id: msgId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    let started = await emitAck('media-start', meta, 120000, 3);
     if (!started.ok) throw new Error('start');
-    const chunkSize = 1024 * 1024;
+    const chunkSize = 512 * 1024;
     let sent = 0;
     while (sent < file.size) {
       const chunk = await file.slice(sent, sent + chunkSize).arrayBuffer();
-      const result = await emitAck('media-chunk', { uploadId, chunk });
+      let result = await emitAck('media-chunk', { uploadId, chunk }, 120000, 3);
       if (!result.ok) throw new Error('chunk');
       sent += chunk.byteLength;
-      showToast(`Uploading ${Math.round((sent / file.size) * 100)}%`);
+      setUploadProgress(ui, sent / file.size * 100);
     }
-    const result = await emitAck('media-end', { uploadId });
+    const result = await emitAck('media-end', { uploadId }, 120000, 3);
     if (!result.ok) throw new Error('finish');
+    setUploadProgress(ui, 100, '✓');
+    ui.el.classList.add('upload-done');
+    setTimeout(() => ui.el.remove(), 450);
     updatePreview(type === 'image' ? '📷 Photo' : '🎥 Video');
   } catch (error) {
-    showToast('Media upload failed');
+    ui.el.classList.add('upload-error');
+    setUploadProgress(ui, 0, '↻');
+    showToast('Connection lost. Please try again');
+    setTimeout(() => ui.el.remove(), 2200);
   }
 }
 
-function emitAck(event, data) {
-  return new Promise(resolve => socket.emit(event, data, result => resolve(result || {ok:false})));
+function emitAck(event, data, timeout=30000, retries=2) {
+  return new Promise(resolve => {
+    let attempt = 0;
+    const run = async () => {
+      if (!(await waitForSocket(Math.min(timeout, 20000)))) return resolve({ok:false});
+      attempt++;
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return; settled = true;
+        if (attempt <= retries + 1) run(); else resolve({ok:false});
+      }, timeout);
+      try {
+        socket.emit(event, data, result => {
+          if (settled) return;
+          settled = true; clearTimeout(timer); resolve(result || {ok:false});
+        });
+      } catch (_) {
+        clearTimeout(timer); settled = true;
+        if (attempt <= retries + 1) run(); else resolve({ok:false});
+      }
+    };
+    run();
+  });
 }
 
 function downloadMedia(msg) {

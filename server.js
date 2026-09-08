@@ -8,7 +8,7 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   // Media is uploaded in small chunks, so individual Socket.IO packets stay small.
-  maxHttpBufferSize: 2 * 1024 * 1024,
+  maxHttpBufferSize: 1024 * 1024,
   transports: ['websocket', 'polling'],
 });
 
@@ -367,7 +367,11 @@ io.on('connection', async (socket) => {
     }
   });
 
-  socket.on('disconnect', (reason) => console.log('User disconnected:', socket.id, reason));
+  socket.on('disconnect', (reason) => {
+    for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
+    uploads.clear();
+    console.log('User disconnected:', socket.id, reason);
+  });
 });
 
 if (!process.env.VERCEL) {
