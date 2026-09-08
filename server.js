@@ -57,8 +57,7 @@ async function loadRecentMessages() {
   if (!collection) return [];
   return collection
     .find({}, { projection: { _id: 0 } })
-    .sort({ createdAt: -1 })
-    .limit(100)
+    .sort({ createdAt: 1, _id: 1 })
     .toArray()
     .then((rows) => rows.reverse());
 }

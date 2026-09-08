@@ -303,4 +303,4 @@ document.querySelector('#searchInput').addEventListener('input', e => {
 });
 
 if (window.innerWidth <= 760) app.classList.remove('chat-open'); else app.classList.add('chat-open');
-updatePreview('Messages are end-to-end styled for this demo');
+updatePreview('Messages stay until deleted or chat is cleared');
