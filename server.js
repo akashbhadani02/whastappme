@@ -54,6 +54,11 @@ async function getChatsCollection() {
   const db = await getDb();
   return db ? db.collection(CHATS_COLLECTION_NAME) : null;
 }
+
+function chatQuery(chatId) {
+  const id = String(chatId || 'main');
+  return ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+}
 async function getAuthorizedChat(socket, chatId) {
   const id = String(chatId || 'main');
   if (!socket.authorizedChats || !socket.authorizedChats.has(id)) return false;
@@ -254,7 +259,7 @@ app.get('/api/messages', async (req, res) => {
     const password = typeof req.headers['x-chat-password'] === 'string' ? req.headers['x-chat-password'] : '';
     const chats = await getChatsCollection();
     if (chats) {
-      const chat = await chats.findOne({ _id: chatId });
+      const chat = await chats.findOne(chatQuery(chatId));
       if (!chat || !verifyChatPassword(password, chat.passwordSalt, chat.passwordHash)) return res.status(403).json({ ok: false, messages: [] });
     }
     const messages = await loadMessages(after, chatId);
@@ -327,7 +332,7 @@ io.on('connection', async (socket) => {
     const password = String(data?.password || '');
     try {
       const chats = await getChatsCollection();
-      let chat = chats ? await chats.findOne({ _id: chatId }) : null;
+      let chat = chats ? await chats.findOne(chatQuery(chatId)) : null;
       if (!chat && chatId === 'main' && !chats) chat = { _id: 'main', name: 'WhatsApp' };
       if (!chat) return typeof ack === 'function' && ack({ ok: false, error: 'Chat not found' });
       if (chats && !verifyChatPassword(password, chat.passwordSalt, chat.passwordHash)) return typeof ack === 'function' && ack({ ok: false, error: 'Wrong password' });
@@ -359,7 +364,7 @@ io.on('connection', async (socket) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'MongoDB is required' });
         return;
       }
-      const chat = await chats.findOne({ _id: chatId });
+      const chat = await chats.findOne(chatQuery(chatId));
       if (!chat) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Chat not found' });
         return;
