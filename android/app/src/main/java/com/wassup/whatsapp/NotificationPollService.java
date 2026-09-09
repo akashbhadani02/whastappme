@@ -65,6 +65,8 @@ public class NotificationPollService extends Service {
                 catch (Exception ignored) { after = ""; }
             }
             String base = getSharedPreferences("wassup", MODE_PRIVATE).getString("appUrl", BuildConfig.APP_URL);
+            if (base == null || base.trim().isEmpty() || base.contains("YOUR-VERCEL-APP")) return;
+            try { base = new URL(base).getProtocol() + "://" + new URL(base).getAuthority(); } catch (Exception ignored) {}
             String sep = base.contains("?") ? "&" : "?";
             String urlText = base.replaceAll("/$", "") + "/api/notifications/poll" + sep + "userId=" + URLEncoder.encode(userId, "UTF-8") + "&after=" + URLEncoder.encode(after, "UTF-8");
             HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection();
@@ -80,6 +82,7 @@ public class NotificationPollService extends Service {
             JSONArray arr = root.optJSONArray("messages");
             if (arr == null) return;
             String newest = after;
+            boolean firstPoll = after.isEmpty();
             for (int i=0; i<arr.length(); i++) {
                 JSONObject m = arr.getJSONObject(i);
                 String id = m.optString("id", "");
@@ -87,7 +90,7 @@ public class NotificationPollService extends Service {
                 if (created.compareTo(newest) > 0) newest = created;
                 if (id.isEmpty() || seen.contains(id)) continue;
                 seen.add(id);
-                showMessageNotification(id);
+                if (!firstPoll) showMessageNotification(id);
             }
             if (!newest.isEmpty()) getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("lastSeenCreatedAt", newest).apply();
         } catch (Exception ignored) {}

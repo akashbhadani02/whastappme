@@ -17,6 +17,7 @@ if (!userId) {
   localStorage.setItem('wa_user_id', userId);
 }
 try { window.AndroidNotifications?.saveUserId?.(userId); } catch (_) {}
+setTimeout(() => { try { window.AndroidNotifications?.saveUserId?.(userId); } catch (_) {} }, 1500);
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';

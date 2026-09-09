@@ -26,8 +26,10 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                try { getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("appUrl", url).apply(); } catch (_) {}
-                try { web.evaluateJavascript("(function(){try{window.AndroidNotifications&&window.AndroidNotifications.saveUserId(localStorage.getItem('wa_user_id')||'')}catch(e){}})();", null); } catch (_) {}
+                try { String origin = url;
+                try { origin = new android.net.Uri.Builder().scheme(new java.net.URL(url).getProtocol()).authority(new java.net.URL(url).getAuthority()).build().toString(); } catch (Exception ignored) {}
+                getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("appUrl", origin).apply(); } catch (Exception ignored) {}
+                try { web.evaluateJavascript("(function(){try{var id=localStorage.getItem('wa_user_id')||''; window.AndroidNotifications&&window.AndroidNotifications.saveUserId(id)}catch(e){}})();", null); } catch (Exception ignored) {}
                 startNotificationService();
             }
         });
