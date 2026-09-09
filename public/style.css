@@ -77,3 +77,26 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
   .top-actions .icon-btn{min-width:38px}
   .new-group-btn{width:calc(100% - 16px);margin-left:8px;margin-right:8px}
 }
+
+/* Mobile chat reliability fixes */
+@media (max-width: 768px) {
+  html, body { width:100%; min-height:100%; margin:0; overflow:hidden; }
+  body { -webkit-text-size-adjust:100%; }
+  #app, .app, .chat-app, .container { min-height:100dvh; height:100dvh; }
+  .chat, .chat-container, .messages, .message-list, .chat-messages {
+    min-height:0;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
+  }
+  .chat-input, .composer, .message-input, .input-area, .chat-footer {
+    position:sticky;
+    bottom:0;
+    z-index:20;
+    padding-bottom:max(8px, env(safe-area-inset-bottom));
+  }
+  input, textarea, button { touch-action:manipulation; }
+  img, video { max-width:100%; height:auto; }
+  video { display:block; }
+  .sidebar.hidden + .chat, .sidebar[hidden] + .chat { width:100%; }
+}
