@@ -231,29 +231,51 @@ passwordClose.addEventListener('click', closePassword);
 passwordModal.addEventListener('click', e => { if (e.target === passwordModal) closePassword(); });
 
 async function sendMessage(text) {
-  const message = text.trim();
+  const message = String(text || '').trim();
   if (!message || !currentGroupId) return;
   const msg = { id: id(), groupId: currentGroupId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [], readBy: [] };
   textarea.value = '';
-  autoGrow();
+  autoResize();
   updatePreview(message);
+
+  // Optimistic render: on mobile the message must appear immediately even if
+  // Socket.IO is reconnecting or the REST request takes a moment.
+  renderMessage(msg, 'outgoing');
+
   try {
-    const response = await fetch('/api/messages', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg) });
-    const result = await response.json();
-    if (!result.ok) throw new Error('save');
-    renderMessage(result.message, 'outgoing');
-  } catch (_) {
-    socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be sent'); });
+    const response = await fetch('/api/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(msg),
+      cache:'no-store',
+      keepalive:true
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || 'save');
+    // Replace/merge the optimistic copy with the server copy.
+    const saved = result.message || msg;
+    messages.set(saved.id, saved);
+    const el = document.querySelector(`.message[data-id="${CSS.escape(saved.id)}"]`);
+    if (el) el.dataset.synced = '1';
+    updateTicks(saved);
+  } catch (error) {
+    // Traditional Node/Express deployments can still deliver through Socket.IO.
+    const ack = await emitAck('message', msg, 12000, 1);
+    if (!ack || !ack.ok) {
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      if (el) el.classList.add('send-failed');
+      showToast('Message not sent — check server/MongoDB connection');
+    } else {
+      messages.set(msg.id, ack.message || msg);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      if (el) el.dataset.synced = '1';
+    }
   }
 }
 
-sendBtn.addEventListener('click', () => sendMessage(textarea.value));
-textarea.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage(textarea.value);
-  }
-});
+
+sendBtn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); sendMessage(textarea.value); });
+textarea.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); sendMessage(textarea.value); } });
 textarea.addEventListener('input', autoResize);
 function autoResize() { textarea.style.height='auto'; textarea.style.height=Math.min(textarea.scrollHeight,120)+'px'; }
 
@@ -393,7 +415,7 @@ async function uploadMedia(file) {
   try {
     const uploadId = id();
     const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
-    const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta) });
+    const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
     if (!started.ok) throw new Error(started.error || 'Media upload could not start');
     const chunkSize = 768 * 1024;
@@ -410,8 +432,13 @@ async function uploadMedia(file) {
       sent += chunk.byteLength; index++;
       setUploadProgress(ui, sent / file.size * 100);
     }
-    const finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }) });
-    const result = await finish.json();
+    let finish, result;
+    for (let attempt=0; attempt<3; attempt++) {
+      finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }), cache:'no-store' });
+      result = await finish.json().catch(() => ({}));
+      if (finish.ok && result.ok) break;
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
     if (!result.ok) throw new Error(result.error || 'Media upload could not finish');
     setUploadProgress(ui, 100, '✓');
     ui.el.classList.add('upload-done');
