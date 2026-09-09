@@ -1,7 +1,7 @@
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (_) { data = { title: 'WhatsApp', body: event.data ? event.data.text() : 'New message' }; }
-  const title = data.title || 'WhatsApp';
+  const title = 'WhatsApp';
   const options = {
     body: 'You have new message',
     icon: '/icon.svg',

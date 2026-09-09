@@ -563,7 +563,7 @@ async function sendPushToOtherUsers(msg) {
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
     if (!docs.length) return;
     const payload = JSON.stringify({
-      title: msg.groupName || 'WhatsApp',
+      title: 'WhatsApp',
       body: 'You have new message',
       messageId: msg.id,
       groupId: msg.groupId || 'main',

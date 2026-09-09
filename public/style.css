@@ -97,3 +97,6 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
   .message .media-actions .mini-btn{display:block!important;visibility:visible!important;opacity:1!important;flex:1 1 100%;width:100%;min-width:0;min-height:46px;font-size:15px;padding:11px 14px;}
   .message .media-wrap{width:100%;max-width:100%;overflow:visible;}
 }
+
+
+.notification-banner{margin:8px 10px;padding:10px 12px;border-radius:10px;background:#e7f7ef;border:1px solid #b8e2ce;display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;color:#183b2b;z-index:5}.notification-banner.hidden{display:none}.notification-banner span{flex:1}.notification-banner button{border:0;border-radius:18px;padding:8px 12px;background:#128c7e;color:#fff;font-weight:700;cursor:pointer;white-space:nowrap;touch-action:manipulation}.notification-banner button:active{transform:scale(.97)}@media(max-width:760px){.notification-banner{margin:6px 8px;padding:10px;font-size:13px}.notification-banner button{min-height:40px;padding:8px 14px}}

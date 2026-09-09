@@ -73,6 +73,8 @@ const groupAvatarList = document.querySelector('#groupAvatarList');
 const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
 const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
+const notificationBanner = document.querySelector('#notificationBanner');
+const notificationBannerBtn = document.querySelector('#notificationBannerBtn');
 const installAppBtn = document.querySelector('#installAppBtn');
 const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
 const newGroupBtn = document.querySelector('#newGroupBtn');
@@ -219,29 +221,36 @@ async function requestNotificationsFromUser() {
     return false;
   }
   const ready = await setupWebPush();
-  showToast(ready ? 'Notifications enabled' : 'Notifications enabled for this browser');
-  return true;
+  if (ready) {
+    notificationBanner?.classList.add('hidden');
+    showToast('Notifications enabled on this device');
+  } else {
+    showToast('Permission is on, but push setup failed. Check HTTPS and MongoDB.');
+  }
+  return ready;
 }
 
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // On mobile, permission should be requested from a real user gesture.
-  // Do not consume the very first tap silently; only auto-register if permission was already granted.
-  if (Notification.permission === 'granted') {
-    setupWebPush();
-  }
+  const refresh = () => {
+    const granted = Notification.permission === 'granted';
+    const btn = document.getElementById('enableNotificationsBtn');
+    if (btn) btn.textContent = granted ? '🔔 Notifications on' : '🔔 Enable notifications';
+    if (notificationBanner) notificationBanner.classList.toggle('hidden', granted);
+  };
+  refresh();
+  if (Notification.permission === 'granted') setupWebPush();
+
   const btn = document.getElementById('enableNotificationsBtn');
-  if (btn) {
-    const update = () => {
-      btn.textContent = Notification.permission === 'granted' ? '🔔 Notifications on' : '🔔 Enable notifications';
-    };
-    update();
-    btn.addEventListener('click', async () => {
-      await requestNotificationsFromUser();
-      update();
-      document.getElementById('appMenu')?.classList.add('hidden');
-    });
-  }
+  btn?.addEventListener('click', async () => {
+    await requestNotificationsFromUser();
+    refresh();
+    document.getElementById('appMenu')?.classList.add('hidden');
+  });
+  notificationBannerBtn?.addEventListener('click', async () => {
+    await requestNotificationsFromUser();
+    refresh();
+  });
 }
 notificationSetup();
 
@@ -839,6 +848,7 @@ async function joinGroup(groupId, openAfter=true) {
     socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
   });
   await syncMessages();
+  if (Notification.permission === 'granted') setupWebPush();
   if (openAfter) openChat();
 }
 
