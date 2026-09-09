@@ -190,6 +190,27 @@ app.post('/api/push/unsubscribe', async (req, res) => {
   } catch (error) { res.status(500).json({ ok: false }); }
 });
 
+app.get('/api/notifications/poll', async (req, res) => {
+  try {
+    const userId = String(req.query.userId || '').trim();
+    const after = String(req.query.after || '').trim();
+    if (!userId) return res.status(400).json({ ok: false, messages: [] });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok: false, messages: [] });
+    const collection = db.collection(MESSAGES_COLLECTION_NAME);
+    const filter = { userId: { $ne: userId } };
+    if (after) {
+      const d = new Date(after);
+      if (!Number.isNaN(d.getTime())) filter.createdAt = { $gt: d };
+    }
+    const messages = await collection.find(filter).sort({ createdAt: 1 }).limit(50).toArray();
+    res.json({ ok: true, messages: messages.map(m => ({ id: m.id, userId: m.userId, groupId: m.groupId || DEFAULT_GROUP_ID, type: m.type || 'text', createdAt: m.createdAt })) });
+  } catch (error) {
+    console.error('Notification poll failed:', error.message);
+    res.status(500).json({ ok: false, messages: [] });
+  }
+});
+
 app.get('/api/groups', async (req, res) => {
   try {
     const collection = await getGroupSettingsCollection();
