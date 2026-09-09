@@ -192,12 +192,9 @@ function notifyIncomingMessage(msg) {
   if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
   // Don't interrupt users who are actively looking at the open chat.
   if (document.visibilityState === 'visible' && chatOpen) return;
-  const sender = msg.user || 'New message';
-  let body = msg.message || '';
-  if (!body) body = msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message';
   try {
-    const n = new Notification(groupName || 'WhatsApp', {
-      body: `${sender}: ${body}`,
+    const n = new Notification('WhatsApp', {
+      body: 'You have new message',
       tag: `wa-${msg.id}`,
       renotify: true,
       icon: '/icon.svg',

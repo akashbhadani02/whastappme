@@ -562,11 +562,11 @@ async function sendPushToOtherUsers(msg) {
     if (!db) return;
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
     if (!docs.length) return;
-    const body = msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message');
     const payload = JSON.stringify({
       title: msg.groupName || 'WhatsApp',
-      body: `${msg.user || 'New message'}: ${body}`,
+      body: 'You have new message',
       messageId: msg.id,
+      groupId: msg.groupId || 'main',
       url: '/#chat'
     });
     await Promise.all(docs.map(async (doc) => {
