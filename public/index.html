@@ -20,7 +20,7 @@
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
-      <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button></div>
+      <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button><button id="adminGroupsBtn" type="button">🔐 Passwords / Groups</button></div>
       <div class="search-wrap">
         <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">
@@ -31,7 +31,9 @@
         <button class="filter">Favourites</button>
         <button class="filter">Groups</button>
       </div>
-      <div class="chat-list" id="chatList">
+      <div class="chat-list" id="chatList"></div>
+      <button class="new-group-btn" id="newGroupBtn" type="button">＋ New group</button>
+      <div class="chat-list" id="legacyChatList" hidden>
         <button class="chat-item active" data-chat="main">
           <div class="avatar group-avatar" id="groupAvatarList">W</div>
           <div class="chat-summary">
@@ -105,6 +107,42 @@
       <input id="passwordInput" type="password" autocomplete="off" placeholder="Password">
       <div class="password-error" id="passwordError"></div>
       <button class="primary-btn" id="passwordSubmit">Continue</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="adminGroupsModal" role="dialog" aria-modal="true">
+    <div class="modal-card admin-card">
+      <button class="modal-close" id="adminGroupsClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔐</div>
+      <h3>Password / Groups</h3>
+      <p>Admin can see and edit every group password.</p>
+      <div id="adminGroupsList" class="admin-groups-list"></div>
+      <div class="password-error" id="adminGroupsError"></div>
+      <button class="primary-btn" id="adminNewGroupBtn">＋ Add new group</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="groupPasswordModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" id="groupPasswordClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔒</div>
+      <h3 id="groupPasswordTitle">Group password</h3>
+      <p id="groupPasswordHelp">Enter this group's password to open it.</p>
+      <input id="groupPasswordInput" type="password" autocomplete="off" placeholder="Group password">
+      <div class="password-error" id="groupPasswordError"></div>
+      <button class="primary-btn" id="groupPasswordSubmit">Open group</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="groupEditModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" id="groupEditClose" aria-label="Close">×</button>
+      <div class="lock-icon">👥</div>
+      <h3 id="groupEditTitle">Add group</h3>
+      <input id="groupEditName" type="text" maxlength="60" autocomplete="off" placeholder="Group name">
+      <input id="groupEditPassword" type="text" maxlength="120" autocomplete="off" placeholder="Group password" style="margin-top:10px">
+      <div class="password-error" id="groupEditError"></div>
+      <button class="primary-btn" id="groupEditSave">Save group</button>
     </div>
   </div>
 

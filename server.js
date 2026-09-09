@@ -19,9 +19,17 @@ const MONGODB_URI = process.env.MONGODB_URI || '';
 const DB_NAME = process.env.MONGODB_DB || 'wassup';
 const COLLECTION_NAME = 'messages';
 const MEDIA_BUCKET_NAME = 'media';
+const MEDIA_CHUNKS_BUCKET_NAME = 'media_chunks';
 const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
+const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
+const MAX_MEDIA_CHUNK = 768 * 1024;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
+const DEFAULT_GROUP_ID = 'main';
+// In-memory fallback keeps group/password management working even when MongoDB
+// is not configured. MongoDB is still used automatically when MONGODB_URI exists.
+const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
 
 function getVapidKeys() {
   // Prefer an explicit VAPID private key. If it is not configured, derive a stable
@@ -39,6 +47,7 @@ try { webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example
 let mongoClientPromise = null;
 let dbPromise = null;
 let mediaBucket = null;
+let mediaChunksBucket = null;
 let realtimeWatchStarted = false;
 
 async function getDb() {
@@ -74,7 +83,7 @@ async function startRealtimeBridge() {
     const event = change.fullDocument;
     if (!event || !event.event) return;
     const payload = event.payload;
-    if (event.event === 'clear-chat') io.emit('clear-chat');
+    if (event.event === 'clear-chat') io.emit('clear-chat', payload || {});
     else if (payload !== undefined) io.emit(event.event, payload);
   });
   stream.on('error', (error) => {
@@ -83,6 +92,28 @@ async function startRealtimeBridge() {
     try { stream.close(); } catch (_) {}
     setTimeout(() => startRealtimeBridge().catch(() => {}), 1500);
   });
+}
+
+async function getGroupSettingsCollection() {
+  const db = await getDb();
+  if (!db) return null;
+  return db.collection(GROUP_SETTINGS_COLLECTION_NAME);
+}
+
+function normalizeGroupId(value) {
+  const id = String(value || DEFAULT_GROUP_ID).trim();
+  return /^[a-zA-Z0-9_-]{1,80}$/.test(id) ? id : DEFAULT_GROUP_ID;
+}
+
+async function ensureDefaultGroup() {
+  const collection = await getGroupSettingsCollection();
+  if (!collection) return { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD };
+  await collection.updateOne(
+    { _id: DEFAULT_GROUP_ID },
+    { $setOnInsert: { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() } },
+    { upsert: true }
+  );
+  return collection.findOne({ _id: DEFAULT_GROUP_ID });
 }
 
 async function getCollection() {
@@ -111,6 +142,13 @@ async function publishRealtimeEvent(event, payload) {
 async function getMediaBucket() {
   await getCollection();
   return mediaBucket;
+}
+
+async function getMediaChunksBucket() {
+  const db = await getDb();
+  if (!db) return null;
+  mediaChunksBucket = mediaChunksBucket || new GridFSBucket(db, { bucketName: MEDIA_CHUNKS_BUCKET_NAME });
+  return mediaChunksBucket;
 }
 
 app.use(express.json({ limit: '2mb' }));
@@ -151,14 +189,144 @@ app.post('/api/push/unsubscribe', async (req, res) => {
   } catch (error) { res.status(500).json({ ok: false }); }
 });
 
-app.get('/api/group', async (req, res) => {
+app.get('/api/groups', async (req, res) => {
   try {
     const collection = await getGroupSettingsCollection();
-    const doc = await collection.findOne({ _id: 'main' });
-    res.json({ ok: true, name: doc?.name || 'WhatsApp' });
+    if (!collection) return res.json({ ok: true, groups: Array.from(fallbackGroups.values()).sort((a,b) => a.createdAt - b.createdAt).map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
+    const groups = await collection.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1, _id: 1 }).toArray();
+    res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
   } catch (error) {
-    console.error('Failed to load group name:', error.message);
-    res.json({ ok: true, name: 'WhatsApp' });
+    console.error('Failed to load groups:', error.message);
+    res.json({ ok: true, groups: [{ id: DEFAULT_GROUP_ID, name: 'WhatsApp' }] });
+  }
+});
+
+app.post('/api/groups/verify', async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.body?.groupId);
+    const password = String(req.body?.password || '');
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const group = fallbackGroups.get(groupId);
+      return res.json({ ok: !!group && password === String(group.password || '') });
+    }
+    const group = await collection.findOne({ _id: groupId });
+    if (!group) return res.status(404).json({ ok: false });
+    res.json({ ok: password === String(group.password || '') });
+  } catch (error) {
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.post('/api/groups', async (req, res) => {
+  try {
+    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false });
+    const name = String(req.body?.name || '').trim().slice(0, 60);
+    const password = String(req.body?.password || '').trim();
+    if (!name || !password) return res.status(400).json({ ok: false });
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'group'}-${crypto.randomBytes(3).toString('hex')}`;
+      const doc = { _id: id, name, password, createdAt: new Date(), updatedAt: new Date() };
+      fallbackGroups.set(id, doc);
+      const group = { id, name };
+      io.emit('group-created', group);
+      return res.json({ ok: true, group, persistent: false });
+    }
+    const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'group'}-${crypto.randomBytes(3).toString('hex')}`;
+    const doc = { _id: id, name, password, createdAt: new Date(), updatedAt: new Date() };
+    await collection.insertOne(doc);
+    const group = { id, name };
+    io.emit('group-created', group);
+    await publishRealtimeEvent('group-created', group);
+    res.json({ ok: true, group });
+  } catch (error) {
+    console.error('Create group failed:', error.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.put('/api/groups/:id', async (req, res) => {
+  try {
+    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false });
+    const groupId = normalizeGroupId(req.params.id);
+    const name = String(req.body?.name || '').trim().slice(0, 60);
+    const password = String(req.body?.password || '').trim();
+    if (!name || !password) return res.status(400).json({ ok: false });
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const group = fallbackGroups.get(groupId);
+      if (!group) return res.status(404).json({ ok: false });
+      group.name = name; group.password = password; group.updatedAt = new Date();
+      const event = { id: groupId, name };
+      io.emit('group-updated', event);
+      return res.json({ ok: true, group: event, persistent: false });
+    }
+    const result = await collection.updateOne({ _id: groupId }, { $set: { name, password, updatedAt: new Date() } });
+    if (!result.matchedCount) return res.status(404).json({ ok: false });
+    const event = { id: groupId, name };
+    io.emit('group-updated', event);
+    await publishRealtimeEvent('group-updated', event);
+    res.json({ ok: true, group: event });
+  } catch (error) {
+    console.error('Update group failed:', error.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.delete('/api/groups/:id', async (req, res) => {
+  try {
+    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false });
+    const groupId = normalizeGroupId(req.params.id);
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const existed = fallbackGroups.delete(groupId);
+      if (!existed) return res.status(404).json({ ok: false, error: 'Group not found' });
+      const event = { id: groupId };
+      io.emit('group-deleted', event);
+      return res.json({ ok: true, group: event, persistent: false });
+    }
+    const result = await collection.deleteOne({ _id: groupId });
+    if (!result.deletedCount) return res.status(404).json({ ok: false, error: 'Group not found' });
+    // Remove the group's messages as well so a deleted group is fully removed.
+    try {
+      const messagesCollection = await getCollection();
+      if (messagesCollection) await messagesCollection.deleteMany({ groupId });
+    } catch (_) {}
+    const event = { id: groupId };
+    io.emit('group-deleted', event);
+    await publishRealtimeEvent('group-deleted', event);
+    res.json({ ok: true, group: event });
+  } catch (error) {
+    console.error('Delete group failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Delete failed' });
+  }
+});
+
+app.get('/api/group', async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.query?.id);
+    const collection = await getGroupSettingsCollection();
+    if (!collection) return res.json({ ok: true, id: DEFAULT_GROUP_ID, name: 'WhatsApp' });
+    const doc = await collection.findOne({ _id: groupId });
+    res.json({ ok: true, id: groupId, name: doc?.name || 'WhatsApp' });
+  } catch (error) {
+    res.json({ ok: true, id: DEFAULT_GROUP_ID, name: 'WhatsApp' });
+  }
+});
+
+app.post('/api/admin/groups', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false });
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const groups = Array.from(fallbackGroups.values()).sort((a,b) => a.createdAt - b.createdAt);
+      return res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp', password: String(g.password || '') })), persistent: false });
+    }
+    const groups = await collection.find({}, { projection: { _id: 1, name: 1, password: 1 } }).sort({ createdAt: 1, _id: 1 }).toArray();
+    res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp', password: String(g.password || '') })), persistent: true });
+  } catch (error) {
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -192,20 +360,157 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-async function loadMessages(after) {
+async function loadMessages(after, groupId = DEFAULT_GROUP_ID) {
   const collection = await getCollection();
   if (!collection) return [];
-  const query = after ? { createdAt: { $gte: new Date(after) } } : {};
+  const gid = normalizeGroupId(groupId);
+  const groupFilter = { $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+  const query = after ? { $and: [groupFilter, { createdAt: { $gte: new Date(after) } }] } : groupFilter;
   return collection
     .find(query, { projection: { _id: 0 } })
     .sort({ createdAt: 1 })
     .toArray();
 }
 
+
+app.post('/api/messages', async (req, res) => {
+  try {
+    const msg = req.body || {};
+    if (!msg.id || !String(msg.message || '').trim()) return res.status(400).json({ ok: false, error: 'Invalid message' });
+    msg.message = String(msg.message).trim();
+    msg.groupId = normalizeGroupId(msg.groupId);
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
+    const saved = await broadcastSaved('message', msg);
+    res.json({ ok: true, message: saved });
+  } catch (error) {
+    console.error('REST message save failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Message could not be saved' });
+  }
+});
+
+// HTTP chunked media upload fallback. This is important on serverless deployments
+// where Socket.IO upgrades may not be available/reliable. Each request stays small;
+// the server assembles the chunks into GridFS at the end. There is intentionally no
+// application-level maximum video size.
+app.post('/api/media/start', async (req, res) => {
+  try {
+    const { uploadId, name, mime, type, size, groupId, userId } = req.body || {};
+    if (!uploadId || !name || !mime || !type) return res.status(400).json({ ok:false, error:'Invalid upload' });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable. Configure MONGODB_URI.' });
+    const uploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+    const chunksBucket = await getMediaChunksBucket();
+    // Clean up a retry of the same upload id.
+    const oldChunks = await chunksBucket.find({ 'metadata.uploadId': String(uploadId) }).toArray();
+    await Promise.all(oldChunks.map(f => chunksBucket.delete(f._id).catch(() => {})));
+    await uploads.deleteMany({ uploadId: String(uploadId) });
+    await uploads.insertOne({
+      uploadId: String(uploadId), name: String(name), mime: String(mime), type: String(type),
+      size: Number(size || 0), groupId: normalizeGroupId(groupId), userId: String(userId || ''),
+      received: 0, chunks: 0, createdAt: new Date()
+    });
+    res.json({ ok:true });
+  } catch (error) {
+    console.error('REST media start failed:', error.message);
+    res.status(500).json({ ok:false, error:'Upload could not start' });
+  }
+});
+
+// Each media chunk is stored as its own GridFS file. This avoids MongoDB's 16MB
+// document limit, so a video can be arbitrarily large at the application layer.
+app.post('/api/media/chunk', express.raw({ type: 'application/octet-stream', limit: '1mb' }), async (req, res) => {
+  try {
+    const uploadId = String(req.query.uploadId || '');
+    const index = Number(req.query.index);
+    if (!uploadId || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(req.body) || !req.body.length || req.body.length > MAX_MEDIA_CHUNK) {
+      return res.status(400).json({ ok:false, error:'Invalid chunk' });
+    }
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable' });
+    const uploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+    const session = await uploads.findOne({ uploadId });
+    if (!session) return res.status(404).json({ ok:false, error:'Upload not found' });
+    const chunksBucket = await getMediaChunksBucket();
+    const existing = await chunksBucket.find({ 'metadata.uploadId': uploadId, 'metadata.index': index }).toArray();
+    await Promise.all(existing.map(f => chunksBucket.delete(f._id).catch(() => {})));
+    const stream = chunksBucket.openUploadStream(`${uploadId}-${index}`, {
+      contentType: 'application/octet-stream',
+      metadata: { uploadId, index }
+    });
+    await new Promise((resolve, reject) => {
+      stream.once('finish', resolve);
+      stream.once('error', reject);
+      stream.end(req.body);
+    });
+    await uploads.updateOne({ uploadId }, { $inc: { received: req.body.length }, $max: { chunks: index + 1 } });
+    res.json({ ok:true, index });
+  } catch (error) {
+    console.error('REST media chunk failed:', error.message);
+    res.status(500).json({ ok:false, error:'Chunk upload failed' });
+  }
+});
+
+app.post('/api/media/end', async (req, res) => {
+  try {
+    const uploadId = String(req.body?.uploadId || '');
+    if (!uploadId) return res.status(400).json({ ok:false });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable' });
+    const uploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+    const session = await uploads.findOne({ uploadId });
+    if (!session) return res.status(404).json({ ok:false, error:'Upload not found' });
+    const chunksBucket = await getMediaChunksBucket();
+    const media = await getMediaBucket();
+    const chunks = await chunksBucket.find({ 'metadata.uploadId': uploadId }).sort({ 'metadata.index': 1 }).toArray();
+    if (chunks.length !== Number(session.chunks || 0)) return res.status(409).json({ ok:false, error:'Upload is incomplete' });
+    for (let i = 0; i < chunks.length; i++) {
+      if (Number(chunks[i].metadata?.index) !== i) return res.status(409).json({ ok:false, error:'Upload has missing chunks' });
+    }
+    const stream = media.openUploadStream(session.name, {
+      contentType: session.mime,
+      metadata: { mime: session.mime, type: session.type, userId: session.userId, groupId: session.groupId, fileSize: session.size }
+    });
+    try {
+      for (const chunkFile of chunks) {
+        const download = chunksBucket.openDownloadStream(chunkFile._id);
+        await new Promise((resolve, reject) => {
+          download.on('error', reject);
+          stream.on('error', reject);
+          download.on('end', resolve);
+          download.pipe(stream, { end: false });
+        });
+      }
+      await new Promise((resolve, reject) => {
+        stream.once('finish', resolve);
+        stream.once('error', reject);
+        stream.end();
+      });
+      await Promise.all(chunks.map(f => chunksBucket.delete(f._id).catch(() => {})));
+      await uploads.deleteOne({ _id: session._id });
+      const msg = {
+        id: crypto.randomUUID(), groupId: session.groupId, userId: session.userId, user: String(req.body?.user || ''),
+        type: session.type, mime: session.mime, mediaId: String(stream.id), fileName: session.name, fileSize: session.size,
+        time: String(req.body?.time || new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})),
+        createdAt: new Date().toISOString(), deliveredTo: [], readBy: []
+      };
+      const saved = await broadcastSaved('media', msg);
+      return res.json({ ok:true, message:saved });
+    } catch (e) {
+      try { await media.delete(stream.id); } catch (_) {}
+      throw e;
+    }
+  } catch (error) {
+    console.error('REST media end failed:', error.message);
+    res.status(500).json({ ok:false, error:'Upload could not be finalized' });
+  }
+});
+
 app.get('/api/messages', async (req, res) => {
   try {
     const after = typeof req.query.after === 'string' && req.query.after ? req.query.after : '';
-    const messages = await loadMessages(after);
+    const groupId = normalizeGroupId(req.query?.groupId);
+    const messages = await loadMessages(after, groupId);
     res.json({ ok: true, messages });
   } catch (error) {
     console.error('Failed to load messages:', error.message);
@@ -215,7 +520,7 @@ app.get('/api/messages', async (req, res) => {
 
 async function saveMessage(msg) {
   const collection = await getCollection();
-  if (!collection) return { ...msg, createdAt: msg.createdAt || new Date().toISOString() };
+  if (!collection) return { ...msg, groupId: normalizeGroupId(msg.groupId), createdAt: msg.createdAt || new Date().toISOString() };
 
   const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
   const saved = { ...msg, createdAt };
@@ -267,8 +572,22 @@ io.on('connection', async (socket) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
   });
 
+  socket.on('join-group', async (data, ack) => {
+    const groupId = normalizeGroupId(data?.groupId);
+    socket.groupId = groupId;
+    try {
+      const history = await loadMessages('', groupId);
+      socket.emit('history', history);
+      if (typeof ack === 'function') ack({ ok: true, groupId });
+    } catch (error) {
+      socket.emit('history', []);
+      if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
+  socket.groupId = DEFAULT_GROUP_ID;
   try {
-    const history = await loadMessages('');
+    const history = await loadMessages('', DEFAULT_GROUP_ID);
     socket.emit('history', history);
   } catch (error) {
     console.error('Failed to load message history:', error.message);
@@ -277,6 +596,7 @@ io.on('connection', async (socket) => {
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
+    msg.groupId = normalizeGroupId(socket.groupId);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
     msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     try {
@@ -296,7 +616,7 @@ io.on('connection', async (socket) => {
       const bucket = await getMediaBucket();
       const stream = bucket.openUploadStream(meta.name, {
         contentType: meta.mime,
-        metadata: { mime: meta.mime, type: meta.type, userId: String(meta.userId || '') },
+        metadata: { mime: meta.mime, type: meta.type, userId: String(meta.userId || ''), groupId: normalizeGroupId(meta.groupId || socket.groupId) },
       });
       uploads.set(String(meta.uploadId), { stream, fileId: stream.id, meta });
       stream.on('error', (error) => {
@@ -339,7 +659,7 @@ io.on('connection', async (socket) => {
       uploads.delete(String(data.uploadId));
       const meta = upload.meta;
       const msg = {
-        id: meta.id, senderId: meta.senderId, userId: meta.userId, user: meta.user,
+        id: meta.id, groupId: normalizeGroupId(meta.groupId || socket.groupId), senderId: meta.senderId, userId: meta.userId, user: meta.user,
         type: meta.type, mime: meta.mime, mediaId: String(upload.fileId),
         fileName: meta.name, fileSize: Number(meta.size || 0), time: meta.time,
         createdAt: meta.createdAt || new Date().toISOString(), deliveredTo: [], readBy: []
@@ -359,8 +679,9 @@ io.on('connection', async (socket) => {
     if (!nextName) { if (typeof ack === 'function') ack({ ok: false }); return; }
     try {
       const collection = await getGroupSettingsCollection();
-      await collection.updateOne({ _id: 'main' }, { $set: { name: nextName, updatedAt: new Date() } }, { upsert: true });
-      const event = { name: nextName };
+      const groupId = normalizeGroupId(socket.groupId);
+      await collection.updateOne({ _id: groupId }, { $set: { name: nextName, updatedAt: new Date() } }, { upsert: true });
+      const event = { id: groupId, name: nextName };
       io.emit('group-renamed', event);
       await publishRealtimeEvent('group-renamed', event);
       if (typeof ack === 'function') ack({ ok: true });
@@ -398,7 +719,7 @@ io.on('connection', async (socket) => {
 
   socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
-    const deleteEvent = { id: data.id };
+    const deleteEvent = { id: data.id, groupId: normalizeGroupId(socket.groupId) };
     try {
       const collection = await getCollection();
       if (collection) {
@@ -433,7 +754,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save read receipt:', error.message);
     }
-    const readEvent = { id: data.id, userId: readerId };
+    const readEvent = { id: data.id, userId: readerId, groupId: normalizeGroupId(socket.groupId) };
     io.emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
@@ -449,7 +770,7 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
-    const deliveredEvent = { id: data.id, userId: receiverId };
+    const deliveredEvent = { id: data.id, userId: receiverId, groupId: normalizeGroupId(socket.groupId) };
     io.emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
@@ -458,16 +779,19 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        const mediaMessages = await collection.find({ mediaId: { $exists: true } }, { projection: { mediaId: 1 } }).toArray();
-        await collection.deleteMany({});
+        const gid = normalizeGroupId(socket.groupId);
+        const groupFilter = { $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+        const mediaMessages = await collection.find({ $and: [groupFilter, { mediaId: { $exists: true } }] }, { projection: { mediaId: 1 } }).toArray();
+        await collection.deleteMany(groupFilter);
         const bucket = await getMediaBucket();
         for (const item of mediaMessages) {
           try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
         }
       }
       // Persist first, then broadcast so every instance is immediately consistent.
-      io.emit('clear-chat');
-      publishRealtimeEvent('clear-chat', null);
+      const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
+      io.emit('clear-chat', clearEvent);
+      publishRealtimeEvent('clear-chat', clearEvent);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }

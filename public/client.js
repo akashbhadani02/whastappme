@@ -8,7 +8,7 @@ const socket = io({
   timeout: 20000,
 });
 
-const PASSWORD = 'kmkm';
+const PASSWORD = 'deoxy';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
@@ -17,6 +17,9 @@ if (!userId) {
 }
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
+let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
+let groups = [];
+let groupPasswordTarget = null;
 while (!name) {
   name = (prompt('Please enter your name:') || '').trim();
 }
@@ -41,6 +44,7 @@ const passwordTitle = document.querySelector('#passwordTitle');
 const passwordText = document.querySelector('#passwordText');
 const passwordError = document.querySelector('#passwordError');
 const toast = document.querySelector('#toast');
+const chatList = document.querySelector('#chatList');
 const listPreview = document.querySelector('#listPreview');
 const listTime = document.querySelector('#listTime');
 const onlineStatus = document.querySelector('#onlineStatus');
@@ -51,6 +55,27 @@ const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
 const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
 const installAppBtn = document.querySelector('#installAppBtn');
+const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
+const newGroupBtn = document.querySelector('#newGroupBtn');
+const adminGroupsModal = document.querySelector('#adminGroupsModal');
+const adminGroupsClose = document.querySelector('#adminGroupsClose');
+const adminGroupsList = document.querySelector('#adminGroupsList');
+const adminGroupsError = document.querySelector('#adminGroupsError');
+const adminNewGroupBtn = document.querySelector('#adminNewGroupBtn');
+const groupPasswordModal = document.querySelector('#groupPasswordModal');
+const groupPasswordInput = document.querySelector('#groupPasswordInput');
+const groupPasswordSubmit = document.querySelector('#groupPasswordSubmit');
+const groupPasswordClose = document.querySelector('#groupPasswordClose');
+const groupPasswordTitle = document.querySelector('#groupPasswordTitle');
+const groupPasswordHelp = document.querySelector('#groupPasswordHelp');
+const groupPasswordError = document.querySelector('#groupPasswordError');
+const groupEditModal = document.querySelector('#groupEditModal');
+const groupEditClose = document.querySelector('#groupEditClose');
+const groupEditTitle = document.querySelector('#groupEditTitle');
+const groupEditName = document.querySelector('#groupEditName');
+const groupEditPassword = document.querySelector('#groupEditPassword');
+const groupEditError = document.querySelector('#groupEditError');
+const groupEditSave = document.querySelector('#groupEditSave');
 
 menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -205,14 +230,21 @@ passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') password
 passwordClose.addEventListener('click', closePassword);
 passwordModal.addEventListener('click', e => { if (e.target === passwordModal) closePassword(); });
 
-function sendMessage(text) {
+async function sendMessage(text) {
   const message = text.trim();
-  if (!message) return;
-  const msg = { id: id(), senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [] , readBy: [] };
-  socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be saved'); });
+  if (!message || !currentGroupId) return;
+  const msg = { id: id(), groupId: currentGroupId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [], readBy: [] };
   textarea.value = '';
-  autoResize();
+  autoGrow();
   updatePreview(message);
+  try {
+    const response = await fetch('/api/messages', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg) });
+    const result = await response.json();
+    if (!result.ok) throw new Error('save');
+    renderMessage(result.message, 'outgoing');
+  } catch (_) {
+    socket.emit('message', msg, (result) => { if (!result || !result.ok) showToast('Message could not be sent'); });
+  }
 }
 
 sendBtn.addEventListener('click', () => sendMessage(textarea.value));
@@ -311,7 +343,7 @@ clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
   const file=e.target.files[0]; if (!file) return;
-  if (!/^image\/(png|jpe?g|gif|webp)|video\/(mp4|webm|ogg)$/.test(file.type)) { showToast('Only image and video files are allowed'); fileInput.value=''; return; }
+  if (!/^(image\/|video\/)/i.test(file.type)) { showToast('Only image and video files are allowed'); fileInput.value=''; return; }
   uploadMedia(file).finally(() => { fileInput.value=''; });
 });
 
@@ -359,31 +391,37 @@ async function uploadMedia(file) {
   const type = file.type.startsWith('image/') ? 'image' : 'video';
   const ui = makeUploadBubble(file, type);
   try {
-    if (!(await waitForSocket(20000))) throw new Error('connection');
     const uploadId = id();
-    const msgId = id();
-    const meta = { uploadId, id: msgId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
-    let started = await emitAck('media-start', meta, 120000, 3);
-    if (!started.ok) throw new Error('start');
-    const chunkSize = 512 * 1024;
-    let sent = 0;
+    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta) });
+    const started = await startResponse.json();
+    if (!started.ok) throw new Error(started.error || 'Media upload could not start');
+    const chunkSize = 768 * 1024;
+    let sent = 0, index = 0;
     while (sent < file.size) {
       const chunk = await file.slice(sent, sent + chunkSize).arrayBuffer();
-      let result = await emitAck('media-chunk', { uploadId, chunk }, 120000, 3);
-      if (!result.ok) throw new Error('chunk');
-      sent += chunk.byteLength;
+      let response;
+      for (let attempt=0; attempt<4; attempt++) {
+        response = await fetch(`/api/media/chunk?uploadId=${encodeURIComponent(uploadId)}&index=${index}`, { method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:chunk });
+        if (response.ok) break;
+        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+      }
+      if (!response || !response.ok) throw new Error('Media chunk upload failed');
+      sent += chunk.byteLength; index++;
       setUploadProgress(ui, sent / file.size * 100);
     }
-    const result = await emitAck('media-end', { uploadId }, 120000, 3);
-    if (!result.ok) throw new Error('finish');
+    const finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }) });
+    const result = await finish.json();
+    if (!result.ok) throw new Error(result.error || 'Media upload could not finish');
     setUploadProgress(ui, 100, '✓');
     ui.el.classList.add('upload-done');
     setTimeout(() => ui.el.remove(), 450);
+    renderMessage(result.message, 'outgoing');
     updatePreview(type === 'image' ? '📷 Photo' : '🎥 Video');
   } catch (error) {
     ui.el.classList.add('upload-error');
     setUploadProgress(ui, 0, '↻');
-    showToast('Connection lost. Please try again');
+    showToast(error.message || 'Media upload failed');
     setTimeout(() => ui.el.remove(), 2200);
   }
 }
@@ -439,6 +477,8 @@ function updateTicks(msg) {
 
 function receiveMessage(msg) {
   if (!msg || !msg.id) return;
+  const msgGroupId = msg.groupId || 'main';
+  if (msgGroupId !== currentGroupId) return;
   const isIncoming = msg.userId !== userId;
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
   if (isIncoming) {
@@ -479,14 +519,14 @@ function markVisibleMessagesRead() {
 }
 
 socket.on('message-delivered', data => {
-  if (!data || !data.id || !data.userId) return;
+  if (!data || !data.id || !data.userId || (data.groupId && data.groupId !== currentGroupId)) return;
   const msg = messages.get(data.id); if (!msg) return;
   msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
   if (!msg.deliveredTo.includes(data.userId)) msg.deliveredTo.push(data.userId);
 });
 
 socket.on('message-read', data => {
-  if (!data || !data.id || !data.userId) return;
+  if (!data || !data.id || !data.userId || (data.groupId && data.groupId !== currentGroupId)) return;
   const msg = messages.get(data.id);
   if (!msg) return;
   msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -499,7 +539,7 @@ async function syncMessages() {
     // Fetch the complete current group state so every device can recover not only
     // new messages, but also deletes, clears, renames and read receipts even when
     // Vercel routes two users to different server instances.
-    const response = await fetch('/api/messages', { cache: 'no-store' });
+    const response = await fetch(`/api/messages?groupId=${encodeURIComponent(currentGroupId)}`, { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
     if (!Array.isArray(data.messages)) return;
@@ -544,15 +584,132 @@ async function syncMessages() {
 setInterval(syncMessages, 1000);
 
 socket.on('group-renamed', data => {
-  if (!data || !data.name) return;
+  if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
   groupName = String(data.name);
   localStorage.setItem('wa_group_name', groupName);
   updateGroupNameUI();
 });
 
-fetch('/api/group').then(r => r.json()).then(data => {
-  if (data && data.name) { groupName = String(data.name); localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
-}).catch(() => updateGroupNameUI());
+socket.on('group-created', data => {
+  if (!data || !data.id) return;
+  if (!groups.some(g => g.id === data.id)) groups.push({ id: data.id, name: data.name || 'New group' });
+  renderGroupList();
+});
+
+socket.on('group-deleted', data => {
+  if (!data || !data.id) return;
+  groups = groups.filter(g => g.id !== data.id);
+  sessionStorage.removeItem(`wa_unlocked_${data.id}`);
+  if (currentGroupId === data.id) {
+    const fallback = groups.find(g => g.id === 'main') || groups[0];
+    if (fallback) {
+      currentGroupId = fallback.id;
+      groupName = fallback.name;
+      localStorage.setItem('wa_group_id', fallback.id);
+      localStorage.setItem('wa_group_name', fallback.name);
+      messageArea.innerHTML = '';
+      messages.clear();
+      updateGroupNameUI();
+    }
+  }
+  renderGroupList();
+});
+
+socket.on('group-updated', data => {
+  if (!data || !data.id) return;
+  const group = groups.find(g => g.id === data.id);
+  if (group && data.name) { group.name = data.name; renderGroupList(); }
+  if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
+});
+
+async function loadGroups() {
+  try {
+    const response = await fetch('/api/groups', { cache: 'no-store' });
+    const data = await response.json();
+    groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
+    renderGroupList();
+    const saved = groups.find(g => g.id === currentGroupId);
+    const selected = saved || groups[0];
+    if (selected) { groupName = selected.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
+    else { currentGroupId = ''; groupName = ''; localStorage.removeItem('wa_group_id'); localStorage.removeItem('wa_group_name'); updateGroupNameUI(); }
+    if (selected && sessionStorage.getItem(`wa_unlocked_${selected.id}`) === '1') {
+      if (!socket.connected) await waitForSocket();
+      await joinGroup(selected.id, false);
+    } else {
+      currentGroupId = selected?.id || '';
+      messageArea.innerHTML = ''; messages.clear();
+      showToast(selected ? 'Select a group and enter its password' : 'No groups available');
+    }
+  } catch (_) {
+    groups = [];
+    renderGroupList();
+    updateGroupNameUI();
+  }
+}
+
+function renderGroupList() {
+  if (!chatList) return;
+  chatList.innerHTML = '';
+  groups.forEach(group => {
+    const button = document.createElement('button');
+    button.className = 'chat-item' + (group.id === currentGroupId ? ' active' : '');
+    button.type = 'button';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    summary.innerHTML = `<div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
+    summary.querySelector('strong').textContent = group.name;
+    button.append(avatar, summary);
+    button.addEventListener('click', () => openGroup(group));
+    chatList.appendChild(button);
+  });
+}
+
+async function openGroup(group) {
+  if (!group) return;
+  if (group.id === currentGroupId && sessionStorage.getItem(`wa_unlocked_${group.id}`) === '1') { openChat(); return; }
+  groupPasswordTarget = group;
+  groupPasswordTitle.textContent = `Open ${group.name}`;
+  groupPasswordHelp.textContent = "Enter this group's password to open it.";
+  groupPasswordInput.value = ''; groupPasswordError.textContent = '';
+  groupPasswordModal.classList.remove('hidden');
+  setTimeout(() => groupPasswordInput.focus(), 50);
+}
+
+async function verifyAndOpenGroup() {
+  const group = groupPasswordTarget;
+  if (!group) return;
+  const password = groupPasswordInput.value;
+  if (!password) { groupPasswordError.textContent = 'Enter the group password'; return; }
+  groupPasswordError.textContent = 'Checking…';
+  try {
+    const response = await fetch('/api/groups/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: group.id, password }) });
+    const data = await response.json();
+    if (!data.ok) { groupPasswordError.textContent = 'Wrong group password'; groupPasswordInput.select(); return; }
+    groupPasswordModal.classList.add('hidden');
+    groupPasswordTarget = null;
+    sessionStorage.setItem(`wa_unlocked_${group.id}`, '1');
+    await joinGroup(group.id, true);
+  } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
+}
+
+async function joinGroup(groupId, openAfter=true) {
+  const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
+  currentGroupId = groupId || 'main';
+  groupName = group.name || 'WhatsApp';
+  localStorage.setItem('wa_group_id', currentGroupId);
+  localStorage.setItem('wa_group_name', groupName);
+  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+  messageArea.innerHTML = '';
+  updateGroupNameUI(); renderGroupList();
+  await new Promise(resolve => {
+    if (!socket.connected) { resolve(); return; }
+    socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
+  });
+  await syncMessages();
+  if (openAfter) openChat();
+}
+
+loadGroups();
 
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
@@ -564,8 +721,8 @@ socket.on('user-renamed', data => {
     if (sender) sender.textContent = data.name;
   });
 });
-socket.on('delete-message', data => { if (data && data.id) deleteMessage(data.id,false); });
-socket.on('clear-chat', () => { clearChat(false); showToast('Chat was cleared'); });
+socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
+socket.on('clear-chat', data => { if (data && data.groupId && data.groupId !== currentGroupId) return; clearChat(false); showToast('Chat was cleared'); });
 let disconnectTimer = null;
 function setOnlineStatus(state) {
   clearTimeout(disconnectTimer);
@@ -588,7 +745,7 @@ function setOnlineStatus(state) {
 socket.on('connect', () => {
   setOnlineStatus('online');
   socket.emit('register-user', { userId });
-  syncMessages().finally(markVisibleMessagesRead);
+  socket.emit('join-group', { groupId: currentGroupId }, () => syncMessages().finally(markVisibleMessagesRead));
 });
 socket.on('disconnect', () => setOnlineStatus('connecting'));
 socket.on('reconnect', () => setOnlineStatus('online'));
@@ -610,10 +767,120 @@ document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click'
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
 function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
 document.querySelector('#backBtn').addEventListener('click', closeChat);
-document.querySelector('.chat-item').addEventListener('click', () => openChat());
 window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
-document.querySelector('#newChatBtn').addEventListener('click', () => showToast('New chat is ready'));
+document.querySelector('#newChatBtn').addEventListener('click', () => showToast('Use + New group to create a group'));
+newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
+async function requestAdminThen(action) {
+  requestPassword('Admin password', 'Enter the admin password to manage groups and passwords.', async () => {
+    try { await action(); } catch (_) { showToast('Admin action failed'); }
+  });
+}
+
+async function openAdminGroups() {
+  adminGroupsError.textContent = '';
+  try {
+    const response = await fetch('/api/admin/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: PASSWORD }) });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'unauthorized');
+    renderAdminGroups(data.groups || []);
+    adminGroupsModal.classList.remove('hidden');
+  } catch (_) { adminGroupsError.textContent = 'Admin access failed'; }
+}
+
+function renderAdminGroups(list) {
+  adminGroupsList.innerHTML = '';
+  list.forEach(group => {
+    const row = document.createElement('div'); row.className = 'admin-group-row';
+    const isDefault = group.id === 'main';
+    row.innerHTML = `<div class="admin-group-name"></div><div class="admin-password-wrap"><input type="text" class="admin-password-input" maxlength="120" autocomplete="off"><button type="button" class="mini-btn admin-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-save-btn">Save</button><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
+    row.querySelector('.admin-group-name').textContent = group.name;
+    row.querySelector('.admin-password-input').value = group.password || '';
+    row.querySelector('.admin-copy-btn').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(row.querySelector('.admin-password-input').value); showToast('Password copied'); } catch (_) {}
+    });
+    row.querySelector('.admin-save-btn').addEventListener('click', async () => {
+      const password = row.querySelector('.admin-password-input').value.trim();
+      if (!password) { showToast('Password is required'); return; }
+      try {
+        const response = await fetch(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminPassword: PASSWORD, name: group.name, password }) });
+        const data = await response.json();
+        if (data.ok) { group.password = password; showToast(`${group.name} password updated`); }
+        else showToast(data.error || 'Password update failed');
+      } catch (_) { showToast('Password update failed'); }
+    });
+    row.querySelector('.admin-delete-btn').addEventListener('click', async () => {
+      if (!confirm(`Delete group "${group.name}"? This cannot be undone.`)) return;
+      try {
+        const response = await fetch(`/api/groups/${encodeURIComponent(group.id)}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ adminPassword: PASSWORD })
+        });
+        const data = await response.json();
+        if (!data.ok) { showToast(data.error || 'Group delete failed'); return; }
+        groups = groups.filter(g => g.id !== group.id);
+        sessionStorage.removeItem(`wa_unlocked_${group.id}`);
+        if (currentGroupId === group.id) {
+          const fallback = groups[0];
+          currentGroupId = fallback?.id || '';
+          groupName = fallback?.name || '';
+          if (fallback) {
+            localStorage.setItem('wa_group_id', fallback.id);
+            localStorage.setItem('wa_group_name', fallback.name);
+          } else {
+            localStorage.removeItem('wa_group_id');
+            localStorage.removeItem('wa_group_name');
+          }
+          messageArea.innerHTML = '';
+          messages.clear();
+          updateGroupNameUI();
+        }
+        renderGroupList();
+        row.remove();
+        showToast(`${group.name} deleted`);
+      } catch (_) { showToast('Group delete failed'); }
+    });
+    adminGroupsList.appendChild(row);
+  });
+}
+
+function openGroupEditor() {
+  groupEditTitle.textContent = 'Add new group'; groupEditName.value = ''; groupEditPassword.value = ''; groupEditError.textContent = '';
+  groupEditModal.dataset.groupId = ''; groupEditModal.classList.remove('hidden');
+  setTimeout(() => groupEditName.focus(), 50);
+}
+
+async function saveNewGroup() {
+  const nameValue = groupEditName.value.trim(); const passwordValue = groupEditPassword.value.trim();
+  if (!nameValue || !passwordValue) { groupEditError.textContent = 'Group name and password are required'; return; }
+  groupEditError.textContent = 'Saving…';
+  try {
+    const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminPassword: PASSWORD, name: nameValue, password: passwordValue }) });
+    const data = await response.json();
+    if (!data.ok) { groupEditError.textContent = data.error || 'Could not create group'; return; }
+    groupEditModal.classList.add('hidden');
+    await loadGroups();
+    showToast(`Group ${nameValue} created`);
+  } catch (_) {
+    groupEditError.textContent = 'Server connection failed. Please try again.';
+  }
+}
+
+adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminGroups); });
+adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
+adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
+adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
+groupPasswordSubmit?.addEventListener('click', verifyAndOpenGroup);
+groupPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenGroup(); });
+groupPasswordClose?.addEventListener('click', () => groupPasswordModal.classList.add('hidden'));
+groupPasswordModal?.addEventListener('click', e => { if (e.target === groupPasswordModal) groupPasswordModal.classList.add('hidden'); });
+groupEditSave?.addEventListener('click', saveNewGroup);
+groupEditName?.addEventListener('keydown', e => { if (e.key === 'Enter') saveNewGroup(); });
+groupEditPassword?.addEventListener('keydown', e => { if (e.key === 'Enter') saveNewGroup(); });
+groupEditClose?.addEventListener('click', () => groupEditModal.classList.add('hidden'));
+groupEditModal?.addEventListener('click', e => { if (e.target === groupEditModal) groupEditModal.classList.add('hidden'); });
+
 const nameModal = document.querySelector('#nameModal');
 const nameInput = document.querySelector('#nameInput');
 const nameSave = document.querySelector('#nameSave');
@@ -714,7 +981,8 @@ function saveGroupName() {
   groupName = nextName;
   localStorage.setItem('wa_group_name', groupName);
   updateGroupNameUI();
-  socket.emit('rename-group', { name: groupName }, result => {
+  const localGroup = groups.find(g => g.id === currentGroupId); if (localGroup) localGroup.name = groupName; renderGroupList();
+  socket.emit('rename-group', { groupId: currentGroupId, name: groupName }, result => {
     if (!result || !result.ok) showToast('Group name sync will retry');
   });
   closeGroupNameModal();
