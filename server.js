@@ -26,6 +26,7 @@ const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
+const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const DEFAULT_GROUP_ID = 'main';
 // In-memory fallback keeps group/password management working even when MongoDB
 // is not configured. MongoDB is still used automatically when MONGODB_URI exists.
@@ -333,6 +334,10 @@ app.post('/api/admin/groups', async (req, res) => {
 app.get('/api/media/:id', async (req, res) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).end();
+    // Media can be viewed inline, but saving/downloading it requires the download password.
+    if (String(req.query?.download || '') === '1' && String(req.get('X-Download-Password') || '') !== DOWNLOAD_PASSWORD) {
+      return res.status(403).json({ ok: false, error: 'Download password required' });
+    }
     const bucket = await getMediaBucket();
     const fileId = new ObjectId(req.params.id);
     const files = await bucket.find({ _id: fileId }).toArray();

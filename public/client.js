@@ -9,6 +9,7 @@ const socket = io({
 });
 
 const PASSWORD = 'deoxy';
+const DOWNLOAD_PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
@@ -26,6 +27,24 @@ while (!name) {
 localStorage.setItem('wa_name', name);
 
 document.title = 'WhatsApp';
+
+// UI protection: disable common browser context-menu/selection/drag shortcuts.
+// This is only a deterrent; browser DevTools cannot be securely disabled by a web page.
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('dragstart', e => e.preventDefault());
+document.addEventListener('selectstart', e => {
+  if (!['INPUT','TEXTAREA'].includes(e.target?.tagName)) e.preventDefault();
+});
+document.addEventListener('keydown', e => {
+  const key = String(e.key || '').toLowerCase();
+  if (e.key === 'F12' ||
+      (e.ctrlKey && e.shiftKey && ['i','j','c'].includes(key)) ||
+      (e.ctrlKey && key === 'u') ||
+      (e.metaKey && e.altKey && ['i','j','c'].includes(key))) {
+    e.preventDefault(); e.stopPropagation();
+    showToast('This action is disabled');
+  }
+}, true);
 
 const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
@@ -93,6 +112,7 @@ installAppBtn?.addEventListener('click', () => {
 });
 
 let pendingAction = null;
+let pendingPasswordType = 'admin';
 const messages = new Map();
 const deletedIds = new Set();
 const readSent = new Set();
@@ -224,8 +244,9 @@ function showToast(text) {
   showToast.t = setTimeout(() => toast.classList.remove('show'), 2200);
 }
 
-function requestPassword(title, text, action) {
+function requestPassword(title, text, action, passwordType = 'admin') {
   pendingAction = action;
+  pendingPasswordType = passwordType;
   passwordTitle.textContent = title;
   passwordText.textContent = text;
   passwordInput.value = '';
@@ -237,10 +258,12 @@ function requestPassword(title, text, action) {
 function closePassword() {
   passwordModal.classList.add('hidden');
   pendingAction = null;
+  pendingPasswordType = 'admin';
 }
 
 passwordSubmit.addEventListener('click', () => {
-  if (passwordInput.value !== PASSWORD) {
+  const expectedPassword = pendingPasswordType === 'download' ? DOWNLOAD_PASSWORD : PASSWORD;
+  if (passwordInput.value !== expectedPassword) {
     passwordError.textContent = 'Wrong password';
     passwordInput.select();
     return;
@@ -333,7 +356,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg)));
+    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'));
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
@@ -504,11 +527,26 @@ function emitAck(event, data, timeout=30000, retries=2) {
   });
 }
 
-function downloadMedia(msg) {
-  const a=document.createElement('a');
-  a.href=msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
-  a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
-  document.body.appendChild(a); a.click(); a.remove(); showToast('Download started');
+async function downloadMedia(msg) {
+  try {
+    if (!msg.mediaId) {
+      const a=document.createElement('a'); a.href=msg.data;
+      a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
+      document.body.appendChild(a); a.click(); a.remove(); showToast('Download started'); return;
+    }
+    showToast('Preparing download...');
+    const response = await fetch(`/api/media/${encodeURIComponent(msg.mediaId)}?download=1`, {
+      headers: { 'X-Download-Password': DOWNLOAD_PASSWORD }, cache: 'no-store'
+    });
+    if (!response.ok) throw new Error('Download blocked');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url;
+    a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    showToast('Download started');
+  } catch (error) { showToast('Download failed'); }
 }
 function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==='jpeg'?'jpg':(ext || type); }
 
