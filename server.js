@@ -560,7 +560,13 @@ async function sendPushToOtherUsers(msg) {
   try {
     const db = await getDb();
     if (!db) return;
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
+    const senderUserId = String(msg.userId || '').trim();
+    // A message must never notify the device/user that sent it. Match the
+    // exact userId saved with the browser's push subscription.
+    const query = senderUserId
+      ? { userId: { $ne: senderUserId } }
+      : { userId: { $exists: true } };
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find(query).toArray();
     if (!docs.length) return;
     // Keep notification content generic and let the service worker decide
     // whether the chat is currently open. This matches the reference app:
@@ -626,6 +632,8 @@ io.on('connection', async (socket) => {
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
     msg.groupId = normalizeGroupId(socket.groupId);
+    // Prefer the registered socket identity over a client-supplied value.
+    if (socket.userId) msg.userId = String(socket.userId);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
     msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     try {

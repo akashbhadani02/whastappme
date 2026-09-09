@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v10';
+const CACHE = 'whatsapp-pwa-v11-notification-fix';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

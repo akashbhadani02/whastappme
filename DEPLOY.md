@@ -41,3 +41,9 @@ After saving variables, redeploy the project.
 - Notification delivery works when the mobile browser/PWA is in the background or the app is not currently open, subject to browser/OS notification settings.
 - Clicking the notification opens the chat.
 - Invalid/expired subscriptions are removed automatically.
+
+
+### Notification behavior
+- The sender is excluded by the exact registered `userId` on the push subscription.
+- Other subscribed users receive one push per message.
+- If the recipient already has the chat open and visible, the service worker suppresses the notification.
