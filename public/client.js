@@ -96,6 +96,29 @@ let pendingAction = null;
 const messages = new Map();
 const deletedIds = new Set();
 const readSent = new Set();
+
+// Keep a local history as a safety net. Server history is still the source of
+// truth when MongoDB is available, but a temporary network/server error must
+// never make already-sent messages disappear from the screen.
+function messageCacheKey(groupId = currentGroupId) {
+  return `wa_messages_${groupId || 'main'}`;
+}
+function saveLocalMessageHistory() {
+  try {
+    const list = Array.from(messages.values()).map(m => ({ ...m }));
+    localStorage.setItem(messageCacheKey(), JSON.stringify(list));
+  } catch (_) {}
+}
+function loadLocalMessageHistory() {
+  try {
+    const raw = localStorage.getItem(messageCacheKey());
+    const list = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(list)) return;
+    list.sort((a,b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+    list.forEach(msg => renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'));
+  } catch (_) {}
+}
+
 let lastRenderedDate = '';
 let chatOpen = window.innerWidth > 760;
 const emojis = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😎','🤩','🥳','🤔','🤗','🤭','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱','😴','😌','🤓','😛','😜','🤪','🤑','🤠','👍','👎','👏','🙏','❤️','🔥','🎉','💯','😂','🤣','😢','😭','😡','❤️‍🔥','💔'];
@@ -340,6 +363,7 @@ function renderMessage(msg, direction) {
   el.appendChild(more);
 
   messageArea.appendChild(el);
+  saveLocalMessageHistory();
   scrollToBottom();
 }
 
@@ -350,12 +374,14 @@ function deleteMessage(messageId, broadcast=true) {
   if (el) el.remove();
   messages.delete(messageId);
   deletedIds.add(messageId);
+  saveLocalMessageHistory();
   if (broadcast) socket.emit('delete-message', {id:messageId}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
   updatePreview('Message deleted');
 }
 
 function clearChat(broadcast=true) {
   messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
+  try { localStorage.removeItem(messageCacheKey()); } catch (_) {}
   updatePreview('No messages yet');
   if (broadcast) socket.emit('clear-chat', {by:name});
 }
@@ -571,12 +597,10 @@ async function syncMessages() {
     const data = await response.json();
     if (!Array.isArray(data.messages)) return;
 
-    const serverIds = new Set(data.messages.map(m => m && m.id).filter(Boolean));
-    const localIds = Array.from(messages.keys());
-    localIds.forEach(id => {
-      if (!serverIds.has(id)) deleteMessage(id, false);
-    });
-
+    // IMPORTANT: never delete a local message merely because it is missing
+    // from one sync response. A temporary Mongo/network/serverless failure can
+    // return an incomplete/empty history. Messages disappear only after the
+    // explicit delete-message / clear-chat action.
     data.messages.forEach(msg => {
       if (!msg || !msg.id) return;
       const existing = messages.get(msg.id);
@@ -594,6 +618,7 @@ async function syncMessages() {
       updateTicks(existing);
     });
 
+    saveLocalMessageHistory();
     if (data.messages.length) {
       const last = data.messages[data.messages.length - 1];
       if (last.createdAt) lastSyncAt = new Date(last.createdAt).toISOString();
@@ -728,6 +753,7 @@ async function joinGroup(groupId, openAfter=true) {
   messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
   messageArea.innerHTML = '';
   updateGroupNameUI(); renderGroupList();
+  loadLocalMessageHistory();
   await new Promise(resolve => {
     if (!socket.connected) { resolve(); return; }
     socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
