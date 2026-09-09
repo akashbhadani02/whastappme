@@ -696,7 +696,6 @@ socket.on('group-created', data => {
 socket.on('group-deleted', data => {
   if (!data || !data.id) return;
   groups = groups.filter(g => g.id !== data.id);
-  sessionStorage.removeItem(`wa_unlocked_${data.id}`);
   if (currentGroupId === data.id) {
     const fallback = groups.find(g => g.id === 'main') || groups[0];
     if (fallback) {
@@ -724,21 +723,29 @@ async function loadGroups() {
     const response = await fetch('/api/groups', { cache: 'no-store' });
     const data = await response.json();
     groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
-    renderGroupList();
+    // Never restore an unlocked group automatically. Every time a group is opened
+    // (including after leaving it or reopening it later), its password is required.
     const saved = groups.find(g => g.id === currentGroupId);
     const selected = saved || groups[0];
-    if (selected) { groupName = selected.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
-    else { currentGroupId = ''; groupName = ''; localStorage.removeItem('wa_group_id'); localStorage.removeItem('wa_group_name'); updateGroupNameUI(); }
-    if (selected && sessionStorage.getItem(`wa_unlocked_${selected.id}`) === '1') {
-      if (!socket.connected) await waitForSocket();
-      await joinGroup(selected.id, false);
+    currentGroupId = '';
+    messageArea.innerHTML = '';
+    messages.clear();
+    deletedIds.clear();
+    lastRenderedDate = '';
+    if (selected) {
+      groupName = selected.name;
+      localStorage.setItem('wa_group_name', groupName);
+      updateGroupNameUI();
     } else {
-      currentGroupId = selected?.id || '';
-      messageArea.innerHTML = ''; messages.clear();
-      showToast(selected ? 'Select a group and enter its password' : 'No groups available');
+      groupName = '';
+      localStorage.removeItem('wa_group_id');
+      localStorage.removeItem('wa_group_name');
+      updateGroupNameUI();
     }
+    renderGroupList();
   } catch (_) {
     groups = [];
+    currentGroupId = '';
     renderGroupList();
     updateGroupNameUI();
   }
@@ -763,7 +770,8 @@ function renderGroupList() {
 
 async function openGroup(group) {
   if (!group) return;
-  if (group.id === currentGroupId && sessionStorage.getItem(`wa_unlocked_${group.id}`) === '1') { openChat(); return; }
+  // Always ask for the group password. Do not allow a previously unlocked
+  // session/tab to reopen the group without verification.
   groupPasswordTarget = group;
   groupPasswordTitle.textContent = `Open ${group.name}`;
   groupPasswordHelp.textContent = "Enter this group's password to open it.";
@@ -784,7 +792,6 @@ async function verifyAndOpenGroup() {
     if (!data.ok) { groupPasswordError.textContent = 'Wrong group password'; groupPasswordInput.select(); return; }
     groupPasswordModal.classList.add('hidden');
     groupPasswordTarget = null;
-    sessionStorage.setItem(`wa_unlocked_${group.id}`, '1');
     await joinGroup(group.id, true);
   } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
 }
@@ -863,9 +870,27 @@ document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && 
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
-function closeChat(){ chatOpen=false; app.classList.remove('chat-open'); if(window.innerWidth<=760 && location.hash==='#chat') history.back(); }
+function closeChat(){
+  chatOpen=false;
+  app.classList.remove('chat-open');
+  // Leaving a group locks it again. The next entry must verify the group password.
+  if (currentGroupId) {
+    currentGroupId = '';
+    localStorage.removeItem('wa_group_id');
+    renderGroupList();
+  }
+  if(window.innerWidth<=760 && location.hash==='#chat') history.back();
+}
 document.querySelector('#backBtn').addEventListener('click', closeChat);
-window.addEventListener('popstate', () => { chatOpen=false; app.classList.remove('chat-open'); });
+window.addEventListener('popstate', () => {
+  chatOpen=false;
+  app.classList.remove('chat-open');
+  if (currentGroupId) {
+    currentGroupId = '';
+    localStorage.removeItem('wa_group_id');
+    renderGroupList();
+  }
+});
 document.querySelector('#newChatBtn').addEventListener('click', () => showToast('Use + New group to create a group'));
 newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
@@ -918,7 +943,6 @@ function renderAdminGroups(list) {
         const data = await response.json();
         if (!data.ok) { showToast(data.error || 'Group delete failed'); return; }
         groups = groups.filter(g => g.id !== group.id);
-        sessionStorage.removeItem(`wa_unlocked_${group.id}`);
         if (currentGroupId === group.id) {
           const fallback = groups[0];
           currentGroupId = fallback?.id || '';

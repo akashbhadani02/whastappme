@@ -85,3 +85,15 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
   .media-actions .mini-btn{display:block!important;flex:1;min-height:44px;padding:10px 14px;font-size:14px;font-weight:600;background:#fff;border:1px solid #cfd5d8;box-shadow:0 1px 3px rgba(0,0,0,.12);touch-action:manipulation}
   .media-actions .mini-btn:active{transform:scale(.98);background:#f0f2f5}
 }
+
+
+/* Mobile media download visibility: keep the Download control below media and
+   prevent the floated timestamp from squeezing or covering it. */
+.media-actions{clear:both;position:relative;z-index:30;display:flex;flex-wrap:wrap;width:100%;}
+.media-actions .mini-btn{position:relative;z-index:31;white-space:nowrap;}
+@media(max-width:760px){
+  .message .meta{float:none;width:100%;justify-content:flex-end;clear:both;margin-top:5px;}
+  .message .media-actions{clear:both;width:100%;display:flex!important;visibility:visible!important;opacity:1!important;overflow:visible!important;}
+  .message .media-actions .mini-btn{display:block!important;visibility:visible!important;opacity:1!important;flex:1 1 100%;width:100%;min-width:0;min-height:46px;font-size:15px;padding:11px 14px;}
+  .message .media-wrap{width:100%;max-width:100%;overflow:visible;}
+}
