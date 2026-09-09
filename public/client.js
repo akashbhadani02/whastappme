@@ -204,15 +204,46 @@ function notifyIncomingMessage(msg) {
   } catch (_) {}
 }
 
+async function requestNotificationsFromUser() {
+  if (!('Notification' in window)) {
+    showToast('This browser does not support notifications');
+    return false;
+  }
+  if (Notification.permission === 'denied') {
+    showToast('Notifications are blocked. Allow them in browser site settings.');
+    return false;
+  }
+  const granted = await enableNotifications();
+  if (!granted) {
+    showToast('Notification permission was not granted');
+    return false;
+  }
+  const ready = await setupWebPush();
+  showToast(ready ? 'Notifications enabled' : 'Notifications enabled for this browser');
+  return true;
+}
+
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // Browsers generally allow the permission prompt only from a user gesture.
-  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
-  document.addEventListener('pointerdown', once, { once: true });
-  document.addEventListener('keydown', once, { once: true });
+  // On mobile, permission should be requested from a real user gesture.
+  // Do not consume the very first tap silently; only auto-register if permission was already granted.
+  if (Notification.permission === 'granted') {
+    setupWebPush();
+  }
+  const btn = document.getElementById('enableNotificationsBtn');
+  if (btn) {
+    const update = () => {
+      btn.textContent = Notification.permission === 'granted' ? '🔔 Notifications on' : '🔔 Enable notifications';
+    };
+    update();
+    btn.addEventListener('click', async () => {
+      await requestNotificationsFromUser();
+      update();
+      document.getElementById('appMenu')?.classList.add('hidden');
+    });
+  }
 }
 notificationSetup();
-if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
