@@ -79,3 +79,9 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 }
 
 .message.send-failed{opacity:.65}.message.send-failed .meta::after{content:' • Not sent';color:#c62828;margin-left:4px}.media-wrap img,.media-wrap video{display:block;max-width:100%;width:auto;max-height:65vh;border-radius:8px}@media(max-width:760px){.send-btn{touch-action:manipulation;-webkit-user-select:none;user-select:none}.message{max-width:88%}.media-wrap video{width:100%;max-height:55vh}}
+
+@media (max-width:760px){
+  .media-actions{display:flex!important;width:100%;margin-top:7px;justify-content:stretch;position:relative;z-index:20}
+  .media-actions .mini-btn{display:block!important;flex:1;min-height:44px;padding:10px 14px;font-size:14px;font-weight:600;background:#fff;border:1px solid #cfd5d8;box-shadow:0 1px 3px rgba(0,0,0,.12);touch-action:manipulation}
+  .media-actions .mini-btn:active{transform:scale(.98);background:#f0f2f5}
+}

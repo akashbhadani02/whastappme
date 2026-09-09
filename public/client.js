@@ -356,7 +356,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', () => requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'));
+    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
@@ -529,24 +529,31 @@ function emitAck(event, data, timeout=30000, retries=2) {
 
 async function downloadMedia(msg) {
   try {
-    if (!msg.mediaId) {
-      const a=document.createElement('a'); a.href=msg.data;
-      a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
-      document.body.appendChild(a); a.click(); a.remove(); showToast('Download started'); return;
-    }
+    const fileName = msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
     showToast('Preparing download...');
-    const response = await fetch(`/api/media/${encodeURIComponent(msg.mediaId)}?download=1`, {
-      headers: { 'X-Download-Password': DOWNLOAD_PASSWORD }, cache: 'no-store'
-    });
+    let response;
+    if (msg.mediaId) {
+      response = await fetch(`/api/media/${encodeURIComponent(msg.mediaId)}/download`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: DOWNLOAD_PASSWORD }), cache: 'no-store'
+      });
+    } else {
+      response = await fetch(msg.data, { cache: 'no-store' });
+    }
     if (!response.ok) throw new Error('Download blocked');
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url;
-    a.download=msg.fileName || `whatsapp-${msg.type}-${Date.now()}.${extension(msg.mime,msg.type)}`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.rel = 'noopener';
+    a.style.position='fixed'; a.style.left='-9999px'; a.style.width='1px'; a.style.height='1px';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 60000);
     showToast('Download started');
-  } catch (error) { showToast('Download failed'); }
+  } catch (error) {
+    console.error('downloadMedia', error);
+    showToast('Download failed — please try again');
+  }
 }
 function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==='jpeg'?'jpg':(ext || type); }
 

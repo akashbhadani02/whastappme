@@ -331,6 +331,28 @@ app.post('/api/admin/groups', async (req, res) => {
   }
 });
 
+app.post('/api/media/:id/download', express.json({ limit: '2kb' }), async (req, res) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ ok:false, error:'Invalid media id' });
+    if (String(req.body?.password || '') !== DOWNLOAD_PASSWORD) return res.status(403).json({ ok:false, error:'Wrong download password' });
+    const bucket = await getMediaBucket();
+    const fileId = new ObjectId(req.params.id);
+    const files = await bucket.find({ _id: fileId }).toArray();
+    if (!files.length) return res.status(404).json({ ok:false, error:'File not found' });
+    const file = files[0];
+    const mime = file.metadata?.mime || 'application/octet-stream';
+    const safeName = String(file.metadata?.fileName || file.filename || `media-${fileId}`).replace(/[\\"\r\n]/g, '_');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', file.length);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+    res.setHeader('Cache-Control', 'no-store');
+    bucket.openDownloadStream(fileId).on('error', () => res.destroy()).pipe(res);
+  } catch (error) {
+    console.error('Failed to download media:', error.message);
+    res.status(500).json({ ok:false, error:'Download failed' });
+  }
+});
+
 app.get('/api/media/:id', async (req, res) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).end();
