@@ -190,13 +190,25 @@ async function setupWebPush() {
   }
 }
 
+const notifiedMessageIds = new Set();
+
 function notifyIncomingMessage(msg) {
-  if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
+  // Never notify the sender, and never notify while the chat is actively open.
+  if (!msg || !msg.id || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (document.visibilityState === 'visible' && chatOpen) return;
+  const key = String(msg.id);
+  if (notifiedMessageIds.has(key)) return;
+  notifiedMessageIds.add(key);
+  // Keep the in-memory dedupe set bounded.
+  if (notifiedMessageIds.size > 500) {
+    const first = notifiedMessageIds.values().next().value;
+    if (first) notifiedMessageIds.delete(first);
+  }
   try {
     const n = new Notification('WhatsApp', {
       body: 'You have new message',
-      tag: `wa-${msg.id}`,
-      renotify: true,
+      tag: `wa-${key}`,
+      renotify: false,
       icon: '/icon.svg',
       badge: '/icon.svg'
     });

@@ -7,7 +7,7 @@ self.addEventListener('push', (event) => {
     icon: '/icon.svg',
     badge: '/icon.svg',
     tag: data.messageId ? `wa-${data.messageId}` : 'wa-message',
-    renotify: true,
+    renotify: false,
     data: { url: data.url || '/#chat' },
     vibrate: [150, 80, 150]
   };
