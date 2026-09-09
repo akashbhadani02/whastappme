@@ -202,8 +202,6 @@ async function setupWebPush() {
 
 function notifyIncomingMessage(msg) {
   if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
-  // Don't interrupt users who are actively looking at the open chat.
-  if (document.visibilityState === 'visible' && chatOpen) return;
   try {
     const n = new Notification('WhatsApp', {
       body: 'You have new message',

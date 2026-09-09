@@ -59,7 +59,12 @@ public class NotificationPollService extends Service {
             String userId = getSharedPreferences("wassup", MODE_PRIVATE).getString("userId", "");
             if (userId.isEmpty()) return;
             String after = getSharedPreferences("wassup", MODE_PRIVATE).getString("lastSeenCreatedAt", "");
-            String base = BuildConfig.APP_URL;
+            // If the stored timestamp is malformed, reset it so polling can recover.
+            if (!after.isEmpty()) {
+                try { new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.US).parse(after); }
+                catch (Exception ignored) { after = ""; }
+            }
+            String base = getSharedPreferences("wassup", MODE_PRIVATE).getString("appUrl", BuildConfig.APP_URL);
             String sep = base.contains("?") ? "&" : "?";
             String urlText = base.replaceAll("/$", "") + "/api/notifications/poll" + sep + "userId=" + URLEncoder.encode(userId, "UTF-8") + "&after=" + URLEncoder.encode(after, "UTF-8");
             HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection();

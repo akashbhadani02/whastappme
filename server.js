@@ -581,7 +581,7 @@ async function sendPushToOtherUsers(msg) {
   try {
     const db = await getDb();
     if (!db) return;
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $exists: true, $ne: String(msg.userId || '') } }).toArray();
     if (!docs.length) return;
     const payload = JSON.stringify({
       title: 'WhatsApp',

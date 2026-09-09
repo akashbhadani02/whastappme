@@ -23,7 +23,14 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false); s.setAllowFileAccess(true);
         web.addJavascriptInterface(new AndroidBridge(), "AndroidNotifications");
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                try { getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("appUrl", url).apply(); } catch (_) {}
+                try { web.evaluateJavascript("(function(){try{window.AndroidNotifications&&window.AndroidNotifications.saveUserId(localStorage.getItem('wa_user_id')||'')}catch(e){}})();", null); } catch (_) {}
+                startNotificationService();
+            }
+        });
         web.loadUrl(BuildConfig.APP_URL); setContentView(web);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_REQ);
