@@ -16,8 +16,6 @@ if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
   localStorage.setItem('wa_user_id', userId);
 }
-try { window.AndroidNotifications?.saveUserId?.(userId); } catch (_) {}
-setTimeout(() => { try { window.AndroidNotifications?.saveUserId?.(userId); } catch (_) {} }, 1500);
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
@@ -203,6 +201,8 @@ async function setupWebPush() {
 
 function notifyIncomingMessage(msg) {
   if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
+  // Don't interrupt users who are actively looking at the open chat.
+  if (document.visibilityState === 'visible' && chatOpen) return;
   try {
     const n = new Notification('WhatsApp', {
       body: 'You have new message',

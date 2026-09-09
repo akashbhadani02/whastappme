@@ -1,15 +1,11 @@
-# Android APK notifications
+# Android APK
 
-This build uses a native Android foreground polling service for message notifications. It does not depend on WebView push support.
+This Android build uses the same simple WebView setup as the earlier working notification version.
 
-## Build
-
-You MUST provide the deployed website URL when building the APK:
+Build with:
 
 ```bash
 ./gradlew assembleDebug -PAPP_URL=https://your-app.vercel.app/
 ```
 
-The app stores only the origin of the loaded URL and polls `/api/notifications/poll` for new messages.
-
-Android 13+ also requires the notification permission to be allowed.
+Web Push notifications are handled by the deployed website. The Android wrapper does not replace the website push system with a native polling service.
