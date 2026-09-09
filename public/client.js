@@ -190,40 +190,45 @@ async function setupWebPush() {
   }
 }
 
-const notifiedMessageIds = new Set();
-
 function notifyIncomingMessage(msg) {
-  // Never notify the sender, and never notify while the chat is actively open.
-  if (!msg || !msg.id || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
-  if (document.visibilityState === 'visible' && chatOpen) return;
-  const key = String(msg.id);
-  if (notifiedMessageIds.has(key)) return;
-  notifiedMessageIds.add(key);
-  // Keep the in-memory dedupe set bounded.
-  if (notifiedMessageIds.size > 500) {
-    const first = notifiedMessageIds.values().next().value;
-    if (first) notifiedMessageIds.delete(first);
-  }
+  // Notifications are delivered by the Service Worker/Web Push path.
+  // Do not create a page-level Notification here: doing both causes duplicate alerts.
+  return;
+}
+
+function reportChatStateToServiceWorker() {
   try {
-    const n = new Notification('WhatsApp', {
-      body: 'You have new message',
-      tag: `wa-${key}`,
-      renotify: false,
-      icon: '/icon.svg',
-      badge: '/icon.svg'
-    });
-    n.onclick = () => { window.focus(); n.close(); };
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'CHAT_STATE',
+        open: !!chatOpen,
+        visible: document.visibilityState === 'visible'
+      });
+    }
   } catch (_) {}
 }
 
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // Browsers generally allow the permission prompt only from a user gesture.
-  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
+  const once = async () => {
+    const granted = await enableNotifications();
+    if (granted) await setupWebPush();
+    document.removeEventListener('pointerdown', once);
+    document.removeEventListener('keydown', once);
+    reportChatStateToServiceWorker();
+  };
   document.addEventListener('pointerdown', once, { once: true });
   document.addEventListener('keydown', once, { once: true });
 }
 notificationSetup();
+if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
+
+// Keep the Service Worker informed so it can suppress alerts while the chat is
+// actively visible. This mirrors the example project's background push flow,
+// while preventing duplicate page + push notifications.
+document.addEventListener('visibilitychange', reportChatStateToServiceWorker);
+window.addEventListener('load', reportChatStateToServiceWorker);
+
 if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
 
 function now() {
@@ -878,7 +883,7 @@ emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classL
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
-function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); reportChatStateToServiceWorker(); setTimeout(markVisibleMessagesRead, 50); }
 function closeChat(){
   chatOpen=false;
   app.classList.remove('chat-open');

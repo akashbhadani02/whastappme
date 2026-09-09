@@ -560,15 +560,25 @@ async function sendPushToOtherUsers(msg) {
   try {
     const db = await getDb();
     if (!db) return;
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $ne: String(msg.userId || '') } }).toArray();
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
+      .find({ userId: { $ne: String(msg.userId || '') } })
+      .toArray();
     if (!docs.length) return;
+    // A single endpoint must only receive one push, even if duplicate records
+    // exist in an older database.
+    const unique = new Map();
+    for (const doc of docs) {
+      const endpoint = doc.subscription && doc.subscription.endpoint;
+      if (endpoint && !unique.has(endpoint)) unique.set(endpoint, doc);
+    }
+    const targets = Array.from(unique.values());
     const payload = JSON.stringify({
       title: 'WhatsApp',
       body: 'You have new message',
-      messageId: msg.id,
+      messageId: String(msg.id),
       url: '/#chat'
     });
-    await Promise.all(docs.map(async (doc) => {
+    await Promise.all(targets.map(async (doc) => {
       try {
         await webpush.sendNotification(doc.subscription, payload, { TTL: 120, urgency: 'high' });
       } catch (error) {
