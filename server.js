@@ -587,7 +587,9 @@ async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   io.emit(event, saved);
   publishRealtimeEvent(event, saved);
-  if (event === 'message' || event === 'media') sendPushToOtherUsers(saved);
+  // IMPORTANT for Vercel/serverless: await Web Push before the request/function ends.
+  // Fire-and-forget push can be terminated before the mobile notification is delivered.
+  if (event === 'message' || event === 'media') await sendPushToOtherUsers(saved);
   return saved;
 }
 

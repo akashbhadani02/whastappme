@@ -181,11 +181,17 @@ async function setupWebPush() {
         applicationServerKey: urlBase64ToUint8Array(data.publicKey)
       });
     }
-    await fetch('/api/push/subscribe', {
+    const saveResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, subscription })
+      body: JSON.stringify({ userId, subscription }),
+      cache: 'no-store'
     });
+    const saveResult = await saveResponse.json().catch(() => ({}));
+    if (!saveResponse.ok || !saveResult.ok) {
+      console.warn('Push subscription was not saved:', saveResult);
+      return false;
+    }
     return true;
   } catch (error) {
     console.warn('Web push setup failed:', error);
