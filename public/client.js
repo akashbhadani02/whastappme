@@ -21,13 +21,10 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
 let groupPasswordTarget = null;
-
-function ensureUserName() {
-  while (!name) {
-    name = (prompt('Please enter your name:') || '').trim();
-  }
-  localStorage.setItem('wa_name', name);
+while (!name) {
+  name = (prompt('Please enter your name:') || '').trim();
 }
+localStorage.setItem('wa_name', name);
 
 document.title = 'WhatsApp';
 
@@ -76,8 +73,6 @@ const groupAvatarList = document.querySelector('#groupAvatarList');
 const groupAvatarHeader = document.querySelector('#groupAvatarHeader');
 const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
-const notificationBanner = document.querySelector('#notificationBanner');
-const notificationBannerBtn = document.querySelector('#notificationBannerBtn');
 const installAppBtn = document.querySelector('#installAppBtn');
 const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
 const newGroupBtn = document.querySelector('#newGroupBtn');
@@ -184,15 +179,11 @@ async function setupWebPush() {
     const saveResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, subscription }),
-      cache: 'no-store'
+      body: JSON.stringify({ userId, subscription })
     });
-    const saveResult = await saveResponse.json().catch(() => ({}));
-    if (!saveResponse.ok || !saveResult.ok) {
-      console.warn('Push subscription was not saved:', saveResult);
-      return false;
-    }
-    return true;
+    if (!saveResponse.ok) return false;
+    const saveData = await saveResponse.json().catch(() => ({}));
+    return saveData.ok === true;
   } catch (error) {
     console.warn('Web push setup failed:', error);
     return false;
@@ -201,8 +192,6 @@ async function setupWebPush() {
 
 function notifyIncomingMessage(msg) {
   if (!msg || msg.userId === userId || !('Notification' in window) || Notification.permission !== 'granted') return;
-  // Don't interrupt users who are actively looking at the open chat.
-  if (document.visibilityState === 'visible' && chatOpen) return;
   try {
     const n = new Notification('WhatsApp', {
       body: 'You have new message',
@@ -215,132 +204,15 @@ function notifyIncomingMessage(msg) {
   } catch (_) {}
 }
 
-async function requestNotificationsFromUser() {
-  if (!('Notification' in window)) {
-    showToast('This browser does not support notifications');
-    return false;
-  }
-  if (Notification.permission === 'denied') {
-    showToast('Notifications are blocked. Allow them in browser site settings.');
-    return false;
-  }
-  const granted = await enableNotifications();
-  if (!granted) {
-    showToast('Notification permission was not granted');
-    return false;
-  }
-  const ready = await setupWebPush();
-  if (ready) {
-    notificationBanner?.classList.add('hidden');
-    showToast('Notifications enabled on this device');
-  } else {
-    showToast('Permission is on, but push setup failed. Check HTTPS and MongoDB.');
-  }
-  return ready;
-}
-
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  const refresh = () => {
-    const granted = Notification.permission === 'granted';
-    const btn = document.getElementById('enableNotificationsBtn');
-    if (btn) btn.textContent = granted ? '🔔 Notifications on' : '🔔 Enable notifications';
-    if (notificationBanner) notificationBanner.classList.toggle('hidden', granted);
-  };
-  refresh();
-  if (Notification.permission === 'granted') setupWebPush();
-
-  const btn = document.getElementById('enableNotificationsBtn');
-  btn?.addEventListener('click', async () => {
-    await requestNotificationsFromUser();
-    refresh();
-    document.getElementById('appMenu')?.classList.add('hidden');
-  });
-  notificationBannerBtn?.addEventListener('click', async () => {
-    await requestNotificationsFromUser();
-    refresh();
-  });
+  // Browsers generally allow the permission prompt only from a user gesture.
+  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
+  document.addEventListener('pointerdown', once, { once: true });
+  document.addEventListener('keydown', once, { once: true });
 }
 notificationSetup();
-
-// On mobile, require notification permission before opening the app. Browsers
-// only allow Notification.requestPermission() from a user gesture, so the
-// gate uses a real button tap. If permission was already granted, the app opens
-// automatically after push subscription setup.
-async function mobileNotificationGate() {
-  const gate = document.getElementById('mobileNotificationGate');
-  const gateButton = document.getElementById('mobileNotificationGateBtn');
-  const gateStatus = document.getElementById('mobileNotificationGateStatus');
-  const appShell = document.querySelector('.app-shell');
-  const isMobile = window.matchMedia('(max-width: 760px)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  if (!isMobile || !gate || !appShell) {
-    ensureUserName();
-    return;
-  }
-
-  appShell.classList.add('mobile-app-locked');
-  gate.classList.remove('hidden');
-
-  const finish = () => {
-    gate.classList.add('hidden');
-    appShell.classList.remove('mobile-app-locked');
-    ensureUserName();
-    loadGroups();
-  };
-
-  if (!('Notification' in window)) {
-    gateStatus.textContent = 'આ browser notifications support કરતું નથી.';
-    gateButton.textContent = 'Try again';
-    return;
-  }
-
-  if (Notification.permission === 'granted') {
-    const ready = await setupWebPush();
-    if (ready) {
-      finish();
-    } else {
-      gateStatus.textContent = 'Notification permission ચાલુ છે. Push setup ફરી try કરો.';
-      gateButton.textContent = 'Enable notifications';
-    }
-    return;
-  }
-
-  if (Notification.permission === 'denied') {
-    gateStatus.textContent = 'Notifications blocked છે. Browser site settings માં Notifications → Allow કરો, પછી અહીં પાછા આવો.';
-    gateButton.textContent = 'Check notification access';
-  } else {
-    gateStatus.textContent = 'App ખોલતા પહેલાં notifications Allow કરો જેથી નવા messageની ખબર તરત પડે.';
-  }
-
-  gateButton.addEventListener('click', async () => {
-    gateButton.disabled = true;
-    gateStatus.textContent = 'Notification access માંગવામાં આવી રહ્યું છે…';
-    try {
-      if (Notification.permission === 'denied') {
-        gateStatus.textContent = 'Notifications blocked છે. Browser settings માં આ site માટે Notifications → Allow કરો.';
-        return;
-      }
-      const granted = await enableNotifications();
-      if (!granted) {
-        gateStatus.textContent = 'Notifications Allow કરવી જરૂરી છે. ફરી Try કરો.';
-        return;
-      }
-      const ready = await setupWebPush();
-      if (!ready) {
-        gateStatus.textContent = 'Permission મળી ગઈ, પણ push setup complete થયું નથી. Internet/HTTPS check કરીને ફરી Try કરો.';
-        return;
-      }
-      finish();
-    } catch (error) {
-      console.warn('Mobile notification gate failed:', error);
-      gateStatus.textContent = 'Notification setup failed. ફરી Try કરો.';
-    } finally {
-      gateButton.disabled = false;
-    }
-  }, { once: false });
-}
-
-mobileNotificationGate();
+if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -936,11 +808,10 @@ async function joinGroup(groupId, openAfter=true) {
     socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
   });
   await syncMessages();
-  if (Notification.permission === 'granted') setupWebPush();
   if (openAfter) openChat();
 }
 
-if (!window.matchMedia('(max-width: 760px)').matches && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) loadGroups();
+loadGroups();
 
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;

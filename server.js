@@ -566,7 +566,6 @@ async function sendPushToOtherUsers(msg) {
       title: 'WhatsApp',
       body: 'You have new message',
       messageId: msg.id,
-      groupId: msg.groupId || 'main',
       url: '/#chat'
     });
     await Promise.all(docs.map(async (doc) => {
@@ -587,8 +586,6 @@ async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   io.emit(event, saved);
   publishRealtimeEvent(event, saved);
-  // IMPORTANT for Vercel/serverless: await Web Push before the request/function ends.
-  // Fire-and-forget push can be terminated before the mobile notification is delivered.
   if (event === 'message' || event === 'media') await sendPushToOtherUsers(saved);
   return saved;
 }
