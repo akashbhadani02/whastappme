@@ -10,6 +10,15 @@
   <meta name="theme-color" content="#075e54">
 </head>
 <body>
+  <section class="mobile-notification-gate hidden" id="mobileNotificationGate" aria-modal="true" role="dialog">
+    <div class="mobile-notification-card">
+      <div class="mobile-notification-icon">🔔</div>
+      <h2>Turn on notifications</h2>
+      <p>App open કરતા પહેલાં notification access Allow કરો. પછી કોઈપણ user message મોકલે ત્યારે આ device પર notification મળશે.</p>
+      <div class="mobile-notification-status" id="mobileNotificationGateStatus">Notification access Allow કરવું જરૂરી છે.</div>
+      <button class="mobile-notification-btn" id="mobileNotificationGateBtn" type="button">Allow notifications</button>
+    </div>
+  </section>
   <main class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-top">

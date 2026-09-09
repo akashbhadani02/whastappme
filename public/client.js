@@ -21,10 +21,13 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
 let groupPasswordTarget = null;
-while (!name) {
-  name = (prompt('Please enter your name:') || '').trim();
+
+function ensureUserName() {
+  while (!name) {
+    name = (prompt('Please enter your name:') || '').trim();
+  }
+  localStorage.setItem('wa_name', name);
 }
-localStorage.setItem('wa_name', name);
 
 document.title = 'WhatsApp';
 
@@ -253,6 +256,85 @@ function notificationSetup() {
   });
 }
 notificationSetup();
+
+// On mobile, require notification permission before opening the app. Browsers
+// only allow Notification.requestPermission() from a user gesture, so the
+// gate uses a real button tap. If permission was already granted, the app opens
+// automatically after push subscription setup.
+async function mobileNotificationGate() {
+  const gate = document.getElementById('mobileNotificationGate');
+  const gateButton = document.getElementById('mobileNotificationGateBtn');
+  const gateStatus = document.getElementById('mobileNotificationGateStatus');
+  const appShell = document.querySelector('.app-shell');
+  const isMobile = window.matchMedia('(max-width: 760px)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (!isMobile || !gate || !appShell) {
+    ensureUserName();
+    return;
+  }
+
+  appShell.classList.add('mobile-app-locked');
+  gate.classList.remove('hidden');
+
+  const finish = () => {
+    gate.classList.add('hidden');
+    appShell.classList.remove('mobile-app-locked');
+    ensureUserName();
+    loadGroups();
+  };
+
+  if (!('Notification' in window)) {
+    gateStatus.textContent = 'આ browser notifications support કરતું નથી.';
+    gateButton.textContent = 'Try again';
+    return;
+  }
+
+  if (Notification.permission === 'granted') {
+    const ready = await setupWebPush();
+    if (ready) {
+      finish();
+    } else {
+      gateStatus.textContent = 'Notification permission ચાલુ છે. Push setup ફરી try કરો.';
+      gateButton.textContent = 'Enable notifications';
+    }
+    return;
+  }
+
+  if (Notification.permission === 'denied') {
+    gateStatus.textContent = 'Notifications blocked છે. Browser site settings માં Notifications → Allow કરો, પછી અહીં પાછા આવો.';
+    gateButton.textContent = 'Check notification access';
+  } else {
+    gateStatus.textContent = 'App ખોલતા પહેલાં notifications Allow કરો જેથી નવા messageની ખબર તરત પડે.';
+  }
+
+  gateButton.addEventListener('click', async () => {
+    gateButton.disabled = true;
+    gateStatus.textContent = 'Notification access માંગવામાં આવી રહ્યું છે…';
+    try {
+      if (Notification.permission === 'denied') {
+        gateStatus.textContent = 'Notifications blocked છે. Browser settings માં આ site માટે Notifications → Allow કરો.';
+        return;
+      }
+      const granted = await enableNotifications();
+      if (!granted) {
+        gateStatus.textContent = 'Notifications Allow કરવી જરૂરી છે. ફરી Try કરો.';
+        return;
+      }
+      const ready = await setupWebPush();
+      if (!ready) {
+        gateStatus.textContent = 'Permission મળી ગઈ, પણ push setup complete થયું નથી. Internet/HTTPS check કરીને ફરી Try કરો.';
+        return;
+      }
+      finish();
+    } catch (error) {
+      console.warn('Mobile notification gate failed:', error);
+      gateStatus.textContent = 'Notification setup failed. ફરી Try કરો.';
+    } finally {
+      gateButton.disabled = false;
+    }
+  }, { once: false });
+}
+
+mobileNotificationGate();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -852,7 +934,7 @@ async function joinGroup(groupId, openAfter=true) {
   if (openAfter) openChat();
 }
 
-loadGroups();
+if (!window.matchMedia('(max-width: 760px)').matches && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) loadGroups();
 
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
