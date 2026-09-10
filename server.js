@@ -754,6 +754,36 @@ io.on('connection', async (socket) => {
       });
   });
 
+  socket.on('update-message', async (data, ack) => {
+    if (!data || !data.id || !socket.groupId) return;
+    const groupId = normalizeGroupId(socket.groupId);
+    const allowed = {};
+    if (typeof data.starred === 'boolean') allowed.starred = data.starred;
+    if (typeof data.pinned === 'boolean') allowed.pinned = data.pinned;
+    if (typeof data.message === 'string') allowed.message = data.message.slice(0, 5000);
+    if (data.replyTo && typeof data.replyTo === 'object') allowed.replyTo = {
+      id: String(data.replyTo.id || ''), message: String(data.replyTo.message || '').slice(0, 500), user: String(data.replyTo.user || '').slice(0, 100)
+    };
+    if (!Object.keys(allowed).length) { if (typeof ack === 'function') ack({ok:false}); return; }
+    try {
+      const collection = await getCollection();
+      if (!collection) { if (typeof ack === 'function') ack({ok:false}); return; }
+      const result = await collection.findOneAndUpdate(
+        { id: String(data.id), $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] },
+        { $set: allowed }, { returnDocument: 'after' }
+      );
+      const updated = result?.value || result;
+      if (!updated) { if (typeof ack === 'function') ack({ok:false}); return; }
+      const event = { message: updated, groupId };
+      io.emit('message-updated', event);
+      publishRealtimeEvent('message-updated', event);
+      if (typeof ack === 'function') ack({ok:true, message:updated});
+    } catch (error) {
+      console.error('Failed to update message:', error.message);
+      if (typeof ack === 'function') ack({ok:false});
+    }
+  });
+
   socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
     const deleteEvent = { id: data.id, groupId: normalizeGroupId(socket.groupId) };

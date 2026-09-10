@@ -55,8 +55,10 @@
         </div>
         <div class="selection-actions hidden" id="selectionActions">
           <span id="selectionCount">0 selected</span>
+          <button class="icon-btn selection-all-btn" id="selectAllBtn" title="Select all">☑</button>
           <button class="icon-btn" id="cancelSelectionBtn" title="Cancel">×</button>
-          <button class="icon-btn danger-icon" id="deleteSelectedBtn" title="Delete selected">🗑</button>
+          <button class="icon-btn danger-icon" id="deleteForMeBtn" title="Delete for me">🗑</button>
+          <button class="icon-btn danger-icon" id="deleteSelectedBtn" title="Delete for everyone">✖</button>
         </div>
         <div class="header-actions" id="normalHeaderActions">
           <button class="icon-btn" id="chatSearchBtn" title="Search">⌕</button>
@@ -151,6 +153,8 @@
     </div>
   </div>
 
+  <div class="reply-bar hidden" id="replyBar"><div><strong id="replyLabel">Replying</strong><span id="replyPreview"></span></div><button id="replyCancel" type="button">×</button></div>
+  <div class="modal hidden" id="forwardModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="forwardClose">×</button><div class="lock-icon">↗️</div><h3>Forward message</h3><p>Select a group to forward this message.</p><div id="forwardGroups" class="admin-groups-list"></div></div></div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>

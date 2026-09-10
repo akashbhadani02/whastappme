@@ -61,6 +61,16 @@ const selectionActions = document.querySelector('#selectionActions');
 const selectionCount = document.querySelector('#selectionCount');
 const cancelSelectionBtn = document.querySelector('#cancelSelectionBtn');
 const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
+const deleteForMeBtn = document.querySelector('#deleteForMeBtn');
+const selectAllBtn = document.querySelector('#selectAllBtn');
+const chatSearchBtn = document.querySelector('#chatSearchBtn');
+const replyBar = document.querySelector('#replyBar');
+const replyLabel = document.querySelector('#replyLabel');
+const replyPreview = document.querySelector('#replyPreview');
+const replyCancel = document.querySelector('#replyCancel');
+const forwardModal = document.querySelector('#forwardModal');
+const forwardGroups = document.querySelector('#forwardGroups');
+const forwardClose = document.querySelector('#forwardClose');
 const normalHeaderActions = document.querySelector('#normalHeaderActions');
 const passwordModal = document.querySelector('#passwordModal');
 const passwordInput = document.querySelector('#passwordInput');
@@ -123,6 +133,12 @@ let pendingPasswordType = 'admin';
 const messages = new Map();
 const deletedIds = new Set();
 const readSent = new Set();
+const starredIds = new Set();
+const pinnedIds = new Set();
+const deletedForMeIds = new Set();
+let replyTo = null;
+let forwardMessage = null;
+let lastDeleteBackup = null;
 
 // Keep a local history as a safety net. Server history is still the source of
 // truth when MongoDB is available, but a temporary network/server error must
@@ -130,6 +146,17 @@ const readSent = new Set();
 function messageCacheKey(groupId = currentGroupId) {
   return `wa_messages_${groupId || 'main'}`;
 }
+function stateKey(type, groupId=currentGroupId){ return `wa_${type}_${groupId || 'main'}`; }
+function loadMessageFlags(){
+  try { (JSON.parse(localStorage.getItem(stateKey('starred')))||[]).forEach(x=>starredIds.add(String(x))); } catch(_) {}
+  try { (JSON.parse(localStorage.getItem(stateKey('pinned')))||[]).forEach(x=>pinnedIds.add(String(x))); } catch(_) {}
+  try { (JSON.parse(localStorage.getItem(stateKey('deleted')))||[]).forEach(x=>deletedForMeIds.add(String(x))); } catch(_) {}
+}
+function saveMessageFlags(){ try { localStorage.setItem(stateKey('starred'), JSON.stringify([...starredIds])); localStorage.setItem(stateKey('pinned'), JSON.stringify([...pinnedIds])); localStorage.setItem(stateKey('deleted'), JSON.stringify([...deletedForMeIds])); } catch(_) {} }
+function setReply(msg){ replyTo=msg ? {id:msg.id,message:msg.message||'',user:msg.user||name} : null; replyBar?.classList.toggle('hidden', !replyTo); if(replyTo){ replyLabel.textContent=`Reply to ${replyTo.user}`; replyPreview.textContent=replyTo.message || (msg.type==='image'?'📷 Photo':'🎥 Video'); textarea.focus(); } }
+function clearReply(){ replyTo=null; replyBar?.classList.add('hidden'); }
+function updateMessageElement(msg){ const el=document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`); if(!el) return; const text=el.querySelector('.message-text'); if(text) text.textContent=msg.message||''; el.classList.toggle('starred', !!msg.starred || starredIds.has(msg.id)); el.classList.toggle('pinned', !!msg.pinned || pinnedIds.has(msg.id)); }
+
 function saveLocalMessageHistory() {
   try {
     const list = Array.from(messages.values()).map(m => ({ ...m }));
@@ -137,6 +164,7 @@ function saveLocalMessageHistory() {
   } catch (_) {}
 }
 function loadLocalMessageHistory() {
+  loadMessageFlags();
   try {
     const raw = localStorage.getItem(messageCacheKey());
     const list = raw ? JSON.parse(raw) : [];
@@ -275,8 +303,9 @@ passwordModal.addEventListener('click', e => { if (e.target === passwordModal) c
 async function sendMessage(text) {
   const message = String(text || '').trim();
   if (!message || !currentGroupId) return;
-  const msg = { id: id(), groupId: currentGroupId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [], readBy: [] };
+  const msg = { id: id(), groupId: currentGroupId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [], readBy: [], ...(replyTo ? {replyTo} : {}) };
   textarea.value = '';
+  clearReply();
   autoResize();
   updatePreview(message);
 
@@ -349,15 +378,26 @@ function exitSelectionMode() {
   selectedMessageIds.clear();
   updateSelectionUI();
 }
+selectAllBtn?.addEventListener('click', () => {
+  if (!selectionMode) return;
+  const all=[...messages.keys()];
+  if (selectedMessageIds.size === all.length) selectedMessageIds.clear(); else all.forEach(x=>selectedMessageIds.add(String(x)));
+  updateSelectionUI();
+});
 cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
+deleteForMeBtn?.addEventListener('click', () => {
+  if (!selectedMessageIds.size) return;
+  const ids=[...selectedMessageIds];
+  requestPassword('Delete for me', `Remove ${ids.length} selected message${ids.length===1?'':'s'} from this device?`, () => deleteForMe(ids));
+});
 deleteSelectedBtn?.addEventListener('click', () => {
   if (!selectedMessageIds.size) return;
   const ids = Array.from(selectedMessageIds);
-  requestPassword('Delete selected messages', `Enter password to permanently delete ${ids.length} selected message${ids.length === 1 ? '' : 's'}.`, () => deleteMessages(ids));
+  requestPassword('Delete for everyone', `Permanently delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
 });
 
 function renderMessage(msg, direction) {
-  if (!msg || !msg.id || deletedIds.has(msg.id) || messages.has(msg.id)) return;
+  if (!msg || !msg.id || deletedIds.has(msg.id) || deletedForMeIds.has(String(msg.id)) || messages.has(msg.id)) return;
   if (msg.createdAt) {
     const key = dateKey(msg);
     if (key !== lastRenderedDate) {
@@ -400,6 +440,9 @@ function renderMessage(msg, direction) {
     const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);
   }
   el.appendChild(content);
+  if (msg.replyTo?.message) { const q=document.createElement('div'); q.className='reply-quote'; q.innerHTML=`<strong></strong><span></span>`; q.querySelector('strong').textContent=msg.replyTo.user||'Reply'; q.querySelector('span').textContent=msg.replyTo.message; el.insertBefore(q, content); }
+  el.classList.toggle('starred', !!msg.starred || starredIds.has(msg.id));
+  el.classList.toggle('pinned', !!msg.pinned || pinnedIds.has(msg.id));
 
   const meta=document.createElement('div'); meta.className='meta';
   meta.appendChild(document.createTextNode(msg.time || now()));
@@ -420,6 +463,11 @@ function renderMessage(msg, direction) {
     enterSelectionMode(msg.id);
   });
   menu.appendChild(select);
+  const replyBtn=document.createElement('button'); replyBtn.textContent='↩ Reply'; replyBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');setReply(msg);}; menu.appendChild(replyBtn);
+  const starBtn=document.createElement('button'); starBtn.textContent=starredIds.has(msg.id)?'★ Unstar':'☆ Star'; starBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');toggleStar(msg);}; menu.appendChild(starBtn);
+  const pinBtn=document.createElement('button'); pinBtn.textContent=pinnedIds.has(msg.id)?'📌 Unpin':'📌 Pin'; pinBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');togglePin(msg);}; menu.appendChild(pinBtn);
+  const editBtn=document.createElement('button'); editBtn.textContent='✎ Edit'; editBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');editMessage(msg);}; if(msg.userId!==userId || msg.type!=='text') editBtn.disabled=true; menu.appendChild(editBtn);
+  const forwardBtn=document.createElement('button'); forwardBtn.textContent='↗ Forward'; forwardBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');openForward(msg);}; menu.appendChild(forwardBtn);
 
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
@@ -436,6 +484,18 @@ function renderMessage(msg, direction) {
 }
 
 document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')));
+
+function toggleStar(msg){ const id=String(msg.id); const next=!starredIds.has(id); if(next) starredIds.add(id); else starredIds.delete(id); saveMessageFlags(); msg.starred=next; updateMessageElement(msg); emitAck('update-message',{id,starred:next},10000,1); }
+function togglePin(msg){ const id=String(msg.id); const next=!pinnedIds.has(id); if(next) pinnedIds.add(id); else pinnedIds.delete(id); saveMessageFlags(); msg.pinned=next; updateMessageElement(msg); emitAck('update-message',{id,pinned:next},10000,1); showToast(next?'Message pinned':'Message unpinned'); }
+function editMessage(msg){ const next=prompt('Edit message',msg.message||''); if(next===null || !next.trim() || next.trim()===msg.message) return; msg.message=next.trim().slice(0,5000); msg.edited=true; updateMessageElement(msg); saveLocalMessageHistory(); emitAck('update-message',{id:msg.id,message:msg.message},10000,1); }
+function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boolean); lastDeleteBackup={groupId:currentGroupId,messages:backup,expires:Date.now()+5000}; ids.forEach(id=>{const el=document.querySelector(`.message[data-id="${CSS.escape(String(id))}"]`);if(el)el.remove();messages.delete(String(id));deletedIds.add(String(id)); deletedForMeIds.add(String(id));}); saveMessageFlags(); saveLocalMessageHistory(); exitSelectionMode(); updatePreview(`${ids.length} message${ids.length===1?'':'s'} deleted`); showUndoToast('Deleted for me'); }
+function showUndoToast(text){ toast.innerHTML=''; const span=document.createElement('span');span.textContent=text;const b=document.createElement('button');b.textContent='UNDO';b.className='toast-undo';b.onclick=undoLastDelete;toast.append(span,b);toast.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>{toast.classList.remove('show');lastDeleteBackup=null;},5000); }
+function undoLastDelete(){ const backup=lastDeleteBackup; if(!backup || backup.groupId!==currentGroupId || backup.expires<Date.now()){showToast('Undo expired');return;} backup.messages.forEach(msg=>{deletedIds.delete(String(msg.id)); deletedForMeIds.delete(String(msg.id)); renderMessage(msg,msg.userId===userId?'outgoing':'incoming');}); saveMessageFlags(); saveLocalMessageHistory(); lastDeleteBackup=null; toast.classList.remove('show'); showToast('Messages restored'); }
+function openForward(msg){ forwardMessage=msg; if(!forwardGroups) return; forwardGroups.innerHTML=''; groups.forEach(g=>{const b=document.createElement('button');b.className='chat-item';b.innerHTML=`<div class="avatar group-avatar">${(g.name||'G').slice(0,1).toUpperCase()}</div><div class="chat-summary"><strong>${g.name||'Group'}</strong></div>`;b.onclick=()=>forwardToGroup(g);forwardGroups.appendChild(b);}); forwardModal?.classList.remove('hidden'); }
+async function forwardToGroup(group){ if(!forwardMessage) return; const target=group.id; const msg={id:id(),groupId:target,senderId:socketId,userId,user:name,message:forwardMessage.message||'',time:now(),type:forwardMessage.type||'text',createdAt:new Date().toISOString(),deliveredTo:[],readBy:[],forwarded:true,...(forwardMessage.mediaId?{mediaId:forwardMessage.mediaId,mime:forwardMessage.mime,fileName:forwardMessage.fileName}:{}),...(forwardMessage.data?{data:forwardMessage.data}: {})}; if(target===currentGroupId) renderMessage(msg,'outgoing'); try{const r=await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg),cache:'no-store'}); if(!r.ok) throw new Error(); showToast(`Forwarded to ${group.name}`);}catch(_){showToast('Forward failed');} forwardModal?.classList.add('hidden');forwardMessage=null; }
+forwardClose?.addEventListener('click',()=>forwardModal?.classList.add('hidden'));
+forwardModal?.addEventListener('click',e=>{if(e.target===forwardModal)forwardModal.classList.add('hidden');});
+chatSearchBtn?.addEventListener('click',()=>{const q=(prompt('Search messages in this chat')||'').trim().toLowerCase();if(!q)return;const found=[...messages.values()].find(m=>(m.message||'').toLowerCase().includes(q));if(found){const el=document.querySelector(`.message[data-id="${CSS.escape(found.id)}"]`);el?.scrollIntoView({behavior:'smooth',block:'center'});el?.classList.add('search-hit');setTimeout(()=>el?.classList.remove('search-hit'),1800);}else showToast('No matching message');});
 
 function deleteMessage(messageId, broadcast=true) {
   const id = String(messageId);
@@ -797,6 +857,9 @@ async function loadGroups() {
     messageArea.innerHTML = '';
     messages.clear();
     deletedIds.clear();
+    starredIds.clear();
+    pinnedIds.clear();
+    deletedForMeIds.clear();
     lastRenderedDate = '';
     if (selected) {
       groupName = selected.name;
@@ -892,6 +955,8 @@ socket.on('user-renamed', data => {
     if (sender) sender.textContent = data.name;
   });
 });
+socket.on('message-updated', data => { if(!data?.message || (data.groupId && data.groupId!==currentGroupId)) return; const m=data.message; const existing=messages.get(m.id); if(existing){Object.assign(existing,m); updateMessageElement(existing); saveLocalMessageHistory();} });
+
 socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
 socket.on('delete-messages', data => {
   if (!data || !Array.isArray(data.ids) || (data.groupId && data.groupId !== currentGroupId)) return;
@@ -938,7 +1003,7 @@ emojiPanel.querySelectorAll('button').forEach(btn => btn.addEventListener('click
 emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classList.toggle('open'); });
 document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
-document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
+document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); const mode=btn.textContent.trim().toLowerCase(); document.querySelectorAll('.message').forEach(el=>{const m=messages.get(el.dataset.id);let show=true;if(mode==='favourites') show=starredIds.has(el.dataset.id)||!!m?.starred;if(mode==='groups') show=true;el.style.display=show?'':'none';}); }));
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
 function closeChat(){
   chatOpen=false;
