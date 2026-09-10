@@ -61,7 +61,6 @@ const selectionActions = document.querySelector('#selectionActions');
 const selectionCount = document.querySelector('#selectionCount');
 const cancelSelectionBtn = document.querySelector('#cancelSelectionBtn');
 const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
-const deleteForMeBtn = document.querySelector('#deleteForMeBtn');
 const selectAllBtn = document.querySelector('#selectAllBtn');
 const chatSearchBtn = document.querySelector('#chatSearchBtn');
 const replyBar = document.querySelector('#replyBar');
@@ -105,6 +104,7 @@ const adminRecycleList = document.querySelector('#adminRecycleList');
 const adminRecycleError = document.querySelector('#adminRecycleError');
 const adminRecycleRefresh = document.querySelector('#adminRecycleRefresh');
 const adminRecycleEmpty = document.querySelector('#adminRecycleEmpty');
+const adminMainRecycleBtn = document.querySelector('#adminMainRecycleBtn');
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -394,15 +394,10 @@ selectAllBtn?.addEventListener('click', () => {
   updateSelectionUI();
 });
 cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
-deleteForMeBtn?.addEventListener('click', () => {
-  if (!selectedMessageIds.size) return;
-  const ids=[...selectedMessageIds];
-  requestPassword('Delete for me', `Remove ${ids.length} selected message${ids.length===1?'':'s'} from this device?`, () => deleteForMe(ids));
-});
 deleteSelectedBtn?.addEventListener('click', () => {
   if (!selectedMessageIds.size) return;
   const ids = Array.from(selectedMessageIds);
-  requestPassword('Delete for everyone', `Permanently delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
+  requestPassword('Delete for everyone', `Delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
 });
 
 function renderMessage(msg, direction) {
@@ -490,10 +485,10 @@ function renderMessage(msg, direction) {
   const reactBtn=document.createElement('button'); reactBtn.textContent='😊 React'; reactBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');reactMessage(msg);}; menu.appendChild(reactBtn);
   const infoBtn=document.createElement('button'); infoBtn.textContent='ℹ Message info'; infoBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');showMessageInfo(msg);}; menu.appendChild(infoBtn);
 
-  const del=document.createElement('button'); del.textContent='Delete message';
+  const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id));
+    requestPassword('Delete for everyone','Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id));
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -1184,13 +1179,27 @@ async function loadAdminRecycle() {
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
       const name = m.fileName || m.message || 'Deleted message';
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
+      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : '';
+      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
+      row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
       row.querySelector('.recycle-name').textContent=name;
       row.querySelector('.recycle-meta').textContent=when;
       const view=row.querySelector('.recycle-view-btn');
-      if (m.mediaId) view.onclick=()=>window.open(`/api/media/${encodeURIComponent(m.mediaId)}`, '_blank', 'noopener');
-      else view.disabled=true;
+      const download=row.querySelector('.recycle-download-btn');
+      if (m.mediaId) {
+        view.onclick=()=>window.open(`/api/media/${encodeURIComponent(m.mediaId)}`, '_blank', 'noopener');
+        download.onclick=async()=>{
+          try {
+            const r=await fetch('/api/admin/recycle-bin/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+            if(!r.ok){ let d={}; try{d=await r.json();}catch(_){} throw new Error(d.error||'Download failed'); }
+            const blob=await r.blob();
+            const url=URL.createObjectURL(blob); const a=document.createElement('a');
+            a.href=url; a.download=m.fileName || `recycle-${item.id}`; document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(()=>URL.revokeObjectURL(url),1000);
+          } catch(e){ showToast(e.message||'Download failed'); }
+        };
+      } else { view.disabled=true; download.disabled=true; }
       row.querySelector('.recycle-restore-btn').onclick=async()=>{
         if(!confirm('Restore this deleted item to the group?')) return;
         try {
@@ -1221,6 +1230,7 @@ function openAdminRecycle(groupId, groupName) {
 }
 
 adminRecycleClose?.addEventListener('click',()=>adminRecycleModal.classList.add('hidden'));
+adminMainRecycleBtn?.addEventListener('click',()=>openAdminRecycle('main','Main Recycle Bin'));
 adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
 adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{

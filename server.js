@@ -348,9 +348,23 @@ app.delete('/api/groups/:id', async (req, res) => {
       io.emit('group-deleted', event);
       return res.json({ ok: true, group: event, persistent: false });
     }
+    const groupDoc = await collection.findOne({ _id: groupId });
     const result = await collection.deleteOne({ _id: groupId });
     if (!result.deletedCount) return res.status(404).json({ ok: false, error: 'Group not found' });
-    // Remove the group's messages as well so a deleted group is fully removed.
+
+    // Keep already-deleted items from this group in the ADMIN MAIN recycle bin.
+    // The group is gone, so its old group id is retained as metadata for display.
+    try {
+      const db = await getDb();
+      if (db) {
+        await db.collection(RECYCLE_BIN_COLLECTION_NAME).updateMany(
+          { groupId },
+          { $set: { groupId: DEFAULT_GROUP_ID, deletedGroupId: groupId, deletedGroupName: groupDoc?.name || groupId, movedToMainRecycleAt: new Date() } }
+        );
+      }
+    } catch (_) {}
+
+    // Remove the group's live messages as well so a deleted group is fully removed.
     try {
       const messagesCollection = await getCollection();
       if (messagesCollection) await messagesCollection.deleteMany({ groupId });
@@ -425,7 +439,10 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(1000).toArray();
     res.json({ ok:true, persistent:true, items: items.map(x => ({
       id:String(x._id), originalMessageId:String(x.originalMessageId), groupId:String(x.groupId),
-      deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete', message:x.message || {}
+      deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete',
+      deletedGroupId:x.deletedGroupId ? String(x.deletedGroupId) : null,
+      deletedGroupName:x.deletedGroupName ? String(x.deletedGroupName) : null,
+      message:x.message || {}
     })) });
   } catch (error) {
     console.error('Admin recycle-bin list failed:', error.message);
@@ -476,6 +493,33 @@ app.post('/api/admin/recycle-bin/delete', async (req, res) => {
   } catch (error) {
     console.error('Admin recycle permanent delete failed:', error.message);
     res.status(500).json({ ok:false, error:'Permanent delete failed' });
+  }
+});
+
+app.post('/api/admin/recycle-bin/download', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db || !ObjectId.isValid(String(req.body?.id || ''))) return res.status(400).json({ ok:false, error:'Invalid recycle item' });
+    const item = await db.collection(RECYCLE_BIN_COLLECTION_NAME).findOne({ _id:new ObjectId(String(req.body.id)) });
+    if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
+    const mediaId = item.message?.mediaId;
+    if (!mediaId || !ObjectId.isValid(String(mediaId))) return res.status(404).json({ ok:false, error:'No downloadable media' });
+    const bucket = await getMediaBucket();
+    const fileId = new ObjectId(String(mediaId));
+    const files = await bucket.find({ _id:fileId }).toArray();
+    if (!files.length) return res.status(404).json({ ok:false, error:'Media file not found' });
+    const file = files[0];
+    const mime = file.metadata?.mime || 'application/octet-stream';
+    const safeName = String(file.metadata?.fileName || file.filename || `media-${fileId}`).replace(/[\\"\\r\\n]/g, '_');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', file.length);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+    res.setHeader('Cache-Control', 'no-store');
+    bucket.openDownloadStream(fileId).on('error', () => res.destroy()).pipe(res);
+  } catch (error) {
+    console.error('Admin recycle download failed:', error.message);
+    res.status(500).json({ ok:false, error:'Download failed' });
   }
 });
 
