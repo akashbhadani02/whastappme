@@ -166,24 +166,3 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
     min-width:170px;
   }
 }
-
-
-/* Final message-menu positioning fix: render menus above all chat/sidebar
-   layers and let client.js clamp them fully inside the viewport. */
-.message-menu.message-menu-layer{
-  position:fixed !important;
-  z-index:10000 !important;
-  margin:0 !important;
-  max-width:min(240px, calc(100vw - 16px)) !important;
-  max-height:min(70vh, 520px) !important;
-  overflow-y:auto !important;
-  overflow-x:hidden !important;
-  box-sizing:border-box !important;
-}
-@media (max-width:760px){
-  .message-menu.message-menu-layer{
-    min-width:170px;
-    max-width:calc(100vw - 16px) !important;
-    max-height:60vh !important;
-  }
-}
