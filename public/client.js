@@ -437,7 +437,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
+    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file', msg.type === 'audio' ? 'Enter the password to download this audio/voice message.' : 'Enter password to download this file.', () => downloadMedia(msg), 'download'); });
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
@@ -496,14 +496,7 @@ document.addEventListener('click', () => document.querySelectorAll('.message-men
 function toggleStar(msg){ const id=String(msg.id); const next=!starredIds.has(id); if(next) starredIds.add(id); else starredIds.delete(id); saveMessageFlags(); msg.starred=next; updateMessageElement(msg); emitAck('update-message',{id,starred:next},10000,1); }
 function togglePin(msg){ const id=String(msg.id); const next=!pinnedIds.has(id); if(next) pinnedIds.add(id); else pinnedIds.delete(id); saveMessageFlags(); msg.pinned=next; updateMessageElement(msg); emitAck('update-message',{id,pinned:next},10000,1); showToast(next?'Message pinned':'Message unpinned'); }
 function editMessage(msg){ const next=prompt('Edit message',msg.message||''); if(next===null || !next.trim() || next.trim()===msg.message) return; msg.message=next.trim().slice(0,5000); msg.edited=true; updateMessageElement(msg); saveLocalMessageHistory(); emitAck('update-message',{id:msg.id,message:msg.message},10000,1); }
-function recycleKey(){return `wa_recycle_${currentGroupId||'main'}`;}
-function getRecycle(){try{return JSON.parse(localStorage.getItem(recycleKey())||'[]');}catch(_){return [];}}
-function saveRecycle(list){try{localStorage.setItem(recycleKey(),JSON.stringify(list.slice(-500)));}catch(_){}}
-function addToRecycle(items){const list=getRecycle();const nowMs=Date.now();items.forEach(m=>{if(m)list.push({...m,deletedAt:nowMs});});saveRecycle(list);}
-function loadRecycle(){const box=document.getElementById('recycleList');if(!box)return;const list=getRecycle();box.innerHTML='';if(!list.length){box.innerHTML='<div class="status-item">Recycle Bin is empty</div>';return;}list.slice().reverse().forEach(m=>{const row=document.createElement('div');row.className='status-item';const title=document.createElement('strong');title.textContent=m.user||'Message';const txt=document.createElement('p');txt.textContent=m.message||m.fileName||`[${m.type||'message'}]`;const actions=document.createElement('div');actions.style.cssText='display:flex;gap:6px;margin-top:7px';const restore=document.createElement('button');restore.className='mini-btn';restore.textContent='♻️ Restore';restore.onclick=()=>{const all=getRecycle();const found=all.find(x=>x.id===m.id&&x.deletedAt===m.deletedAt);if(found){renderMessage(found,found.userId===userId?'outgoing':'incoming');saveLocalMessageHistory();saveRecycle(all.filter(x=>!(x.id===m.id&&x.deletedAt===m.deletedAt)));loadRecycle();showToast('Message restored');}};const perm=document.createElement('button');perm.className='mini-btn';perm.textContent='❌ Permanent';perm.onclick=()=>{saveRecycle(getRecycle().filter(x=>!(x.id===m.id&&x.deletedAt===m.deletedAt)));loadRecycle();showToast('Deleted permanently');};actions.append(restore,perm);row.append(title,txt,actions);box.appendChild(row);});}
-document.getElementById('recycleBinBtn')?.addEventListener('click',()=>{loadRecycle();document.getElementById('recycleModal')?.classList.remove('hidden')});document.getElementById('recycleClose')?.addEventListener('click',()=>document.getElementById('recycleModal')?.classList.add('hidden'));document.getElementById('emptyRecycleBtn')?.addEventListener('click',()=>{if(confirm('Permanently delete all recycled messages?')){saveRecycle([]);loadRecycle();showToast('Recycle Bin emptied')}});
-
-function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boolean); addToRecycle(backup); lastDeleteBackup={groupId:currentGroupId,messages:backup,expires:Date.now()+5000}; ids.forEach(id=>{const el=document.querySelector(`.message[data-id="${CSS.escape(String(id))}"]`);if(el)el.remove();messages.delete(String(id));deletedIds.add(String(id)); deletedForMeIds.add(String(id));}); saveMessageFlags(); saveLocalMessageHistory(); exitSelectionMode(); updatePreview(`${ids.length} message${ids.length===1?'':'s'} deleted`); showUndoToast('Deleted for me'); }
+function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boolean); lastDeleteBackup={groupId:currentGroupId,messages:backup,expires:Date.now()+5000}; ids.forEach(id=>{const el=document.querySelector(`.message[data-id="${CSS.escape(String(id))}"]`);if(el)el.remove();messages.delete(String(id));deletedIds.add(String(id)); deletedForMeIds.add(String(id));}); saveMessageFlags(); saveLocalMessageHistory(); exitSelectionMode(); updatePreview(`${ids.length} message${ids.length===1?'':'s'} deleted`); showUndoToast('Deleted for me'); }
 function showUndoToast(text){ toast.innerHTML=''; const span=document.createElement('span');span.textContent=text;const b=document.createElement('button');b.textContent='UNDO';b.className='toast-undo';b.onclick=undoLastDelete;toast.append(span,b);toast.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>{toast.classList.remove('show');lastDeleteBackup=null;},5000); }
 function undoLastDelete(){ const backup=lastDeleteBackup; if(!backup || backup.groupId!==currentGroupId || backup.expires<Date.now()){showToast('Undo expired');return;} backup.messages.forEach(msg=>{deletedIds.delete(String(msg.id)); deletedForMeIds.delete(String(msg.id)); renderMessage(msg,msg.userId===userId?'outgoing':'incoming');}); saveMessageFlags(); saveLocalMessageHistory(); lastDeleteBackup=null; toast.classList.remove('show'); showToast('Messages restored'); }
 function openForward(msg){ forwardMessage=msg; if(!forwardGroups) return; forwardGroups.innerHTML=''; groups.forEach(g=>{const b=document.createElement('button');b.className='chat-item';b.innerHTML=`<div class="avatar group-avatar">${(g.name||'G').slice(0,1).toUpperCase()}</div><div class="chat-summary"><strong>${g.name||'Group'}</strong></div>`;b.onclick=()=>forwardToGroup(g);forwardGroups.appendChild(b);}); forwardModal?.classList.remove('hidden'); }
@@ -514,7 +507,6 @@ chatSearchBtn?.addEventListener('click',()=>{const q=(prompt('Search messages in
 
 function deleteMessage(messageId, broadcast=true) {
   const id = String(messageId);
-  const recycleMsg=messages.get(id); if(recycleMsg) addToRecycle([recycleMsg]);
   const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
   if (el) el.remove();
   messages.delete(id);
@@ -529,7 +521,6 @@ function deleteMessage(messageId, broadcast=true) {
 function deleteMessages(messageIds, broadcast=true) {
   const ids = Array.from(new Set(messageIds.map(String))).filter(id => messages.has(id) || document.querySelector(`.message[data-id="${CSS.escape(id)}"]`));
   if (!ids.length) { exitSelectionMode(); return; }
-  addToRecycle(ids.map(id=>messages.get(id)).filter(Boolean));
   ids.forEach(id => {
     const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
     if (el) el.remove();
@@ -1335,34 +1326,9 @@ let typingTimer=null, typingActive=false;
 function sendTyping(active){ if(!socket.connected)return; socket.emit('typing',{groupId:currentGroupId,userId,name,active}); }
 textarea?.addEventListener('input',()=>{if(!typingActive){typingActive=true;sendTyping(true)};clearTimeout(typingTimer);typingTimer=setTimeout(()=>{typingActive=false;sendTyping(false)},900)});
 socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)return; if(d.active){typingBar.textContent=`${d.name||'Someone'} is typing…`;typingBar.classList.add('show')}else typingBar.classList.remove('show')});
-// WebRTC audio/video calling with Socket.IO signaling.
-let peerConnection = null, localCallStream = null, activeCallPeer = null, activeCallVideo = false;
-function rtcConfig(){ return { iceServers:[{urls:'stun:stun.l.google.com:19302'}] }; }
-async function ensureCallMedia(video){
-  if(localCallStream) return localCallStream;
-  localCallStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
-  return localCallStream;
-}
-function cleanupCall(){ if(peerConnection){peerConnection.close();peerConnection=null;} if(localCallStream){localCallStream.getTracks().forEach(t=>t.stop());localCallStream=null;} activeCallPeer=null; callModal?.classList.add('hidden'); }
-function createPeer(video, targetId){
-  const pc=new RTCPeerConnection(rtcConfig()); activeCallPeer=targetId||activeCallPeer;
-  if(localCallStream) localCallStream.getTracks().forEach(t=>pc.addTrack(t,localCallStream));
-  pc.onicecandidate=e=>{if(e.candidate && activeCallPeer) socket.emit('call-ice',{to:activeCallPeer,candidate:e.candidate});};
-  pc.onconnectionstatechange=()=>{ if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); else if(pc.connectionState==='connected') callState.textContent='Connected'; };
-  pc.ontrack=e=>{ let v=document.getElementById('remoteCallVideo'); if(!v){v=document.createElement('video');v.id='remoteCallVideo';v.autoplay=true;v.playsInline=true;v.className='remote-call-video';callModal.querySelector('.call-card').appendChild(v);} v.srcObject=e.streams[0]; };
-  peerConnection=pc; return pc;
-}
-async function startCall(video=false){
-  try{ activeCallVideo=video; await ensureCallMedia(video); callTitle.textContent=video?'Video call':'Voice call'; callState.textContent='Calling…'; callAvatar.textContent=(groupName||'W').slice(0,1).toUpperCase(); callModal?.classList.remove('hidden');
-    const pc=createPeer(video,''); const offer=await pc.createOffer(); await pc.setLocalDescription(offer); socket.emit('call-offer',{offer,name,video});
-  }catch(e){ showToast('Camera/microphone permission denied'); cleanupCall(); }
-}
-socket.on('call-offer',async d=>{ if(!d?.offer || d.from===userId) return; const ok=confirm(`${d.name||'Someone'} is calling. Accept?`); if(!ok){socket.emit('call-end',{to:d.from});return;} try{activeCallPeer=d.from;activeCallVideo=!!d.video;await ensureCallMedia(activeCallVideo);callTitle.textContent=activeCallVideo?'Video call':'Voice call';callState.textContent='Connecting…';callAvatar.textContent=(d.name||'W').slice(0,1).toUpperCase();callModal?.classList.remove('hidden');const pc=createPeer(activeCallVideo,d.from);await pc.setRemoteDescription(new RTCSessionDescription(d.offer));const answer=await pc.createAnswer();await pc.setLocalDescription(answer);socket.emit('call-answer',{to:d.from,answer});}catch(e){showToast('Could not answer call');cleanupCall();}});
-socket.on('call-answer',async d=>{if(!peerConnection||!d?.answer)return;activeCallPeer=d.from;try{await peerConnection.setRemoteDescription(new RTCSessionDescription(d.answer));callState.textContent='Connecting…';}catch(e){showToast('Call connection failed');cleanupCall();}});
-socket.on('call-ice',async d=>{if(!peerConnection||!d?.candidate)return;activeCallPeer=d.from;try{await peerConnection.addIceCandidate(new RTCIceCandidate(d.candidate));}catch(_){}});
-socket.on('call-end',()=>{showToast('Call ended');cleanupCall();});
-callClose?.addEventListener('click',()=>{if(activeCallPeer)socket.emit('call-end',{to:activeCallPeer});else socket.emit('call-end',{});cleanupCall();});endCallBtn?.addEventListener('click',()=>{if(activeCallPeer)socket.emit('call-end',{to:activeCallPeer});else socket.emit('call-end',{});cleanupCall();});muteCallBtn?.addEventListener('click',()=>{const t=localCallStream?.getAudioTracks?.()[0];if(t){t.enabled=!t.enabled;muteCallBtn.textContent=t.enabled?'🎤 Mute':'🔇 Unmute';}});speakerCallBtn?.addEventListener('click',()=>{speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker'});
-
+// WebRTC-ready call UI; actual media call can be wired to a signaling provider later.
+function startCall(video=false){if(!currentGroupId)return; document.getElementById('callTitle').textContent=video?'Video call':'Voice call';document.getElementById('callState').textContent='Calling…';document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();callModal?.classList.remove('hidden');}
+document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));callClose?.addEventListener('click',()=>callModal.classList.add('hidden'));endCallBtn?.addEventListener('click',()=>{callModal.classList.add('hidden');showToast('Call ended')});muteCallBtn?.addEventListener('click',()=>{muteCallBtn.textContent=muteCallBtn.textContent.includes('Mute')?'🔇 Unmute':'🎤 Mute'});speakerCallBtn?.addEventListener('click',()=>{speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker'});
 // Voice recorder
 let mediaRecorder=null, voiceChunks=[];
 async function startVoice(){ try{const stream=await navigator.mediaDevices.getUserMedia({audio:true}); voiceChunks=[];mediaRecorder=new MediaRecorder(stream);mediaRecorder.ondataavailable=e=>{if(e.data.size)voiceChunks.push(e.data)};mediaRecorder.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(voiceChunks,{type:mediaRecorder.mimeType||'audio/webm'});const file=new File([blob],`voice-${Date.now()}.webm`,{type:blob.type});await uploadMedia(file)};mediaRecorder.start();micBtn.classList.add('recording');showToast('Recording… click 🎤 again to stop');}catch(e){showToast('Microphone permission denied')}}
@@ -1370,11 +1336,3 @@ const micBtn=document.getElementById('micBtn'); micBtn?.addEventListener('click'
 // Allow selecting a locked group only after PIN.
 const oldOpenGroup=openGroup; openGroup=async function(group){const g=advState[group?.id||''];if(g?.locked){currentGroupId=group.id;groupName=group.name; if(!requireUnlock())return;} return oldOpenGroup(group);};
 updateAdvancedTools();
-
-/* ===== Status + Settings ===== */
-const statusModal=document.getElementById('statusModal'), statusText=document.getElementById('statusText'), statusList=document.getElementById('statusList');
-const settingsModal=document.getElementById('settingsModal');
-function loadStatuses(){ const all=JSON.parse(localStorage.getItem('wa_statuses')||'[]').filter(x=>Date.now()-x.createdAt<86400000); localStorage.setItem('wa_statuses',JSON.stringify(all)); statusList.innerHTML=''; all.slice().reverse().forEach(x=>{const d=document.createElement('div');d.className='status-item';d.innerHTML=`<strong></strong><small></small><p></p>`;d.querySelector('strong').textContent=x.user;d.querySelector('small').textContent=new Date(x.createdAt).toLocaleString();d.querySelector('p').textContent=x.text;statusList.appendChild(d);});}
-statusBtn?.addEventListener('click',()=>{loadStatuses();statusModal.classList.remove('hidden');}); document.getElementById('statusClose')?.addEventListener('click',()=>statusModal.classList.add('hidden')); document.getElementById('postStatusBtn')?.addEventListener('click',()=>{const text=statusText.value.trim();if(!text)return;const all=JSON.parse(localStorage.getItem('wa_statuses')||'[]');all.push({id:id(),user:name,text,createdAt:Date.now()});localStorage.setItem('wa_statuses',JSON.stringify(all));statusText.value='';loadStatuses();showToast('Status posted for 24 hours');});
-function applySettings(){const fs=localStorage.getItem('wa_font_size')||'normal';document.body.dataset.fontSize=fs;document.getElementById('fontSizeSetting')&&(document.getElementById('fontSizeSetting').value=fs);document.getElementById('settingsNotifyBtn').textContent=Notification?.permission==='granted'?'Allowed':'Allow';document.getElementById('settingsSoundBtn').textContent=localStorage.getItem('wa_sound')==='off'?'Off':'On';}
-document.getElementById('settingsBtn')?.addEventListener('click',()=>{applySettings();settingsModal.classList.remove('hidden')});document.getElementById('settingsClose')?.addEventListener('click',()=>settingsModal.classList.add('hidden'));document.getElementById('settingsDoneBtn')?.addEventListener('click',()=>settingsModal.classList.add('hidden'));document.getElementById('settingsThemeBtn')?.addEventListener('click',()=>{document.body.classList.toggle('dark-mode');localStorage.setItem('wa_theme',document.body.classList.contains('dark-mode')?'dark':'light')});document.getElementById('settingsNotifyBtn')?.addEventListener('click',async()=>{if('Notification' in window){try{await Notification.requestPermission();applySettings();}catch(_){}}});document.getElementById('fontSizeSetting')?.addEventListener('change',e=>{localStorage.setItem('wa_font_size',e.target.value);applySettings()});document.getElementById('settingsSoundBtn')?.addEventListener('click',e=>{const off=localStorage.getItem('wa_sound')!=='off';localStorage.setItem('wa_sound',off?'off':'on');e.target.textContent=off?'Off':'On'});applySettings();
