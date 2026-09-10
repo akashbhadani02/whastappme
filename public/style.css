@@ -133,3 +133,36 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 .call-stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0;max-height:46vh;overflow:auto}.call-video-wrap{position:relative;background:#111;border-radius:10px;overflow:hidden;min-height:120px}.call-video-wrap video{width:100%;height:100%;min-height:120px;object-fit:cover;display:block}.call-video-wrap span{position:absolute;left:7px;bottom:7px;background:rgba(0,0,0,.6);color:#fff;padding:3px 7px;border-radius:10px;font-size:11px}.call-actions{flex-wrap:wrap}.call-actions .primary-btn{background:#00a884;color:#fff;border:0;border-radius:20px;padding:10px 14px}.call-actions .hidden{display:none!important}@media(max-width:760px){.call-card{width:min(94vw,430px);max-height:88vh;overflow:auto}.call-stage{grid-template-columns:1fr 1fr;max-height:45vh}.call-actions button{min-height:42px}}
 
 .call-actions #cameraCallBtn{background:#eef2f3;color:#111}.call-actions #cameraCallBtn.hidden{display:none!important}
+
+
+/* Desktop cleanup: hide chat-level Lock/Archive/Mute/Unread tools. */
+@media (min-width: 761px){
+  .chat-tools{display:none!important;}
+}
+
+/* Message menu: keep the complete menu inside the viewport on desktop/mobile. */
+.message{overflow:visible;}
+.message-menu{
+  max-width:min(230px, calc(100vw - 24px));
+  max-height:min(70vh, 520px);
+  overflow-y:auto;
+  overflow-x:hidden;
+  box-sizing:border-box;
+}
+@media (max-width:760px){
+  .message-menu{
+    right:4px;
+    left:auto;
+    top:30px;
+    min-width:170px;
+    max-width:calc(100vw - 32px);
+    max-height:55vh;
+  }
+}
+@media (min-width:761px){
+  .message-menu{
+    right:6px;
+    top:28px;
+    min-width:170px;
+  }
+}
