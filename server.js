@@ -849,6 +849,25 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // WebRTC signaling: peers in the same group can establish direct audio/video calls.
+  socket.on('call-offer', (data) => {
+    if (!data || !data.offer || !socket.groupId) return;
+    socket.to(normalizeGroupId(socket.groupId)).emit('call-offer', { from: socket.userId || socket.id, name: String(data.name || '').slice(0,60), video: !!data.video, offer: data.offer });
+  });
+  socket.on('call-answer', (data) => {
+    if (!data || !data.answer || !data.to) return;
+    for (const [, peer] of io.sockets.sockets) if (peer.userId === String(data.to) || peer.id === String(data.to)) peer.emit('call-answer', { from: socket.userId || socket.id, answer: data.answer });
+  });
+  socket.on('call-ice', (data) => {
+    if (!data || !data.candidate || !data.to) return;
+    for (const [, peer] of io.sockets.sockets) if (peer.userId === String(data.to) || peer.id === String(data.to)) peer.emit('call-ice', { from: socket.userId || socket.id, candidate: data.candidate });
+  });
+  socket.on('call-end', (data) => {
+    const payload = { from: socket.userId || socket.id };
+    if (data?.to) { for (const [, peer] of io.sockets.sockets) if (peer.userId === String(data.to) || peer.id === String(data.to)) peer.emit('call-end', payload); }
+    else socket.to(normalizeGroupId(socket.groupId)).emit('call-end', payload);
+  });
+
   socket.on('typing', (data) => {
     if (!data || !socket.groupId || normalizeGroupId(data.groupId) !== normalizeGroupId(socket.groupId)) return;
     io.emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });

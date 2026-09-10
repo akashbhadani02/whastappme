@@ -15,7 +15,7 @@
       <div class="sidebar-top">
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
-          <button class="icon-btn" id="statusBtn" title="Status">◉</button>
+          <button class="icon-btn" id="statusBtn" title="Status">◉</button><button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
           <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
@@ -157,7 +157,11 @@
   <div class="modal hidden" id="forwardModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="forwardClose">×</button><div class="lock-icon">↗️</div><h3>Forward message</h3><p>Select a group to forward this message.</p><div id="forwardGroups" class="admin-groups-list"></div></div></div>
   <div class="modal hidden" id="messageInfoModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="messageInfoClose">×</button><div class="lock-icon">ℹ️</div><h3>Message info</h3><div id="messageInfoBody" class="info-body"></div></div></div>
   <div class="modal hidden" id="callModal" role="dialog" aria-modal="true"><div class="modal-card call-card"><button class="modal-close" id="callClose">×</button><div class="call-avatar" id="callAvatar">W</div><h3 id="callTitle">Calling</h3><p id="callState">Calling…</p><div class="call-actions"><button id="muteCallBtn">🎤 Mute</button><button id="speakerCallBtn">🔊 Speaker</button><button id="endCallBtn" class="danger-btn">📞 End</button></div></div></div>
-  <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button></div>
+  <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button><button id="recycleBinBtn">♻️ Recycle</button></div>
+
+  <div class="modal hidden" id="recycleModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="recycleClose">×</button><div class="lock-icon">♻️</div><h3>Recycle Bin</h3><p>Deleted messages are kept on this device until permanently removed.</p><div id="recycleList" class="status-list"></div><button class="primary-btn" id="emptyRecycleBtn">Empty Recycle Bin</button></div></div>
+  <div class="modal hidden" id="statusModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="statusClose">×</button><div class="lock-icon">◉</div><h3>Status / Stories</h3><p>Post a text status that automatically expires after 24 hours.</p><textarea id="statusText" maxlength="500" placeholder="What is on your mind?"></textarea><button class="primary-btn" id="postStatusBtn">Post status</button><div id="statusList" class="status-list"></div></div></div>
+  <div class="modal hidden" id="settingsModal" role="dialog" aria-modal="true"><div class="modal-card settings-card"><button class="modal-close" id="settingsClose">×</button><div class="lock-icon">⚙️</div><h3>Settings</h3><div class="settings-row"><span>Dark mode</span><button class="mini-btn" id="settingsThemeBtn">Toggle</button></div><div class="settings-row"><span>Notifications</span><button class="mini-btn" id="settingsNotifyBtn">Allow</button></div><div class="settings-row"><span>Chat font size</span><select id="fontSizeSetting"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></div><div class="settings-row"><span>Sound</span><button class="mini-btn" id="settingsSoundBtn">On</button></div><button class="primary-btn" id="settingsDoneBtn">Done</button></div></div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
