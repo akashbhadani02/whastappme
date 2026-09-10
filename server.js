@@ -777,6 +777,47 @@ io.on('connection', async (socket) => {
     }
   });
 
+  socket.on('delete-messages', async (data, ack) => {
+    const ids = Array.isArray(data?.ids)
+      ? [...new Set(data.ids.map(id => String(id || '').trim()).filter(Boolean))].slice(0, 500)
+      : [];
+    if (!ids.length) {
+      if (typeof ack === 'function') ack({ ok: true, count: 0 });
+      return;
+    }
+
+    const groupId = normalizeGroupId(socket.groupId);
+    try {
+      const collection = await getCollection();
+      if (collection) {
+        const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+        const existing = await collection.find(
+          { $and: [groupFilter, { id: { $in: ids } }] },
+          { projection: { id: 1, mediaId: 1 } }
+        ).toArray();
+
+        await collection.deleteMany({ $and: [groupFilter, { id: { $in: ids } }] });
+
+        if (existing.length) {
+          const bucket = await getMediaBucket();
+          for (const item of existing) {
+            if (item.mediaId) {
+              try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
+            }
+          }
+        }
+      }
+
+      const event = { ids, groupId };
+      io.emit('delete-messages', event);
+      publishRealtimeEvent('delete-messages', event);
+      if (typeof ack === 'function') ack({ ok: true, count: ids.length });
+    } catch (error) {
+      console.error('Failed to delete multiple messages:', error.message);
+      if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
   socket.on('message-read', async (data) => {
     if (!data || !data.id || !data.userId) return;
     const readerId = String(data.userId);

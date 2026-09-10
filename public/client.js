@@ -21,6 +21,8 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
 let groupPasswordTarget = null;
+let selectionMode = false;
+const selectedMessageIds = new Set();
 while (!name) {
   name = (prompt('Please enter your name:') || '').trim();
 }
@@ -55,6 +57,11 @@ const attachBtn = document.querySelector('#attachBtn');
 const emojiBtn = document.querySelector('#emojiBtn');
 const emojiPanel = document.querySelector('#emojiPanel');
 const clearChatBtn = document.querySelector('#clearChatBtn');
+const selectionActions = document.querySelector('#selectionActions');
+const selectionCount = document.querySelector('#selectionCount');
+const cancelSelectionBtn = document.querySelector('#cancelSelectionBtn');
+const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
+const normalHeaderActions = document.querySelector('#normalHeaderActions');
 const passwordModal = document.querySelector('#passwordModal');
 const passwordInput = document.querySelector('#passwordInput');
 const passwordSubmit = document.querySelector('#passwordSubmit');
@@ -314,6 +321,41 @@ textarea.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey
 textarea.addEventListener('input', autoResize);
 function autoResize() { textarea.style.height='auto'; textarea.style.height=Math.min(textarea.scrollHeight,120)+'px'; }
 
+
+function updateSelectionUI() {
+  if (!selectionActions) return;
+  selectionCount.textContent = `${selectedMessageIds.size} selected`;
+  selectionActions.classList.toggle('hidden', !selectionMode);
+  normalHeaderActions?.classList.toggle('hidden', selectionMode);
+  document.querySelectorAll('.message').forEach(el => {
+    el.classList.toggle('selected', selectedMessageIds.has(el.dataset.id));
+  });
+}
+function enterSelectionMode(messageId) {
+  selectionMode = true;
+  selectedMessageIds.clear();
+  if (messageId) selectedMessageIds.add(String(messageId));
+  updateSelectionUI();
+}
+function toggleMessageSelection(messageId) {
+  const id = String(messageId);
+  if (selectedMessageIds.has(id)) selectedMessageIds.delete(id);
+  else selectedMessageIds.add(id);
+  if (!selectedMessageIds.size) selectionMode = false;
+  updateSelectionUI();
+}
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedMessageIds.clear();
+  updateSelectionUI();
+}
+cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
+deleteSelectedBtn?.addEventListener('click', () => {
+  if (!selectedMessageIds.size) return;
+  const ids = Array.from(selectedMessageIds);
+  requestPassword('Delete selected messages', `Enter password to permanently delete ${ids.length} selected message${ids.length === 1 ? '' : 's'}.`, () => deleteMessages(ids));
+});
+
 function renderMessage(msg, direction) {
   if (!msg || !msg.id || deletedIds.has(msg.id) || messages.has(msg.id)) return;
   if (msg.createdAt) {
@@ -328,6 +370,12 @@ function renderMessage(msg, direction) {
   const el = document.createElement('div');
   el.className = `message ${direction}`;
   el.dataset.id = msg.id;
+
+  el.addEventListener('click', (e) => {
+    if (!selectionMode) return;
+    if (e.target.closest('.message-menu, .message-more, button, video, a')) return;
+    toggleMessageSelection(msg.id);
+  });
 
   if (msg.user && direction === 'incoming') {
     const sender = document.createElement('div'); sender.className='sender'; sender.textContent=msg.user; el.appendChild(sender);
@@ -365,6 +413,14 @@ function renderMessage(msg, direction) {
 
   const more=document.createElement('button'); more.className='message-more'; more.textContent='⌄'; more.title='Message options';
   const menu=document.createElement('div'); menu.className='message-menu';
+  const select=document.createElement('button'); select.textContent='Select message';
+  select.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    menu.classList.remove('open');
+    enterSelectionMode(msg.id);
+  });
+  menu.appendChild(select);
+
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
@@ -382,13 +438,34 @@ function renderMessage(msg, direction) {
 document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')));
 
 function deleteMessage(messageId, broadcast=true) {
-  const el=document.querySelector(`.message[data-id="${CSS.escape(messageId)}"]`);
+  const id = String(messageId);
+  const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
   if (el) el.remove();
-  messages.delete(messageId);
-  deletedIds.add(messageId);
+  messages.delete(id);
+  deletedIds.add(id);
+  selectedMessageIds.delete(id);
   saveLocalMessageHistory();
-  if (broadcast) socket.emit('delete-message', {id:messageId}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+  if (broadcast) socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+  updateSelectionUI();
   updatePreview('Message deleted');
+}
+
+function deleteMessages(messageIds, broadcast=true) {
+  const ids = Array.from(new Set(messageIds.map(String))).filter(id => messages.has(id) || document.querySelector(`.message[data-id="${CSS.escape(id)}"]`));
+  if (!ids.length) { exitSelectionMode(); return; }
+  ids.forEach(id => {
+    const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
+    if (el) el.remove();
+    messages.delete(id);
+    deletedIds.add(id);
+    selectedMessageIds.delete(id);
+  });
+  saveLocalMessageHistory();
+  exitSelectionMode();
+  updatePreview(ids.length === 1 ? 'Message deleted' : `${ids.length} messages deleted`);
+  if (broadcast) socket.emit('delete-messages', {ids}, (result) => {
+    if (!result || !result.ok) showToast('Delete could not be synced');
+  });
 }
 
 function clearChat(broadcast=true) {
@@ -816,6 +893,10 @@ socket.on('user-renamed', data => {
   });
 });
 socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
+socket.on('delete-messages', data => {
+  if (!data || !Array.isArray(data.ids) || (data.groupId && data.groupId !== currentGroupId)) return;
+  deleteMessages(data.ids, false);
+});
 socket.on('clear-chat', data => { if (data && data.groupId && data.groupId !== currentGroupId) return; clearChat(false); showToast('Chat was cleared'); });
 let disconnectTimer = null;
 function setOnlineStatus(state) {

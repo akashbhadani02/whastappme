@@ -53,7 +53,12 @@
           <strong id="groupNameHeader">WhatsApp</strong>
           <span id="onlineStatus">online</span>
         </div>
-        <div class="header-actions">
+        <div class="selection-actions hidden" id="selectionActions">
+          <span id="selectionCount">0 selected</span>
+          <button class="icon-btn" id="cancelSelectionBtn" title="Cancel">×</button>
+          <button class="icon-btn danger-icon" id="deleteSelectedBtn" title="Delete selected">🗑</button>
+        </div>
+        <div class="header-actions" id="normalHeaderActions">
           <button class="icon-btn" id="chatSearchBtn" title="Search">⌕</button>
           <button class="icon-btn" id="clearChatBtn" title="Clear chat">⋮</button>
         </div>
