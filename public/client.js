@@ -1313,7 +1313,7 @@ const advState = JSON.parse(localStorage.getItem('wa_adv_state') || '{}');
 function saveAdv(){ localStorage.setItem('wa_adv_state', JSON.stringify(advState)); }
 function groupAdv(){ advState[currentGroupId] ||= {archived:false,muted:false,unread:false,locked:false}; return advState[currentGroupId]; }
 const messageInfoModal=document.querySelector('#messageInfoModal'), messageInfoBody=document.querySelector('#messageInfoBody'), messageInfoClose=document.querySelector('#messageInfoClose');
-const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn');
+const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn'), cameraCallBtn=document.querySelector('#cameraCallBtn');
 const chatTools=document.querySelector('#chatTools');
 function showMessageInfo(msg){ if(!messageInfoModal) return; const delivered=Array.isArray(msg.deliveredTo)?msg.deliveredTo.length:0, read=Array.isArray(msg.readBy)?msg.readBy.length:0; messageInfoBody.innerHTML=''; [['Message',msg.message||msg.fileName||msg.type||'Media'],['Sent',msg.time||''],['Delivered',String(delivered)],['Read',String(read)],['Edited',msg.edited?'Yes':'No'],['Forwarded',msg.forwarded?'Yes':'No']].forEach(([a,b])=>{const row=document.createElement('div');row.className='info-row';row.innerHTML='<b></b><span></span>';row.children[0].textContent=a;row.children[1].textContent=b;messageInfoBody.appendChild(row)}); messageInfoModal.classList.remove('hidden');}
 messageInfoClose?.addEventListener('click',()=>messageInfoModal.classList.add('hidden')); messageInfoModal?.addEventListener('click',e=>{if(e.target===messageInfoModal)messageInfoModal.classList.add('hidden')});
@@ -1459,15 +1459,17 @@ callPollTimer=setInterval(pollCallEvents,700);
 async function startCall(video=false){
   if(!currentGroupId || activeCall)return;
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    // Video calls start with microphone only. The camera is NOT opened until
+    // the user explicitly turns it on with the camera button.
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false};
     clearCallStage();
-    if(video) callStageAddVideo('local',stream,'You',true);
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('invite',callId,{callType:activeCall.type});
-  }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera/microphone permission denied':'Could not start call'); }
+  }catch(e){ showToast(e?.name==='NotAllowedError'?'Microphone permission denied':'Could not start call'); }
 }
 
 async function acceptIncomingCall(){
@@ -1475,15 +1477,16 @@ async function acceptIncomingCall(){
   const inc=incomingCall; incomingCall=null;
   try{
     const video=inc.payload?.callType==='video';
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false};
-    clearCallStage(); if(video) callStageAddVideo('local',stream,'You',true);
+    // Even an incoming video call starts with camera OFF. Only microphone is requested.
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false};
+    clearCallStage();
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Connecting…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
-    // Deterministic initiator: lower userId creates the offer when both are present.
     await createPeer(inc.fromUserId,inc.fromName||'Member',String(userId)<String(inc.fromUserId));
-  }catch(e){ showToast('Microphone/camera permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
+  }catch(e){ showToast('Microphone permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
 }
 
 async function finishCall(notify=true,message='Call ended'){
@@ -1494,7 +1497,7 @@ async function finishCall(notify=true,message='Call ended'){
     call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
   }
   peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
-  activeCall=null; incomingCall=null; clearCallStage(); closeCallModal();
+  activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera Off';} closeCallModal();
   if(message) showToast(message);
 }
 
@@ -1503,6 +1506,41 @@ endCallBtn?.addEventListener('click',()=>{ if(incomingCall){const inc=incomingCa
 muteCallBtn?.addEventListener('click',()=>{if(!activeCall?.stream)return;const track=activeCall.stream.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;muteCallBtn.textContent=track.enabled?'🎤 Mute':'🔇 Unmute';});
 speakerCallBtn?.addEventListener('click',()=>{document.querySelectorAll('#callStage video').forEach(v=>{v.muted=!v.muted});speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker';});
 
+async function toggleCallCamera(){
+  if(!activeCall || activeCall.type!=='video') return;
+  try{
+    if(!activeCall.cameraOn){
+      const camStream=await navigator.mediaDevices.getUserMedia({video:true});
+      const camTrack=camStream.getVideoTracks()[0];
+      activeCall.stream.addTrack(camTrack);
+      activeCall.cameraOn=true;
+      callStageAddVideo('local',activeCall.stream,'You',true);
+      if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera On';
+      // Add the new video track to every active peer and renegotiate.
+      for(const [rid,pc] of peerConnections){
+        const sender=pc.getSenders().find(s=>s.track?.kind==='video');
+        if(sender) await sender.replaceTrack(camTrack);
+        else pc.addTrack(camTrack,activeCall.stream);
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+        await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
+      }
+    }else{
+      const track=activeCall.stream.getVideoTracks()[0];
+      if(track){track.stop(); activeCall.stream.removeTrack(track);}
+      activeCall.cameraOn=false;
+      document.getElementById('call-video-local')?.remove();
+      if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera Off';
+      for(const [rid,pc] of peerConnections){
+        const sender=pc.getSenders().find(s=>s.track?.kind==='video');
+        if(sender) await sender.replaceTrack(null);
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+        await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
+      }
+    }
+  }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Could not change camera state'); }
+}
+
+cameraCallBtn?.addEventListener('click',toggleCallCamera);
 document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));
 document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));
 
