@@ -482,12 +482,67 @@ function renderMessage(msg, direction) {
   const infoBtn=document.createElement('button'); infoBtn.textContent='ℹ Message info'; infoBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');showMessageInfo(msg);}; menu.appendChild(infoBtn);
 
   const del=document.createElement('button'); del.textContent='Delete message';
-  del.addEventListener('click', () => {
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
     menu.classList.remove('open');
     requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id));
   });
-  menu.appendChild(del); el.appendChild(menu);
-  more.addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')); menu.classList.toggle('open'); });
+  menu.appendChild(del);
+
+  // Keep message menus out of the chat/sidebar clipping area.
+  // The menu is temporarily rendered as a fixed layer and positioned from
+  // the message-more button, then clamped inside the viewport.
+  menu.classList.add('message-menu-layer');
+  document.body.appendChild(menu);
+
+  function closeMessageMenu() {
+    menu.classList.remove('open');
+    menu.style.left = '';
+    menu.style.top = '';
+  }
+
+  function positionMessageMenu() {
+    menu.classList.add('open');
+    menu.style.position = 'fixed';
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+
+    const anchor = more.getBoundingClientRect();
+    const rect = menu.getBoundingClientRect();
+    const gap = 8;
+    const margin = 8;
+
+    // Incoming: open to the right of the message.
+    // Outgoing: open to the left of the message.
+    let left = el.classList.contains('incoming')
+      ? anchor.right + gap
+      : anchor.left - rect.width - gap;
+
+    // Always keep the complete menu inside the viewport.
+    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+
+    let top = anchor.bottom + gap;
+    if (top + rect.height > window.innerHeight - margin) {
+      top = anchor.top - rect.height - gap;
+    }
+    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.visibility = 'visible';
+  }
+
+  more.addEventListener('click', e => {
+    e.stopPropagation();
+    document.querySelectorAll('.message-menu.open').forEach(x => {
+      x.classList.remove('open');
+      x.style.left = '';
+      x.style.top = '';
+    });
+    if (menu.classList.contains('open')) closeMessageMenu();
+    else positionMessageMenu();
+  });
   el.appendChild(more);
 
   messageArea.appendChild(el);
@@ -495,7 +550,21 @@ function renderMessage(msg, direction) {
   scrollToBottom();
 }
 
-document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')));
+document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x => {
+  x.classList.remove('open');
+  x.style.left = '';
+  x.style.top = '';
+}));
+window.addEventListener('resize', () => document.querySelectorAll('.message-menu.open').forEach(x => {
+  x.classList.remove('open');
+  x.style.left = '';
+  x.style.top = '';
+}));
+document.addEventListener('scroll', () => document.querySelectorAll('.message-menu.open').forEach(x => {
+  x.classList.remove('open');
+  x.style.left = '';
+  x.style.top = '';
+}), true);
 
 function toggleStar(msg){ const id=String(msg.id); const next=!starredIds.has(id); if(next) starredIds.add(id); else starredIds.delete(id); saveMessageFlags(); msg.starred=next; updateMessageElement(msg); emitAck('update-message',{id,starred:next},10000,1); }
 function togglePin(msg){ const id=String(msg.id); const next=!pinnedIds.has(id); if(next) pinnedIds.add(id); else pinnedIds.delete(id); saveMessageFlags(); msg.pinned=next; updateMessageElement(msg); emitAck('update-message',{id,pinned:next},10000,1); showToast(next?'Message pinned':'Message unpinned'); }
