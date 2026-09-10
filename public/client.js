@@ -437,7 +437,7 @@ function renderMessage(msg, direction) {
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file', msg.type === 'audio' ? 'Enter the password to download this audio/voice message.' : 'Enter password to download this file.', () => downloadMedia(msg), 'download'); });
+    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
     actions.appendChild(download);
     content.appendChild(wrap); content.appendChild(actions);
   } else {
