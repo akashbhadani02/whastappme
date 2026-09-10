@@ -431,20 +431,18 @@ function renderMessage(msg, direction) {
       const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.setAttribute('controlsList','nodownload'); video.disablePictureInPicture=true; video.addEventListener('contextmenu', e => e.preventDefault());
       const source=document.createElement('source'); source.src=mediaUrl; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
     } else if (msg.type === 'audio') {
-      const audio=document.createElement('audio'); audio.controls=true; audio.preload='metadata'; audio.src=mediaUrl; wrap.appendChild(audio);
+      const audio=document.createElement('audio'); audio.controls=true; audio.preload='metadata'; audio.setAttribute('controlsList','nodownload'); audio.setAttribute('disableRemotePlayback',''); audio.addEventListener('contextmenu', e => e.preventDefault()); audio.src=mediaUrl; wrap.appendChild(audio);
     } else {
       const doc=document.createElement('div'); doc.className='document-bubble'; doc.innerHTML='<span class="doc-icon">📄</span><span class="doc-name"></span>'; doc.querySelector('.doc-name').textContent=msg.fileName || 'Document'; wrap.appendChild(doc);
     }
-    // Audio/voice messages are playback-only: do not show a Download button.
-    // Other media keeps the password-protected Download action.
+    content.appendChild(wrap);
+    // Voice/audio messages are playback-only: no download action is rendered.
     if (msg.type !== 'audio') {
       const actions=document.createElement('div'); actions.className='media-actions';
       const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
       download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
       actions.appendChild(download);
-      content.appendChild(wrap); content.appendChild(actions);
-    } else {
-      content.appendChild(wrap);
+      content.appendChild(actions);
     }
   } else {
     const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);

@@ -87,8 +87,7 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 }
 
 
-/* Mobile media download visibility: keep the Download control below media and
-   prevent the floated timestamp from squeezing or covering it. */
+/* Media download controls are for non-audio media only. Voice messages are playback-only. */
 .media-actions{clear:both;position:relative;z-index:30;display:flex;flex-wrap:wrap;width:100%;}
 .media-actions .mini-btn{position:relative;z-index:31;white-space:nowrap;}
 @media(max-width:760px){
