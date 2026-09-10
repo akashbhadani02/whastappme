@@ -1330,9 +1330,182 @@ let typingTimer=null, typingActive=false;
 function sendTyping(active){ if(!socket.connected)return; socket.emit('typing',{groupId:currentGroupId,userId,name,active}); }
 textarea?.addEventListener('input',()=>{if(!typingActive){typingActive=true;sendTyping(true)};clearTimeout(typingTimer);typingTimer=setTimeout(()=>{typingActive=false;sendTyping(false)},900)});
 socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)return; if(d.active){typingBar.textContent=`${d.name||'Someone'} is typing…`;typingBar.classList.add('show')}else typingBar.classList.remove('show')});
-// WebRTC-ready call UI; actual media call can be wired to a signaling provider later.
-function startCall(video=false){if(!currentGroupId)return; document.getElementById('callTitle').textContent=video?'Video call':'Voice call';document.getElementById('callState').textContent='Calling…';document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();callModal?.classList.remove('hidden');}
-document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));callClose?.addEventListener('click',()=>callModal.classList.add('hidden'));endCallBtn?.addEventListener('click',()=>{callModal.classList.add('hidden');showToast('Call ended')});muteCallBtn?.addEventListener('click',()=>{muteCallBtn.textContent=muteCallBtn.textContent.includes('Mute')?'🔇 Unmute':'🎤 Mute'});speakerCallBtn?.addEventListener('click',()=>{speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker'});
+// ===== Real group Audio / Video calling =====
+// Media is WebRTC peer-to-peer. REST signaling is used as a reliable fallback for
+// Vercel/serverless deployments, while Socket.IO accelerates signaling when available.
+let activeCall = null;
+let incomingCall = null;
+let callPollTimer = null;
+let callPollSince = new Date(Date.now() - 3000).toISOString();
+const peerConnections = new Map();
+const RTC_CONFIG = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+]};
+
+function ensureCallMediaUI(){
+  if (!callModal) return;
+  let stage = document.getElementById('callStage');
+  if (!stage) {
+    stage = document.createElement('div'); stage.id='callStage'; stage.className='call-stage';
+    const card = callModal.querySelector('.call-card');
+    card?.insertBefore(stage, card.querySelector('.call-actions'));
+  }
+}
+ensureCallMediaUI();
+
+function callEventBody(type, callId, payload={}, toUserId='') {
+  return { groupId: currentGroupId, callId, type, fromUserId:userId, fromName:name, toUserId, payload };
+}
+async function sendCallEvent(type, callId, payload={}, toUserId='') {
+  const body=callEventBody(type,callId,payload,toUserId);
+  try {
+    const r=await fetch('/api/calls/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});
+    if(!r.ok) throw new Error('call event failed');
+  } catch(e) { console.warn('Call REST signaling failed',e); }
+  if (socket.connected) socket.emit('call-event', body);
+}
+
+function callStageAddVideo(id, stream, label, muted=false){
+  ensureCallMediaUI();
+  const stage=document.getElementById('callStage'); if(!stage)return;
+  let wrap=document.getElementById(`call-video-${CSS.escape(id)}`);
+  if(!wrap){
+    wrap=document.createElement('div'); wrap.className='call-video-wrap'; wrap.id=`call-video-${id.replace(/[^a-zA-Z0-9_-]/g,'_')}`;
+    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=muted; v.srcObject=stream;
+    const cap=document.createElement('span'); cap.textContent=label||'Participant'; wrap.append(v,cap); stage.appendChild(wrap);
+  } else { const v=wrap.querySelector('video'); if(v)v.srcObject=stream; }
+}
+function clearCallStage(){ const stage=document.getElementById('callStage'); if(stage)stage.innerHTML=''; }
+function showCallModal(title,state){
+  document.getElementById('callTitle').textContent=title;
+  document.getElementById('callState').textContent=state;
+  document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();
+  callModal?.classList.remove('hidden');
+}
+function closeCallModal(){ callModal?.classList.add('hidden'); const b=document.getElementById('acceptCallBtn'); if(b)b.classList.add('hidden'); }
+
+async function createPeer(remoteId, remoteName, initiator){
+  if(!activeCall || activeCall.ended || remoteId===userId) return;
+  let pc=peerConnections.get(remoteId);
+  if(pc) return pc;
+  pc=new RTCPeerConnection(RTC_CONFIG); peerConnections.set(remoteId,pc);
+  if(activeCall.stream) activeCall.stream.getTracks().forEach(t=>pc.addTrack(t,activeCall.stream));
+  pc.onicecandidate=e=>{ if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId); };
+  pc.ontrack=e=>{ const stream=e.streams?.[0]; if(stream) callStageAddVideo(remoteId,stream,remoteName, false); };
+  pc.onconnectionstatechange=()=>{ if(['failed','closed'].includes(pc.connectionState)){ try{pc.close()}catch(_){} peerConnections.delete(remoteId); } };
+  if(initiator){
+    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+    await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+  }
+  return pc;
+}
+
+async function handleCallEvent(e){
+  if(!e || !e.callId || e.groupId!==currentGroupId) return;
+  // Ignore old calls after the user has moved to another call.
+  if(e.type==='invite'){
+    if(e.fromUserId===userId) return;
+    if(activeCall && activeCall.id===e.callId) return;
+    if(activeCall) return;
+    incomingCall=e;
+    showCallModal(`${e.fromName||'Group'} is calling`, e.payload?.callType==='video'?'Incoming video call':'Incoming audio call');
+    const title=document.getElementById('callTitle');
+    if(title) title.textContent=`${e.fromName||'Someone'} — ${e.payload?.callType==='video'?'Video':'Audio'} call`;
+    document.getElementById('callState').textContent='Tap End to reject, or close the call popup after accepting.';
+    document.getElementById('endCallBtn').textContent='✖ Reject';
+    let acceptBtn=document.getElementById('acceptCallBtn'); if(!acceptBtn){ acceptBtn=document.createElement('button'); acceptBtn.id='acceptCallBtn'; acceptBtn.className='primary-btn'; acceptBtn.textContent='✅ Accept'; const actions=document.querySelector('#callModal .call-actions'); actions?.insertBefore(acceptBtn, actions.firstChild); } acceptBtn.classList.remove('hidden'); acceptBtn.onclick=()=>{acceptBtn.classList.add('hidden'); acceptIncomingCall();};
+    return;
+  }
+  if(!activeCall || activeCall.id!==e.callId) return;
+  if(e.type==='join'){
+    const rid=e.fromUserId; if(rid===userId)return;
+    activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+    // Only one side creates the offer, preventing duplicate negotiations.
+    const initiator=String(userId)<String(rid);
+    await createPeer(rid,e.fromName||'Member',initiator);
+    document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
+  } else if(e.type==='offer' && e.toUserId===userId){
+    const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+    const pc=await createPeer(rid,e.fromName||'Member',false);
+    await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+    const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
+    await sendCallEvent('answer',activeCall.id,{description:pc.localDescription},rid);
+  } else if(e.type==='answer' && e.toUserId===userId){
+    const pc=peerConnections.get(e.fromUserId); if(pc) await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+  } else if(e.type==='ice' && e.toUserId===userId){
+    const pc=peerConnections.get(e.fromUserId); if(pc && e.payload?.candidate){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
+  } else if(e.type==='leave'){
+    const pc=peerConnections.get(e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromUserId);}
+    document.getElementById(`call-video-${String(e.fromUserId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
+  } else if(e.type==='end'){
+    if(e.fromUserId!==userId) finishCall(false, `${e.fromName||'Member'} ended the call`);
+  }
+}
+
+socket.on('call-event', e=>handleCallEvent(e).catch(err=>console.error('call event',err)));
+async function pollCallEvents(){
+  try{
+    const r=await fetch(`/api/calls/events?groupId=${encodeURIComponent(currentGroupId)}&userId=${encodeURIComponent(userId)}&since=${encodeURIComponent(callPollSince)}`,{cache:'no-store'});
+    if(!r.ok)return; const data=await r.json();
+    if(Array.isArray(data.events)) for(const e of data.events){
+      if(e.createdAt) callPollSince=new Date(e.createdAt).toISOString();
+      await handleCallEvent(e);
+    }
+  }catch(_){}
+}
+callPollTimer=setInterval(pollCallEvents,700);
+
+async function startCall(video=false){
+  if(!currentGroupId || activeCall)return;
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false};
+    clearCallStage();
+    if(video) callStageAddVideo('local',stream,'You',true);
+    showCallModal(video?'Video call':'Audio call','Calling group members…');
+    document.getElementById('endCallBtn').textContent='📞 End';
+    await sendCallEvent('invite',callId,{callType:activeCall.type});
+  }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera/microphone permission denied':'Could not start call'); }
+}
+
+async function acceptIncomingCall(){
+  if(!incomingCall)return;
+  const inc=incomingCall; incomingCall=null;
+  try{
+    const video=inc.payload?.callType==='video';
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video});
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false};
+    clearCallStage(); if(video) callStageAddVideo('local',stream,'You',true);
+    showCallModal(video?'Video call':'Audio call','Connecting…');
+    document.getElementById('endCallBtn').textContent='📞 End';
+    await sendCallEvent('join',activeCall.id,{});
+    // Deterministic initiator: lower userId creates the offer when both are present.
+    await createPeer(inc.fromUserId,inc.fromName||'Member',String(userId)<String(inc.fromUserId));
+  }catch(e){ showToast('Microphone/camera permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
+}
+
+async function finishCall(notify=true,message='Call ended'){
+  const call=activeCall;
+  if(call){
+    if(notify) await sendCallEvent('end',call.id,{});
+    else if(incomingCall) await sendCallEvent('leave',call.id,{});
+    call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
+  }
+  peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
+  activeCall=null; incomingCall=null; clearCallStage(); closeCallModal();
+  if(message) showToast(message);
+}
+
+callClose?.addEventListener('click',()=>{ if(incomingCall){const inc=incomingCall;incomingCall=null;sendCallEvent('leave',inc.callId,{});} else if(activeCall) finishCall(true); else closeCallModal(); });
+endCallBtn?.addEventListener('click',()=>{ if(incomingCall){const inc=incomingCall;incomingCall=null;sendCallEvent('leave',inc.callId,{});closeCallModal();showToast('Call rejected');} else finishCall(true); });
+muteCallBtn?.addEventListener('click',()=>{if(!activeCall?.stream)return;const track=activeCall.stream.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;muteCallBtn.textContent=track.enabled?'🎤 Mute':'🔇 Unmute';});
+speakerCallBtn?.addEventListener('click',()=>{document.querySelectorAll('#callStage video').forEach(v=>{v.muted=!v.muted});speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker';});
+
+document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));
+document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));
+
 // Voice recorder
 let mediaRecorder=null, voiceChunks=[];
 async function startVoice(){ try{const stream=await navigator.mediaDevices.getUserMedia({audio:true}); voiceChunks=[];mediaRecorder=new MediaRecorder(stream);mediaRecorder.ondataavailable=e=>{if(e.data.size)voiceChunks.push(e.data)};mediaRecorder.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(voiceChunks,{type:mediaRecorder.mimeType||'audio/webm'});const file=new File([blob],`voice-${Date.now()}.webm`,{type:blob.type});await uploadMedia(file)};mediaRecorder.start();micBtn.classList.add('recording');showToast('Recording… click 🎤 again to stop');}catch(e){showToast('Microphone permission denied')}}

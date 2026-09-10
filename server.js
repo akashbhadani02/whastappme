@@ -24,6 +24,7 @@ const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
+const CALL_EVENTS_COLLECTION_NAME = 'call_events';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -188,6 +189,65 @@ app.post('/api/push/unsubscribe', async (req, res) => {
     if (db) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ endpoint });
     res.json({ ok: true });
   } catch (error) { res.status(500).json({ ok: false }); }
+});
+
+// ===== WebRTC group-call signaling (REST fallback for Vercel/serverless) =====
+// WebRTC carries the actual audio/video peer-to-peer; these endpoints only relay
+// small signaling messages so every member of the same group can receive a call.
+async function getCallEventsCollection() {
+  const db = await getDb();
+  if (!db) return null;
+  const c = db.collection(CALL_EVENTS_COLLECTION_NAME);
+  try { await c.createIndex({ createdAt: 1 }, { expireAfterSeconds: 7200 }); } catch (_) {}
+  try { await c.createIndex({ groupId: 1, createdAt: 1 }); } catch (_) {}
+  return c;
+}
+
+app.post('/api/calls/event', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const groupId = normalizeGroupId(body.groupId);
+    const type = String(body.type || '').trim();
+    const callId = String(body.callId || '').trim().slice(0, 120);
+    const fromUserId = String(body.fromUserId || '').trim().slice(0, 160);
+    if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
+    const event = {
+      id: crypto.randomUUID(), groupId, callId, type, fromUserId,
+      fromName: String(body.fromName || '').slice(0, 80),
+      toUserId: body.toUserId ? String(body.toUserId).slice(0,160) : '',
+      payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
+      createdAt: new Date()
+    };
+    const collection = await getCallEventsCollection();
+    if (collection) await collection.insertOne(event);
+    // Socket.IO makes it fast on traditional Node hosting; REST polling below
+    // remains the reliable path on Vercel where WebSocket lifetime is limited.
+    io.emit('call-event', event);
+    res.json({ ok:true, eventId:event.id, createdAt:event.createdAt.toISOString() });
+  } catch (error) {
+    console.error('Call event failed:', error.message);
+    res.status(500).json({ ok:false });
+  }
+});
+
+app.get('/api/calls/events', async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.query.groupId);
+    const userId = String(req.query.userId || '').trim();
+    const sinceRaw = String(req.query.since || '');
+    const since = sinceRaw ? new Date(sinceRaw) : new Date(Date.now() - 15000);
+    const safeSince = Number.isNaN(since.getTime()) ? new Date(Date.now() - 15000) : since;
+    const collection = await getCallEventsCollection();
+    if (!collection) return res.json({ ok:true, events:[] });
+    const filter = { groupId, createdAt: { $gt: safeSince } };
+    const events = await collection.find(filter).sort({ createdAt: 1 }).limit(300).toArray();
+    // Do not send targeted SDP/ICE to unrelated users.
+    const visible = events.filter(e => !e.toUserId || e.toUserId === userId || e.fromUserId === userId);
+    res.json({ ok:true, events:visible.map(e => ({...e, _id:undefined})) });
+  } catch (error) {
+    console.error('Call events poll failed:', error.message);
+    res.status(500).json({ ok:false, events:[] });
+  }
 });
 
 app.get('/api/groups', async (req, res) => {
@@ -846,6 +906,20 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
+  // Fast Socket.IO signaling path. REST /api/calls/events is the fallback.
+  socket.on('call-event', (data) => {
+    if (!data || !data.callId || !data.type || !socket.groupId) return;
+    if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
+    const target = data.toUserId ? String(data.toUserId) : '';
+    const payload = { ...data, groupId: normalizeGroupId(socket.groupId), fromUserId: socket.userId || String(data.fromUserId || '') };
+    for (const peer of io.sockets.sockets.values()) {
+      if (peer.id === socket.id) continue;
+      if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
+      if (target && String(peer.userId || '') !== target) continue;
+      peer.emit('call-event', payload);
     }
   });
 
