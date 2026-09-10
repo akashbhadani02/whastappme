@@ -25,6 +25,7 @@ const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const CALL_EVENTS_COLLECTION_NAME = 'call_events';
+const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -388,6 +389,114 @@ app.post('/api/admin/groups', async (req, res) => {
     res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp', password: String(g.password || '') })), persistent: true });
   } catch (error) {
     res.status(500).json({ ok: false });
+  }
+});
+
+
+async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
+  const db = await getDb();
+  if (!db || !Array.isArray(items) || !items.length) return;
+  const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+  const docs = items.map(item => ({
+    originalMessageId: String(item.id),
+    groupId: normalizeGroupId(item.groupId || groupId),
+    deletedAt: new Date(),
+    deleteReason: reason,
+    message: { ...item, _id: undefined },
+  }));
+  // Keep one recycle record per message id. A deleted message should never be
+  // duplicated if a retry reaches the server twice.
+  try { await recycle.createIndex({ originalMessageId: 1 }, { unique: true }); } catch (_) {}
+  for (const doc of docs) {
+    try { await recycle.updateOne({ originalMessageId: doc.originalMessageId }, { $set: doc }, { upsert: true }); } catch (_) {}
+  }
+}
+
+// Admin-only recycle bin. This is intentionally separate from the normal chat
+// UI: only the administrator who can view group passwords can inspect/restore
+// deleted group media.
+app.post('/api/admin/recycle-bin', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db) return res.json({ ok:true, items:[], persistent:false });
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const filter = groupId ? { groupId } : {};
+    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(1000).toArray();
+    res.json({ ok:true, persistent:true, items: items.map(x => ({
+      id:String(x._id), originalMessageId:String(x.originalMessageId), groupId:String(x.groupId),
+      deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete', message:x.message || {}
+    })) });
+  } catch (error) {
+    console.error('Admin recycle-bin list failed:', error.message);
+    res.status(500).json({ ok:false, error:'Recycle bin unavailable' });
+  }
+});
+
+app.post('/api/admin/recycle-bin/restore', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db || !ObjectId.isValid(String(req.body?.id || ''))) return res.status(400).json({ ok:false, error:'Invalid recycle item' });
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const collection = db.collection(COLLECTION_NAME);
+    const item = await recycle.findOne({ _id:new ObjectId(String(req.body.id)) });
+    if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
+    const msg = { ...(item.message || {}) };
+    delete msg._id;
+    const exists = await collection.findOne({ id:String(item.originalMessageId) });
+    if (exists) return res.status(409).json({ ok:false, error:'Message already exists' });
+    msg.id = String(item.originalMessageId);
+    msg.groupId = normalizeGroupId(item.groupId);
+    await collection.insertOne(msg);
+    await recycle.deleteOne({ _id:item._id });
+    const event = { message: msg, groupId: msg.groupId };
+    io.emit('restore-message', event);
+    await publishRealtimeEvent('restore-message', event);
+    res.json({ ok:true, message:msg });
+  } catch (error) {
+    console.error('Admin recycle restore failed:', error.message);
+    res.status(500).json({ ok:false, error:'Restore failed' });
+  }
+});
+
+app.post('/api/admin/recycle-bin/delete', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db || !ObjectId.isValid(String(req.body?.id || ''))) return res.status(400).json({ ok:false, error:'Invalid recycle item' });
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const item = await recycle.findOne({ _id:new ObjectId(String(req.body.id)) });
+    if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
+    if (item.message?.mediaId) {
+      try { await (await getMediaBucket()).delete(new ObjectId(String(item.message.mediaId))); } catch (_) {}
+    }
+    await recycle.deleteOne({ _id:item._id });
+    res.json({ ok:true });
+  } catch (error) {
+    console.error('Admin recycle permanent delete failed:', error.message);
+    res.status(500).json({ ok:false, error:'Permanent delete failed' });
+  }
+});
+
+app.post('/api/admin/recycle-bin/empty', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db) return res.json({ ok:true, count:0, persistent:false });
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const filter = groupId ? { groupId } : {};
+    const items = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
+    const bucket = await getMediaBucket();
+    for (const item of items) {
+      if (item.message?.mediaId) { try { await bucket.delete(new ObjectId(String(item.message.mediaId))); } catch (_) {} }
+    }
+    const result = await recycle.deleteMany(filter);
+    res.json({ ok:true, count:result.deletedCount || 0 });
+  } catch (error) {
+    console.error('Admin recycle empty failed:', error.message);
+    res.status(500).json({ ok:false, error:'Empty recycle bin failed' });
   }
 });
 
@@ -852,10 +961,8 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (collection) {
         const existing = await collection.findOne({ id: data.id });
+        if (existing) await moveMessagesToRecycleBin([existing], normalizeGroupId(socket.groupId), 'message-delete');
         await collection.deleteOne({ id: data.id });
-        if (existing && existing.mediaId) {
-          try { await (await getMediaBucket()).delete(new ObjectId(existing.mediaId)); } catch (_) {}
-        }
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
@@ -883,20 +990,11 @@ io.on('connection', async (socket) => {
       if (collection) {
         const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
         const existing = await collection.find(
-          { $and: [groupFilter, { id: { $in: ids } }] },
-          { projection: { id: 1, mediaId: 1 } }
+          { $and: [groupFilter, { id: { $in: ids } }] }
         ).toArray();
 
+        if (existing.length) await moveMessagesToRecycleBin(existing, groupId, 'message-delete');
         await collection.deleteMany({ $and: [groupFilter, { id: { $in: ids } }] });
-
-        if (existing.length) {
-          const bucket = await getMediaBucket();
-          for (const item of existing) {
-            if (item.mediaId) {
-              try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
-            }
-          }
-        }
       }
 
       const event = { ids, groupId };
@@ -969,12 +1067,9 @@ io.on('connection', async (socket) => {
       if (collection) {
         const gid = normalizeGroupId(socket.groupId);
         const groupFilter = { $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
-        const mediaMessages = await collection.find({ $and: [groupFilter, { mediaId: { $exists: true } }] }, { projection: { mediaId: 1 } }).toArray();
+        const allMessages = await collection.find(groupFilter).toArray();
+        if (allMessages.length) await moveMessagesToRecycleBin(allMessages, gid, 'clear-chat');
         await collection.deleteMany(groupFilter);
-        const bucket = await getMediaBucket();
-        for (const item of mediaMessages) {
-          try { await bucket.delete(new ObjectId(item.mediaId)); } catch (_) {}
-        }
       }
       // Persist first, then broadcast so every instance is immediately consistent.
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };

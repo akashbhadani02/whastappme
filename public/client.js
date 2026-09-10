@@ -98,6 +98,15 @@ const adminGroupsClose = document.querySelector('#adminGroupsClose');
 const adminGroupsList = document.querySelector('#adminGroupsList');
 const adminGroupsError = document.querySelector('#adminGroupsError');
 const adminNewGroupBtn = document.querySelector('#adminNewGroupBtn');
+const adminRecycleModal = document.querySelector('#adminRecycleModal');
+const adminRecycleClose = document.querySelector('#adminRecycleClose');
+const adminRecycleTitle = document.querySelector('#adminRecycleTitle');
+const adminRecycleList = document.querySelector('#adminRecycleList');
+const adminRecycleError = document.querySelector('#adminRecycleError');
+const adminRecycleRefresh = document.querySelector('#adminRecycleRefresh');
+const adminRecycleEmpty = document.querySelector('#adminRecycleEmpty');
+let adminRecycleGroupId = '';
+let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
 const groupPasswordInput = document.querySelector('#groupPasswordInput');
 const groupPasswordSubmit = document.querySelector('#groupPasswordSubmit');
@@ -486,8 +495,34 @@ function renderMessage(msg, direction) {
     menu.classList.remove('open');
     requestPassword('Delete message','Enter password to delete this message.', () => deleteMessage(msg.id));
   });
-  menu.appendChild(del); el.appendChild(menu);
-  more.addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')); menu.classList.toggle('open'); });
+  menu.appendChild(del);
+  // Render the message menu at document/body level so it can never be clipped by
+  // the chat scroll container or the narrow message bubble. Its position is
+  // calculated from the three-dot button on every open.
+  menu.style.position='fixed';
+  menu.style.left='0px';
+  menu.style.top='0px';
+  menu.style.right='auto';
+  document.body.appendChild(menu);
+  more.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open'));
+    const r=more.getBoundingClientRect();
+    menu.classList.add('open');
+    const mw=Math.min(230, Math.max(170, menu.offsetWidth || 190));
+    const mh=menu.offsetHeight || 360;
+    const gap=6;
+    let left=r.right-mw;
+    let top=r.bottom+gap;
+    const pad=8;
+    if(left < pad) left=pad;
+    if(left+mw > window.innerWidth-pad) left=Math.max(pad, window.innerWidth-mw-pad);
+    if(top+mh > window.innerHeight-pad) top=r.top-mh-gap;
+    if(top < pad) top=Math.min(pad, window.innerHeight-mh-pad);
+    menu.style.left=`${Math.round(left)}px`;
+    menu.style.top=`${Math.round(top)}px`;
+  });
   el.appendChild(more);
 
   messageArea.appendChild(el);
@@ -495,25 +530,21 @@ function renderMessage(msg, direction) {
   scrollToBottom();
 }
 
-// In selection mode, clicking the empty horizontal space beside a message
-// should select the nearest message in the same row. Normal mode is unchanged.
-messageArea?.addEventListener('click', (e) => {
+document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')));
+
+// In multiple-selection mode, clicking the empty space beside a message
+// selects the message whose row was clicked. Normal message controls keep
+// their own actions.
+messageArea.addEventListener('click', (e) => {
   if (!selectionMode) return;
   if (e.target.closest('.message, .message-menu, .message-more, button, video, audio, a, input, textarea')) return;
-  const y = e.clientY;
-  let nearest = null;
-  let distance = Infinity;
-  messageArea.querySelectorAll('.message').forEach((msgEl) => {
-    const r = msgEl.getBoundingClientRect();
-    if (y >= r.top && y <= r.bottom) {
-      const d = Math.abs(y - (r.top + r.height / 2));
-      if (d < distance) { nearest = msgEl; distance = d; }
-    }
+  const rows = [...messageArea.querySelectorAll('.message')];
+  const row = rows.find(el => {
+    const r = el.getBoundingClientRect();
+    return e.clientY >= r.top && e.clientY <= r.bottom;
   });
-  if (nearest?.dataset.id) toggleMessageSelection(nearest.dataset.id);
+  if (row?.dataset.id) toggleMessageSelection(row.dataset.id);
 });
-
-document.addEventListener('click', () => document.querySelectorAll('.message-menu.open').forEach(x=>x.classList.remove('open')));
 
 function toggleStar(msg){ const id=String(msg.id); const next=!starredIds.has(id); if(next) starredIds.add(id); else starredIds.delete(id); saveMessageFlags(); msg.starred=next; updateMessageElement(msg); emitAck('update-message',{id,starred:next},10000,1); }
 function togglePin(msg){ const id=String(msg.id); const next=!pinnedIds.has(id); if(next) pinnedIds.add(id); else pinnedIds.delete(id); saveMessageFlags(); msg.pinned=next; updateMessageElement(msg); emitAck('update-message',{id,pinned:next},10000,1); showToast(next?'Message pinned':'Message unpinned'); }
@@ -990,6 +1021,7 @@ socket.on('user-renamed', data => {
 socket.on('message-updated', data => { if(!data?.message || (data.groupId && data.groupId!==currentGroupId)) return; const m=data.message; const existing=messages.get(m.id); if(existing){Object.assign(existing,m); updateMessageElement(existing); saveLocalMessageHistory();} });
 
 socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
+socket.on('restore-message', data => { if (!data || !data.message) return; if (data.groupId !== currentGroupId) return; const msg=data.message; deletedIds.delete(String(msg.id)); messages.set(String(msg.id),msg); const old=document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`); if(old) old.remove(); renderMessage(msg,msg.userId===userId?'outgoing':'incoming'); saveLocalMessageHistory(); updatePreview('Message restored'); });
 socket.on('delete-messages', data => {
   if (!data || !Array.isArray(data.ids) || (data.groupId && data.groupId !== currentGroupId)) return;
   deleteMessages(data.ids, false);
@@ -1083,12 +1115,13 @@ function renderAdminGroups(list) {
   list.forEach(group => {
     const row = document.createElement('div'); row.className = 'admin-group-row';
     const isDefault = group.id === 'main';
-    row.innerHTML = `<div class="admin-group-name"></div><div class="admin-password-wrap"><input type="text" class="admin-password-input" maxlength="120" autocomplete="off"><button type="button" class="mini-btn admin-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-save-btn">Save</button><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
+    row.innerHTML = `<div class="admin-group-name"></div><div class="admin-password-wrap"><input type="text" class="admin-password-input" maxlength="120" autocomplete="off"><button type="button" class="mini-btn admin-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-recycle-btn">♻️ Recycle</button><button type="button" class="mini-btn admin-save-btn">Save</button><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
     row.querySelector('.admin-group-name').textContent = group.name;
     row.querySelector('.admin-password-input').value = group.password || '';
     row.querySelector('.admin-copy-btn').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(row.querySelector('.admin-password-input').value); showToast('Password copied'); } catch (_) {}
     });
+    row.querySelector('.admin-recycle-btn').addEventListener('click', () => openAdminRecycle(group.id, group.name));
     row.querySelector('.admin-save-btn').addEventListener('click', async () => {
       const password = row.querySelector('.admin-password-input').value.trim();
       if (!password) { showToast('Password is required'); return; }
@@ -1133,6 +1166,71 @@ function renderAdminGroups(list) {
     adminGroupsList.appendChild(row);
   });
 }
+
+
+async function loadAdminRecycle() {
+  adminRecycleError.textContent = '';
+  adminRecycleList.innerHTML = '<div class="recycle-empty">Loading recycle bin…</div>';
+  try {
+    const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password:PASSWORD, groupId:adminRecycleGroupId }) });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Load failed');
+    const items = Array.isArray(data.items) ? data.items : [];
+    adminRecycleList.innerHTML = '';
+    if (!items.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">Recycle bin is empty.</div>'; return; }
+    items.forEach(item => {
+      const m = item.message || {};
+      const row = document.createElement('div'); row.className='recycle-item';
+      const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
+      const name = m.fileName || m.message || 'Deleted message';
+      const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
+      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
+      row.querySelector('.recycle-kind').textContent=kind;
+      row.querySelector('.recycle-name').textContent=name;
+      row.querySelector('.recycle-meta').textContent=when;
+      const view=row.querySelector('.recycle-view-btn');
+      if (m.mediaId) view.onclick=()=>window.open(`/api/media/${encodeURIComponent(m.mediaId)}`, '_blank', 'noopener');
+      else view.disabled=true;
+      row.querySelector('.recycle-restore-btn').onclick=async()=>{
+        if(!confirm('Restore this deleted item to the group?')) return;
+        try {
+          const r=await fetch('/api/admin/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const d=await r.json(); if(!d.ok) throw new Error(d.error||'Restore failed');
+          showToast('Item restored'); loadAdminRecycle();
+        } catch(e){ adminRecycleError.textContent=e.message||'Restore failed'; }
+      };
+      row.querySelector('.recycle-delete-btn').onclick=async()=>{
+        if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return;
+        try {
+          const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const d=await r.json(); if(!d.ok) throw new Error(d.error||'Delete failed');
+          showToast('Permanently deleted'); loadAdminRecycle();
+        } catch(e){ adminRecycleError.textContent=e.message||'Delete failed'; }
+      };
+      adminRecycleList.appendChild(row);
+    });
+  } catch(e) { adminRecycleList.innerHTML=''; adminRecycleError.textContent=e.message||'Recycle bin unavailable'; }
+}
+
+function openAdminRecycle(groupId, groupName) {
+  adminRecycleGroupId = String(groupId || 'main');
+  adminRecycleGroupName = String(groupName || 'Group');
+  adminRecycleTitle.textContent = `♻️ ${adminRecycleGroupName} Recycle Bin`;
+  adminRecycleModal.classList.remove('hidden');
+  loadAdminRecycle();
+}
+
+adminRecycleClose?.addEventListener('click',()=>adminRecycleModal.classList.add('hidden'));
+adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
+adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
+adminRecycleEmpty?.addEventListener('click',async()=>{
+  if(!confirm(`Empty recycle bin for "${adminRecycleGroupName}"? This permanently deletes all stored media.`)) return;
+  try {
+    const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,groupId:adminRecycleGroupId})});
+    const d=await r.json(); if(!d.ok) throw new Error(d.error||'Empty failed');
+    showToast(`${d.count||0} items permanently deleted`); loadAdminRecycle();
+  } catch(e){ adminRecycleError.textContent=e.message||'Empty failed'; }
+});
 
 function openGroupEditor() {
   groupEditTitle.textContent = 'Add new group'; groupEditName.value = ''; groupEditPassword.value = ''; groupEditError.textContent = '';

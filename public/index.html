@@ -131,6 +131,18 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="adminRecycleModal" role="dialog" aria-modal="true">
+    <div class="modal-card admin-card recycle-admin-card">
+      <button class="modal-close" id="adminRecycleClose" aria-label="Close">×</button>
+      <div class="lock-icon">♻️</div>
+      <h3 id="adminRecycleTitle">Group Recycle Bin</h3>
+      <p>Deleted group images, videos, documents and messages are kept here for the admin.</p>
+      <div id="adminRecycleList" class="admin-groups-list"></div>
+      <div class="password-error" id="adminRecycleError"></div>
+      <div class="recycle-admin-actions"><button class="mini-btn" id="adminRecycleRefresh">↻ Refresh</button><button class="mini-btn admin-delete-btn" id="adminRecycleEmpty">🧹 Empty this bin</button></div>
+    </div>
+  </div>
+
   <div class="modal hidden" id="groupPasswordModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" id="groupPasswordClose" aria-label="Close">×</button>
