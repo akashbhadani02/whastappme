@@ -73,9 +73,9 @@
       <footer class="composer">
         <button class="round-btn" id="emojiBtn" title="Emoji">☺</button>
         <button class="round-btn" id="attachBtn" title="Attach">＋</button>
-        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+        <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" multiple hidden>
         <textarea id="textarea" rows="1" maxlength="5000" placeholder="Type a message"></textarea>
-        <button class="send-btn" id="sendBtn" title="Send">➤</button>
+        <button class="round-btn mic-btn" id="micBtn" title="Voice message">🎤</button><button class="send-btn" id="sendBtn" title="Send">➤</button>
       </footer>
       <div class="emoji-panel" id="emojiPanel"></div>
     </section>
@@ -155,6 +155,9 @@
 
   <div class="reply-bar hidden" id="replyBar"><div><strong id="replyLabel">Replying</strong><span id="replyPreview"></span></div><button id="replyCancel" type="button">×</button></div>
   <div class="modal hidden" id="forwardModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="forwardClose">×</button><div class="lock-icon">↗️</div><h3>Forward message</h3><p>Select a group to forward this message.</p><div id="forwardGroups" class="admin-groups-list"></div></div></div>
+  <div class="modal hidden" id="messageInfoModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="messageInfoClose">×</button><div class="lock-icon">ℹ️</div><h3>Message info</h3><div id="messageInfoBody" class="info-body"></div></div></div>
+  <div class="modal hidden" id="callModal" role="dialog" aria-modal="true"><div class="modal-card call-card"><button class="modal-close" id="callClose">×</button><div class="call-avatar" id="callAvatar">W</div><h3 id="callTitle">Calling</h3><p id="callState">Calling…</p><div class="call-actions"><button id="muteCallBtn">🎤 Mute</button><button id="speakerCallBtn">🔊 Speaker</button><button id="endCallBtn" class="danger-btn">📞 End</button></div></div></div>
+  <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button></div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>

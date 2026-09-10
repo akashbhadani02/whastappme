@@ -761,6 +761,7 @@ io.on('connection', async (socket) => {
     if (typeof data.starred === 'boolean') allowed.starred = data.starred;
     if (typeof data.pinned === 'boolean') allowed.pinned = data.pinned;
     if (typeof data.message === 'string') allowed.message = data.message.slice(0, 5000);
+    if (data.reactions && typeof data.reactions === 'object') allowed.reactions = Object.fromEntries(Object.entries(data.reactions).slice(0, 100).map(([k,v]) => [String(k).slice(0,100), String(v).slice(0,8)]));
     if (data.replyTo && typeof data.replyTo === 'object') allowed.replyTo = {
       id: String(data.replyTo.id || ''), message: String(data.replyTo.message || '').slice(0, 500), user: String(data.replyTo.user || '').slice(0, 100)
     };
@@ -846,6 +847,11 @@ io.on('connection', async (socket) => {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
     }
+  });
+
+  socket.on('typing', (data) => {
+    if (!data || !socket.groupId || normalizeGroupId(data.groupId) !== normalizeGroupId(socket.groupId)) return;
+    io.emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
   });
 
   socket.on('message-read', async (data) => {

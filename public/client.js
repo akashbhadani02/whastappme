@@ -422,14 +422,18 @@ function renderMessage(msg, direction) {
   }
 
   const content = document.createElement('div');
-  if (msg.type === 'image' || msg.type === 'video') {
+  if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'document') {
     const wrap = document.createElement('div'); wrap.className='media-wrap';
     const mediaUrl = msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
     if (msg.type === 'image') {
       const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; wrap.appendChild(img);
-    } else {
+    } else if (msg.type === 'video') {
       const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.setAttribute('controlsList','nodownload'); video.disablePictureInPicture=true; video.addEventListener('contextmenu', e => e.preventDefault());
       const source=document.createElement('source'); source.src=mediaUrl; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
+    } else if (msg.type === 'audio') {
+      const audio=document.createElement('audio'); audio.controls=true; audio.preload='metadata'; audio.src=mediaUrl; wrap.appendChild(audio);
+    } else {
+      const doc=document.createElement('div'); doc.className='document-bubble'; doc.innerHTML='<span class="doc-icon">📄</span><span class="doc-name"></span>'; doc.querySelector('.doc-name').textContent=msg.fileName || 'Document'; wrap.appendChild(doc);
     }
     const actions=document.createElement('div'); actions.className='media-actions';
     const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
@@ -446,6 +450,8 @@ function renderMessage(msg, direction) {
 
   const meta=document.createElement('div'); meta.className='meta';
   meta.appendChild(document.createTextNode(msg.time || now()));
+  if (msg.edited) { const ed=document.createElement('span'); ed.className='edited-label'; ed.textContent=' edited'; meta.appendChild(ed); }
+  if (msg.reactions && Object.keys(msg.reactions).length) { const rr=document.createElement('span'); rr.className='reactions'; rr.textContent=Object.values(msg.reactions).join(' '); meta.appendChild(rr); }
   if (direction === 'outgoing') {
     const ticks=document.createElement('span');
     ticks.className='ticks' + (isMessageRead(msg) ? ' read' : '');
@@ -468,6 +474,8 @@ function renderMessage(msg, direction) {
   const pinBtn=document.createElement('button'); pinBtn.textContent=pinnedIds.has(msg.id)?'📌 Unpin':'📌 Pin'; pinBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');togglePin(msg);}; menu.appendChild(pinBtn);
   const editBtn=document.createElement('button'); editBtn.textContent='✎ Edit'; editBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');editMessage(msg);}; if(msg.userId!==userId || msg.type!=='text') editBtn.disabled=true; menu.appendChild(editBtn);
   const forwardBtn=document.createElement('button'); forwardBtn.textContent='↗ Forward'; forwardBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');openForward(msg);}; menu.appendChild(forwardBtn);
+  const reactBtn=document.createElement('button'); reactBtn.textContent='😊 React'; reactBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');reactMessage(msg);}; menu.appendChild(reactBtn);
+  const infoBtn=document.createElement('button'); infoBtn.textContent='ℹ Message info'; infoBtn.onclick=(e)=>{e.stopPropagation();menu.classList.remove('open');showMessageInfo(msg);}; menu.appendChild(infoBtn);
 
   const del=document.createElement('button'); del.textContent='Delete message';
   del.addEventListener('click', () => {
@@ -538,9 +546,11 @@ function clearChat(broadcast=true) {
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => {
-  const file=e.target.files[0]; if (!file) return;
-  if (!/^(image\/|video\/)/i.test(file.type)) { showToast('Only image and video files are allowed'); fileInput.value=''; return; }
+fileInput.addEventListener('change', async e => {
+  const files=[...e.target.files]; if (!files.length) return;
+  for (const file of files) await uploadMedia(file);
+  fileInput.value=''; return;
+  if (!/^(image\/|video\/|audio\/)/i.test(file.type) && !/^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i.test(file.type)) { showToast('Unsupported file type'); fileInput.value=''; return; }
   uploadMedia(file).finally(() => { fileInput.value=''; });
 });
 
@@ -585,7 +595,7 @@ async function waitForSocket(timeout=20000) {
 }
 
 async function uploadMedia(file) {
-  const type = file.type.startsWith('image/') ? 'image' : 'video';
+  const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document';
   const ui = makeUploadBubble(file, type);
   try {
     const uploadId = id();
@@ -619,7 +629,7 @@ async function uploadMedia(file) {
     ui.el.classList.add('upload-done');
     setTimeout(() => ui.el.remove(), 450);
     renderMessage(result.message, 'outgoing');
-    updatePreview(type === 'image' ? '📷 Photo' : '🎥 Video');
+    updatePreview(type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : type === 'audio' ? '🎤 Voice message' : '📎 Document');
   } catch (error) {
     ui.el.classList.add('upload-error');
     setUploadProgress(ui, 0, '↻');
@@ -709,7 +719,7 @@ function receiveMessage(msg) {
     socket.emit('message-delivered', { id: msg.id, userId });
   }
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
-  updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : 'New message'));
+  updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : msg.type === 'audio' ? '🎤 Voice message' : msg.type === 'document' ? '📎 Document' : 'New message'));
   if (msg.userId !== userId) {
     notifyIncomingMessage(msg);
     if (document.visibilityState === 'visible') markMessageRead(msg);
@@ -1292,3 +1302,37 @@ document.querySelector('#searchInput').addEventListener('input', e => {
 if (window.innerWidth <= 760) { app.classList.remove('chat-open'); chatOpen=false; } else { app.classList.add('chat-open'); chatOpen=true; }
 window.addEventListener('resize', () => { if (window.innerWidth > 760) { app.classList.add('chat-open'); chatOpen=true; } });
 updatePreview('Messages are end-to-end styled for this demo');
+
+
+/* ===== Advanced WhatsApp features ===== */
+const advState = JSON.parse(localStorage.getItem('wa_adv_state') || '{}');
+function saveAdv(){ localStorage.setItem('wa_adv_state', JSON.stringify(advState)); }
+function groupAdv(){ advState[currentGroupId] ||= {archived:false,muted:false,unread:false,locked:false}; return advState[currentGroupId]; }
+const messageInfoModal=document.querySelector('#messageInfoModal'), messageInfoBody=document.querySelector('#messageInfoBody'), messageInfoClose=document.querySelector('#messageInfoClose');
+const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn');
+const chatTools=document.querySelector('#chatTools');
+function showMessageInfo(msg){ if(!messageInfoModal) return; const delivered=Array.isArray(msg.deliveredTo)?msg.deliveredTo.length:0, read=Array.isArray(msg.readBy)?msg.readBy.length:0; messageInfoBody.innerHTML=''; [['Message',msg.message||msg.fileName||msg.type||'Media'],['Sent',msg.time||''],['Delivered',String(delivered)],['Read',String(read)],['Edited',msg.edited?'Yes':'No'],['Forwarded',msg.forwarded?'Yes':'No']].forEach(([a,b])=>{const row=document.createElement('div');row.className='info-row';row.innerHTML='<b></b><span></span>';row.children[0].textContent=a;row.children[1].textContent=b;messageInfoBody.appendChild(row)}); messageInfoModal.classList.remove('hidden');}
+messageInfoClose?.addEventListener('click',()=>messageInfoModal.classList.add('hidden')); messageInfoModal?.addEventListener('click',e=>{if(e.target===messageInfoModal)messageInfoModal.classList.add('hidden')});
+function reactMessage(msg){ const choices=['👍','❤️','😂','😮','😢','🙏']; const choice=prompt('React with: '+choices.join(' '), '👍'); if(!choice || !choices.includes(choice)) return; msg.reactions=msg.reactions||{}; msg.reactions[userId]=choice; updateMessageElement(msg); emitAck('update-message',{id:msg.id,reactions:msg.reactions},10000,1); }
+function updateAdvancedTools(){ const g=groupAdv(); if(!chatTools)return; chatTools.classList.toggle('hidden',!currentGroupId); const map={lockChatBtn:`🔐 ${g.locked?'Unlock':'Lock'}`,archiveChatBtn:`📥 ${g.archived?'Unarchive':'Archive'}`,muteChatBtn:`🔕 ${g.muted?'Unmute':'Mute'}`,unreadChatBtn:`🔵 ${g.unread?'Read':'Unread'}`}; Object.entries(map).forEach(([id,t])=>{const b=document.getElementById(id);if(b)b.textContent=t;}); }
+function requireUnlock(){ const g=groupAdv(); if(!g.locked)return true; const pin=prompt('Enter chat lock PIN'); if(pin===null)return false; const saved=g.pin||'1234'; if(pin!==saved){showToast('Wrong chat PIN');return false;} g.locked=false; saveAdv(); updateAdvancedTools(); return true; }
+document.getElementById('lockChatBtn')?.addEventListener('click',()=>{const g=groupAdv(); if(g.locked){requireUnlock();return;} const pin=prompt('Set a 4+ digit chat PIN','1234'); if(!pin || pin.length<4)return; g.pin=pin;g.locked=true;saveAdv();updateAdvancedTools();showToast('Chat locked');closeChat();});
+document.getElementById('archiveChatBtn')?.addEventListener('click',()=>{const g=groupAdv();g.archived=!g.archived;saveAdv();updateAdvancedTools();renderGroupList();showToast(g.archived?'Chat archived':'Chat unarchived')});
+document.getElementById('muteChatBtn')?.addEventListener('click',()=>{const g=groupAdv();g.muted=!g.muted;saveAdv();updateAdvancedTools();showToast(g.muted?'Notifications muted':'Notifications unmuted')});
+document.getElementById('unreadChatBtn')?.addEventListener('click',()=>{const g=groupAdv();g.unread=!g.unread;saveAdv();updateAdvancedTools();showToast(g.unread?'Marked unread':'Marked read')});
+document.getElementById('themeBtn')?.addEventListener('click',()=>{document.body.classList.toggle('dark-mode');localStorage.setItem('wa_theme',document.body.classList.contains('dark-mode')?'dark':'light')}); if(localStorage.getItem('wa_theme')==='dark')document.body.classList.add('dark-mode');
+// Typing indicator (debounced)
+let typingTimer=null, typingActive=false;
+function sendTyping(active){ if(!socket.connected)return; socket.emit('typing',{groupId:currentGroupId,userId,name,active}); }
+textarea?.addEventListener('input',()=>{if(!typingActive){typingActive=true;sendTyping(true)};clearTimeout(typingTimer);typingTimer=setTimeout(()=>{typingActive=false;sendTyping(false)},900)});
+socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)return; if(d.active){typingBar.textContent=`${d.name||'Someone'} is typing…`;typingBar.classList.add('show')}else typingBar.classList.remove('show')});
+// WebRTC-ready call UI; actual media call can be wired to a signaling provider later.
+function startCall(video=false){if(!currentGroupId)return; document.getElementById('callTitle').textContent=video?'Video call':'Voice call';document.getElementById('callState').textContent='Calling…';document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();callModal?.classList.remove('hidden');}
+document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));callClose?.addEventListener('click',()=>callModal.classList.add('hidden'));endCallBtn?.addEventListener('click',()=>{callModal.classList.add('hidden');showToast('Call ended')});muteCallBtn?.addEventListener('click',()=>{muteCallBtn.textContent=muteCallBtn.textContent.includes('Mute')?'🔇 Unmute':'🎤 Mute'});speakerCallBtn?.addEventListener('click',()=>{speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker'});
+// Voice recorder
+let mediaRecorder=null, voiceChunks=[];
+async function startVoice(){ try{const stream=await navigator.mediaDevices.getUserMedia({audio:true}); voiceChunks=[];mediaRecorder=new MediaRecorder(stream);mediaRecorder.ondataavailable=e=>{if(e.data.size)voiceChunks.push(e.data)};mediaRecorder.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(voiceChunks,{type:mediaRecorder.mimeType||'audio/webm'});const file=new File([blob],`voice-${Date.now()}.webm`,{type:blob.type});await uploadMedia(file)};mediaRecorder.start();micBtn.classList.add('recording');showToast('Recording… click 🎤 again to stop');}catch(e){showToast('Microphone permission denied')}}
+const micBtn=document.getElementById('micBtn'); micBtn?.addEventListener('click',()=>{if(mediaRecorder && mediaRecorder.state==='recording'){mediaRecorder.stop();micBtn.classList.remove('recording')}else startVoice()});
+// Allow selecting a locked group only after PIN.
+const oldOpenGroup=openGroup; openGroup=async function(group){const g=advState[group?.id||''];if(g?.locked){currentGroupId=group.id;groupName=group.name; if(!requireUnlock())return;} return oldOpenGroup(group);};
+updateAdvancedTools();
