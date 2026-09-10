@@ -62,6 +62,15 @@ const selectionCount = document.querySelector('#selectionCount');
 const cancelSelectionBtn = document.querySelector('#cancelSelectionBtn');
 const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
 const deleteForMeBtn = document.querySelector('#deleteForMeBtn');
+const recycleBinBtn = document.querySelector('#recycleBinBtn');
+const recycleBinModal = document.querySelector('#recycleBinModal');
+const recycleBinClose = document.querySelector('#recycleBinClose');
+const recycleList = document.querySelector('#recycleList');
+const recycleRestoreBtn = document.querySelector('#recycleRestoreBtn');
+const recyclePermanentBtn = document.querySelector('#recyclePermanentBtn');
+const recycleEmptyBtn = document.querySelector('#recycleEmptyBtn');
+const recycleSelectAllBtn = document.querySelector('#recycleSelectAllBtn');
+const recycleError = document.querySelector('#recycleError');
 const selectAllBtn = document.querySelector('#selectAllBtn');
 const chatSearchBtn = document.querySelector('#chatSearchBtn');
 const replyBar = document.querySelector('#replyBar');
@@ -139,6 +148,79 @@ const deletedForMeIds = new Set();
 let replyTo = null;
 let forwardMessage = null;
 let lastDeleteBackup = null;
+let recycleItems = [];
+const recycleSelectedIds = new Set();
+function recycleKey(groupId=currentGroupId){ return `wa_recycle_bin_${groupId || 'main'}`; }
+function loadLocalRecycle(){
+  try { const raw=JSON.parse(localStorage.getItem(recycleKey())||'[]'); return Array.isArray(raw)?raw:[]; } catch(_){ return []; }
+}
+function saveLocalRecycle(items){ try { localStorage.setItem(recycleKey(), JSON.stringify(items.slice(0,500))); } catch(_) {} }
+function addLocalRecycle(msg, source='local'){
+  if(!msg?.id) return;
+  const items=loadLocalRecycle().filter(x=>String(x.id)!==String(msg.id));
+  items.unshift({id:String(msg.id),groupId:currentGroupId,message:{...msg},deletedAt:new Date().toISOString(),source});
+  saveLocalRecycle(items);
+}
+function removeLocalRecycle(ids){ const set=new Set(ids.map(String)); saveLocalRecycle(loadLocalRecycle().filter(x=>!set.has(String(x.id)))); }
+function recyclePreview(item){ const m=item.message||{}; if(m.type==='image') return '📷 Photo'; if(m.type==='video') return '🎥 Video'; if(m.type==='audio') return '🎤 Voice message'; if(m.type==='document') return `📄 ${m.fileName||'Document'}`; return m.message||'Message'; }
+function renderRecycleList(){
+  if(!recycleList) return;
+  recycleList.innerHTML='';
+  if(!recycleItems.length){ recycleList.innerHTML='<div class="recycle-empty">♻️ Recycle Bin is empty</div>'; return; }
+  recycleItems.forEach(item=>{
+    const id=String(item.id||item.originalId||item.message?.id||'');
+    const row=document.createElement('label'); row.className='recycle-row';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=recycleSelectedIds.has(id); cb.addEventListener('change',()=>{if(cb.checked)recycleSelectedIds.add(id);else recycleSelectedIds.delete(id);});
+    const body=document.createElement('div'); body.className='recycle-body';
+    const title=document.createElement('strong'); title.textContent=item.source==='server'?'Deleted for everyone':'Deleted for me';
+    const text=document.createElement('span'); text.textContent=recyclePreview(item);
+    const date=document.createElement('small'); date.textContent=new Date(item.deletedAt||Date.now()).toLocaleString();
+    body.append(title,text,date); row.append(cb,body); recycleList.appendChild(row);
+  });
+}
+async function loadRecycleBin(){
+  recycleError.textContent=''; recycleSelectedIds.clear();
+  const local=loadLocalRecycle().map(x=>({...x,source:x.source||'local'}));
+  let remote=[];
+  try{
+    const r=await fetch(`/api/recycle-bin?groupId=${encodeURIComponent(currentGroupId)}`,{cache:'no-store'});
+    if(r.ok){ const d=await r.json(); remote=(d.items||[]).map(x=>({id:String(x.originalId),groupId:x.groupId,message:x.message,deletedAt:x.deletedAt,source:'server'})); }
+  }catch(_){ }
+  const map=new Map(); [...local,...remote].forEach(x=>map.set(`${x.source}:${x.id}`,x));
+  recycleItems=[...map.values()].sort((a,b)=>new Date(b.deletedAt||0)-new Date(a.deletedAt||0));
+  renderRecycleList();
+}
+function openRecycleBin(){ recycleBinModal?.classList.remove('hidden'); loadRecycleBin(); }
+function closeRecycleBin(){ recycleBinModal?.classList.add('hidden'); recycleSelectedIds.clear(); }
+async function restoreRecycle(){
+  const ids=[...recycleSelectedIds]; if(!ids.length){showToast('Select messages first');return;}
+  const selected=recycleItems.filter(x=>ids.includes(String(x.id)));
+  for(const item of selected){
+    if(item.source==='server'){
+      try{ const r=await fetch('/api/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,groupId:currentGroupId})}); const d=await r.json().catch(()=>({})); if(!r.ok||!d.ok) throw new Error(d.error||'restore'); }
+      catch(_){showToast(`Could not restore ${item.id}`);continue;}
+    }
+    const msg=item.message;
+    if(msg){ removeLocalRecycle([item.id]); deletedIds.delete(String(item.id)); deletedForMeIds.delete(String(item.id)); if(!messages.has(String(item.id))) renderMessage(msg,msg.userId===userId?'outgoing':'incoming'); }
+  }
+  showToast(`${ids.length} message${ids.length===1?'':'s'} restored`); await loadRecycleBin(); saveMessageFlags(); saveLocalMessageHistory();
+}
+async function permanentDeleteRecycle(){
+  const ids=[...recycleSelectedIds]; if(!ids.length){showToast('Select messages first');return;}
+  const serverIds=recycleItems.filter(x=>ids.includes(String(x.id))&&x.source==='server').map(x=>String(x.id));
+  if(serverIds.length){ try{ const r=await fetch('/api/recycle-bin/permanent-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:serverIds,groupId:currentGroupId})}); const d=await r.json().catch(()=>({})); if(!r.ok||!d.ok) throw new Error(); }catch(_){showToast('Permanent delete failed');return;} }
+  removeLocalRecycle(ids); recycleSelectedIds.clear(); await loadRecycleBin(); showToast('Permanently deleted');
+}
+async function emptyRecycle(){
+  if(!recycleItems.length){showToast('Recycle Bin is already empty');return;}
+  if(!confirm('Permanently delete everything in this Recycle Bin?')) return;
+  try{ const r=await fetch('/api/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupId:currentGroupId})}); if(!r.ok && r.status!==503) throw new Error(); }catch(_){ /* local-only recycle items can still be cleared */ }
+  saveLocalRecycle([]); recycleItems=[]; recycleSelectedIds.clear(); renderRecycleList(); showToast('Recycle Bin emptied');
+}
+recycleBinBtn?.addEventListener('click',openRecycleBin); recycleBinClose?.addEventListener('click',closeRecycleBin); recycleBinModal?.addEventListener('click',e=>{if(e.target===recycleBinModal)closeRecycleBin();});
+recycleRestoreBtn?.addEventListener('click',restoreRecycle); recyclePermanentBtn?.addEventListener('click',permanentDeleteRecycle); recycleEmptyBtn?.addEventListener('click',emptyRecycle);
+recycleSelectAllBtn?.addEventListener('click',()=>{ if(recycleSelectedIds.size===recycleItems.length) recycleSelectedIds.clear(); else recycleItems.forEach(x=>recycleSelectedIds.add(String(x.id))); renderRecycleList(); });
+
 
 // Keep a local history as a safety net. Server history is still the source of
 // truth when MongoDB is available, but a temporary network/server error must
@@ -496,9 +578,9 @@ document.addEventListener('click', () => document.querySelectorAll('.message-men
 function toggleStar(msg){ const id=String(msg.id); const next=!starredIds.has(id); if(next) starredIds.add(id); else starredIds.delete(id); saveMessageFlags(); msg.starred=next; updateMessageElement(msg); emitAck('update-message',{id,starred:next},10000,1); }
 function togglePin(msg){ const id=String(msg.id); const next=!pinnedIds.has(id); if(next) pinnedIds.add(id); else pinnedIds.delete(id); saveMessageFlags(); msg.pinned=next; updateMessageElement(msg); emitAck('update-message',{id,pinned:next},10000,1); showToast(next?'Message pinned':'Message unpinned'); }
 function editMessage(msg){ const next=prompt('Edit message',msg.message||''); if(next===null || !next.trim() || next.trim()===msg.message) return; msg.message=next.trim().slice(0,5000); msg.edited=true; updateMessageElement(msg); saveLocalMessageHistory(); emitAck('update-message',{id:msg.id,message:msg.message},10000,1); }
-function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boolean); lastDeleteBackup={groupId:currentGroupId,messages:backup,expires:Date.now()+5000}; ids.forEach(id=>{const el=document.querySelector(`.message[data-id="${CSS.escape(String(id))}"]`);if(el)el.remove();messages.delete(String(id));deletedIds.add(String(id)); deletedForMeIds.add(String(id));}); saveMessageFlags(); saveLocalMessageHistory(); exitSelectionMode(); updatePreview(`${ids.length} message${ids.length===1?'':'s'} deleted`); showUndoToast('Deleted for me'); }
+function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boolean); backup.forEach(msg=>addLocalRecycle(msg,'local')); lastDeleteBackup={groupId:currentGroupId,messages:backup,expires:Date.now()+5000}; ids.forEach(id=>{const el=document.querySelector(`.message[data-id="${CSS.escape(String(id))}"]`);if(el)el.remove();messages.delete(String(id));deletedIds.add(String(id)); deletedForMeIds.add(String(id));}); saveMessageFlags(); saveLocalMessageHistory(); exitSelectionMode(); updatePreview(`${ids.length} message${ids.length===1?'':'s'} deleted`); showUndoToast('Deleted for me'); }
 function showUndoToast(text){ toast.innerHTML=''; const span=document.createElement('span');span.textContent=text;const b=document.createElement('button');b.textContent='UNDO';b.className='toast-undo';b.onclick=undoLastDelete;toast.append(span,b);toast.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>{toast.classList.remove('show');lastDeleteBackup=null;},5000); }
-function undoLastDelete(){ const backup=lastDeleteBackup; if(!backup || backup.groupId!==currentGroupId || backup.expires<Date.now()){showToast('Undo expired');return;} backup.messages.forEach(msg=>{deletedIds.delete(String(msg.id)); deletedForMeIds.delete(String(msg.id)); renderMessage(msg,msg.userId===userId?'outgoing':'incoming');}); saveMessageFlags(); saveLocalMessageHistory(); lastDeleteBackup=null; toast.classList.remove('show'); showToast('Messages restored'); }
+function undoLastDelete(){ const backup=lastDeleteBackup; if(!backup || backup.groupId!==currentGroupId || backup.expires<Date.now()){showToast('Undo expired');return;} backup.messages.forEach(msg=>{removeLocalRecycle([msg.id]); deletedIds.delete(String(msg.id)); deletedForMeIds.delete(String(msg.id)); renderMessage(msg,msg.userId===userId?'outgoing':'incoming');}); saveMessageFlags(); saveLocalMessageHistory(); lastDeleteBackup=null; toast.classList.remove('show'); showToast('Messages restored'); }
 function openForward(msg){ forwardMessage=msg; if(!forwardGroups) return; forwardGroups.innerHTML=''; groups.forEach(g=>{const b=document.createElement('button');b.className='chat-item';b.innerHTML=`<div class="avatar group-avatar">${(g.name||'G').slice(0,1).toUpperCase()}</div><div class="chat-summary"><strong>${g.name||'Group'}</strong></div>`;b.onclick=()=>forwardToGroup(g);forwardGroups.appendChild(b);}); forwardModal?.classList.remove('hidden'); }
 async function forwardToGroup(group){ if(!forwardMessage) return; const target=group.id; const msg={id:id(),groupId:target,senderId:socketId,userId,user:name,message:forwardMessage.message||'',time:now(),type:forwardMessage.type||'text',createdAt:new Date().toISOString(),deliveredTo:[],readBy:[],forwarded:true,...(forwardMessage.mediaId?{mediaId:forwardMessage.mediaId,mime:forwardMessage.mime,fileName:forwardMessage.fileName}:{}),...(forwardMessage.data?{data:forwardMessage.data}: {})}; if(target===currentGroupId) renderMessage(msg,'outgoing'); try{const r=await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg),cache:'no-store'}); if(!r.ok) throw new Error(); showToast(`Forwarded to ${group.name}`);}catch(_){showToast('Forward failed');} forwardModal?.classList.add('hidden');forwardMessage=null; }
 forwardClose?.addEventListener('click',()=>forwardModal?.classList.add('hidden'));
@@ -507,6 +589,8 @@ chatSearchBtn?.addEventListener('click',()=>{const q=(prompt('Search messages in
 
 function deleteMessage(messageId, broadcast=true) {
   const id = String(messageId);
+  const original = messages.get(id);
+  if (broadcast && original) addLocalRecycle(original,'server');
   const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
   if (el) el.remove();
   messages.delete(id);
@@ -522,6 +606,8 @@ function deleteMessages(messageIds, broadcast=true) {
   const ids = Array.from(new Set(messageIds.map(String))).filter(id => messages.has(id) || document.querySelector(`.message[data-id="${CSS.escape(id)}"]`));
   if (!ids.length) { exitSelectionMode(); return; }
   ids.forEach(id => {
+    const msg=messages.get(id);
+    if (broadcast && msg) addLocalRecycle(msg,'server');
     const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
     if (el) el.remove();
     messages.delete(id);
@@ -967,6 +1053,7 @@ socket.on('user-renamed', data => {
 });
 socket.on('message-updated', data => { if(!data?.message || (data.groupId && data.groupId!==currentGroupId)) return; const m=data.message; const existing=messages.get(m.id); if(existing){Object.assign(existing,m); updateMessageElement(existing); saveLocalMessageHistory();} });
 
+socket.on('message-restored', data => { if(!data?.message || (data.groupId && data.groupId!==currentGroupId)) return; removeLocalRecycle([data.message.id]); deletedIds.delete(String(data.message.id)); deletedForMeIds.delete(String(data.message.id)); if(!messages.has(String(data.message.id))) renderMessage(data.message,data.message.userId===userId?'outgoing':'incoming'); showToast('Message restored'); });
 socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
 socket.on('delete-messages', data => {
   if (!data || !Array.isArray(data.ids) || (data.groupId && data.groupId !== currentGroupId)) return;
