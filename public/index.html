@@ -70,8 +70,6 @@
 
       <div class="typing-bar" id="typingBar">typing…</div>
 
-      <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button><button id="recycleBinBtn">♻️ Recycle Bin</button></div>
-
       <footer class="composer">
         <button class="round-btn" id="emojiBtn" title="Emoji">☺</button>
         <button class="round-btn" id="attachBtn" title="Attach">＋</button>
@@ -159,18 +157,7 @@
   <div class="modal hidden" id="forwardModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="forwardClose">×</button><div class="lock-icon">↗️</div><h3>Forward message</h3><p>Select a group to forward this message.</p><div id="forwardGroups" class="admin-groups-list"></div></div></div>
   <div class="modal hidden" id="messageInfoModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="messageInfoClose">×</button><div class="lock-icon">ℹ️</div><h3>Message info</h3><div id="messageInfoBody" class="info-body"></div></div></div>
   <div class="modal hidden" id="callModal" role="dialog" aria-modal="true"><div class="modal-card call-card"><button class="modal-close" id="callClose">×</button><div class="call-avatar" id="callAvatar">W</div><h3 id="callTitle">Calling</h3><p id="callState">Calling…</p><div class="call-actions"><button id="muteCallBtn">🎤 Mute</button><button id="speakerCallBtn">🔊 Speaker</button><button id="endCallBtn" class="danger-btn">📞 End</button></div></div></div>
-  <div class="modal hidden" id="recycleBinModal" role="dialog" aria-modal="true" aria-labelledby="recycleBinTitle">
-    <div class="modal-card recycle-card">
-      <button class="modal-close" id="recycleBinClose" aria-label="Close">×</button>
-      <div class="lock-icon">♻️</div>
-      <h3 id="recycleBinTitle">Recycle Bin</h3>
-      <p class="recycle-help">Deleted messages stay here until you restore or permanently delete them.</p>
-      <div class="recycle-actions"><button class="mini-btn" id="recycleSelectAllBtn">☑ Select all</button><button class="danger-btn recycle-empty-btn" id="recycleEmptyBtn">🧹 Empty bin</button></div>
-      <div id="recycleList" class="recycle-list"></div>
-      <div class="password-error" id="recycleError"></div>
-      <div class="recycle-footer"><button class="primary-btn" id="recycleRestoreBtn">♻️ Restore selected</button><button class="danger-btn" id="recyclePermanentBtn">❌ Delete permanently</button></div>
-    </div>
-  </div>
+  <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button></div>
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
