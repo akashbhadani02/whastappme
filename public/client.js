@@ -435,11 +435,17 @@ function renderMessage(msg, direction) {
     } else {
       const doc=document.createElement('div'); doc.className='document-bubble'; doc.innerHTML='<span class="doc-icon">📄</span><span class="doc-name"></span>'; doc.querySelector('.doc-name').textContent=msg.fileName || 'Document'; wrap.appendChild(doc);
     }
-    const actions=document.createElement('div'); actions.className='media-actions';
-    const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-    download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
-    actions.appendChild(download);
-    content.appendChild(wrap); content.appendChild(actions);
+    // Audio/voice messages are playback-only: do not show a Download button.
+    // Other media keeps the password-protected Download action.
+    if (msg.type !== 'audio') {
+      const actions=document.createElement('div'); actions.className='media-actions';
+      const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
+      download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
+      actions.appendChild(download);
+      content.appendChild(wrap); content.appendChild(actions);
+    } else {
+      content.appendChild(wrap);
+    }
   } else {
     const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);
   }
