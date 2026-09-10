@@ -157,7 +157,7 @@ async function getMediaChunksBucket() {
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.get('/api/push/public-key', (req, res) => {
   res.json({ ok: true, publicKey: vapid.publicKey });

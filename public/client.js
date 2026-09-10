@@ -105,6 +105,7 @@ const adminRecycleError = document.querySelector('#adminRecycleError');
 const adminRecycleRefresh = document.querySelector('#adminRecycleRefresh');
 const adminRecycleEmpty = document.querySelector('#adminRecycleEmpty');
 const adminMainRecycleBtn = document.querySelector('#adminMainRecycleBtn');
+const adminMainRecycleFromGroupsBtn = document.querySelector('#adminMainRecycleFromGroupsBtn');
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -1231,6 +1232,7 @@ function openAdminRecycle(groupId, groupName) {
 
 adminRecycleClose?.addEventListener('click',()=>adminRecycleModal.classList.add('hidden'));
 adminMainRecycleBtn?.addEventListener('click',()=>openAdminRecycle('main','Main Recycle Bin'));
+adminMainRecycleFromGroupsBtn?.addEventListener('click',()=>openAdminRecycle('main','Main Recycle Bin'));
 adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
 adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{
