@@ -1476,7 +1476,7 @@ const advState = JSON.parse(localStorage.getItem('wa_adv_state') || '{}');
 function saveAdv(){ localStorage.setItem('wa_adv_state', JSON.stringify(advState)); }
 function groupAdv(){ advState[currentGroupId] ||= {archived:false,muted:false,unread:false,locked:false}; return advState[currentGroupId]; }
 const messageInfoModal=document.querySelector('#messageInfoModal'), messageInfoBody=document.querySelector('#messageInfoBody'), messageInfoClose=document.querySelector('#messageInfoClose');
-const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn'), cameraCallBtn=document.querySelector('#cameraCallBtn'), switchCameraBtn=document.querySelector('#switchCameraBtn'), fullscreenCallBtn=document.querySelector('#fullscreenCallBtn');
+const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn'), cameraCallBtn=document.querySelector('#cameraCallBtn');
 const chatTools=document.querySelector('#chatTools');
 function showMessageInfo(msg){ if(!messageInfoModal) return; const delivered=Array.isArray(msg.deliveredTo)?msg.deliveredTo.length:0, read=Array.isArray(msg.readBy)?msg.readBy.length:0; messageInfoBody.innerHTML=''; [['Message',msg.message||msg.fileName||msg.type||'Media'],['Sent',msg.time||''],['Delivered',String(delivered)],['Read',String(read)],['Edited',msg.edited?'Yes':'No'],['Forwarded',msg.forwarded?'Yes':'No']].forEach(([a,b])=>{const row=document.createElement('div');row.className='info-row';row.innerHTML='<b></b><span></span>';row.children[0].textContent=a;row.children[1].textContent=b;messageInfoBody.appendChild(row)}); messageInfoModal.classList.remove('hidden');}
 messageInfoClose?.addEventListener('click',()=>messageInfoModal.classList.add('hidden')); messageInfoModal?.addEventListener('click',e=>{if(e.target===messageInfoModal)messageInfoModal.classList.add('hidden')});
@@ -1529,31 +1529,40 @@ async function sendCallEvent(type, callId, payload={}, toUserId='') {
   if (socket.connected) socket.emit('call-event', body);
 }
 
-function callVideoDomId(id){ return `call-video-${String(id).replace(/[^a-zA-Z0-9_-]/g,'_')}`; }
-function callStageAddVideo(id, stream, label, muted=false){
+function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=false){
   ensureCallMediaUI();
   const stage=document.getElementById('callStage'); if(!stage)return;
-  const domId=callVideoDomId(id);
-  let wrap=document.getElementById(domId);
+  const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_');
+  let wrap=document.getElementById(`call-video-${safeId}`);
   if(!wrap){
-    wrap=document.createElement('div'); wrap.className='call-video-wrap'; wrap.id=domId;
-    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=muted; v.srcObject=stream;
-    if(id==='local') v.classList.add('local-preview');
-    const cap=document.createElement('span'); cap.textContent=label||'Participant'; wrap.append(v,cap); stage.appendChild(wrap);
-  } else {
-    const v=wrap.querySelector('video'); if(v && v.srcObject!==stream) v.srcObject=stream;
+    wrap=document.createElement('div'); wrap.className='call-video-wrap call-participant'; wrap.id=`call-video-${safeId}`;
+    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=muted;
+    const avatar=document.createElement('div'); avatar.className='call-placeholder'; avatar.innerHTML=`<div class="call-placeholder-avatar">${String(label||'U').slice(0,1).toUpperCase()}</div><div class="call-placeholder-name"></div>`;
+    const cap=document.createElement('span'); cap.textContent=label||'Participant';
+    wrap.append(v,avatar,cap); stage.appendChild(wrap);
   }
-  // Exactly one tile per connected participant; never append duplicate feeds.
+  const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
+  if(v && stream){ v.srcObject=stream; v.muted=muted; }
+  const hasLiveVideo=!!(stream && stream.getVideoTracks().some(t=>t.readyState==='live' && t.enabled) && hasVideo);
+  wrap.classList.toggle('has-video',hasLiveVideo);
+  if(ph) ph.classList.toggle('hidden',hasLiveVideo);
   return wrap;
+}
+function callStageAddVideo(id, stream, label, muted=false){
+  return callStageAddParticipant(id,label,stream,muted,true);
+}
+function callStageAddAudio(id, stream, label){
+  const wrap=callStageAddParticipant(id,label,stream,false,false);
+  if(wrap){ const v=wrap.querySelector('video'); if(v){ v.muted=false; v.volume=1; v.play().catch(()=>{}); } }
 }
 function clearCallStage(){ const stage=document.getElementById('callStage'); if(stage)stage.innerHTML=''; }
 function showCallModal(title,state){
   document.getElementById('callTitle').textContent=title;
   document.getElementById('callState').textContent=state;
   document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();
-  callModal?.classList.remove('hidden');
+  callModal?.classList.remove('hidden'); callModal?.querySelector('.call-card')?.classList.add('call-fullscreen');
 }
-function closeCallModal(){ callModal?.classList.add('hidden'); const b=document.getElementById('acceptCallBtn'); if(b)b.classList.add('hidden'); }
+function closeCallModal(){ callModal?.classList.add('hidden'); callModal?.querySelector('.call-card')?.classList.remove('call-fullscreen'); const b=document.getElementById('acceptCallBtn'); if(b)b.classList.add('hidden'); }
 
 async function createPeer(remoteId, remoteName, initiator){
   if(!activeCall || activeCall.ended || remoteId===userId) return;
@@ -1562,7 +1571,7 @@ async function createPeer(remoteId, remoteName, initiator){
   pc=new RTCPeerConnection(RTC_CONFIG); peerConnections.set(remoteId,pc);
   if(activeCall.stream) activeCall.stream.getTracks().forEach(t=>pc.addTrack(t,activeCall.stream));
   pc.onicecandidate=e=>{ if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId); };
-  pc.ontrack=e=>{ const stream=e.streams?.[0]; if(stream) callStageAddVideo(remoteId,stream,remoteName, false); };
+  pc.ontrack=e=>{ const stream=e.streams?.[0]; if(!stream) return; if(e.track?.kind==='video') callStageAddVideo(remoteId,stream,remoteName,false); else callStageAddAudio(remoteId,stream,remoteName); };
   pc.onconnectionstatechange=()=>{ if(['failed','closed'].includes(pc.connectionState)){ try{pc.close()}catch(_){} peerConnections.delete(remoteId); } };
   if(initiator){
     const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
@@ -1591,12 +1600,14 @@ async function handleCallEvent(e){
   if(e.type==='join'){
     const rid=e.fromUserId; if(rid===userId)return;
     activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+    callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     // Only one side creates the offer, preventing duplicate negotiations.
     const initiator=String(userId)<String(rid);
     await createPeer(rid,e.fromName||'Member',initiator);
     document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
   } else if(e.type==='offer' && e.toUserId===userId){
     const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+    callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     const pc=await createPeer(rid,e.fromName||'Member',false);
     await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
     const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
@@ -1607,7 +1618,7 @@ async function handleCallEvent(e){
     const pc=peerConnections.get(e.fromUserId); if(pc && e.payload?.candidate){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
   } else if(e.type==='leave'){
     const pc=peerConnections.get(e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromUserId);}
-    document.getElementById(callVideoDomId(e.fromUserId))?.remove();
+    document.getElementById(`call-video-${String(e.fromUserId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
   } else if(e.type==='end'){
     if(e.fromUserId!==userId) finishCall(false, `${e.fromName||'Member'} ended the call`);
   }
@@ -1633,9 +1644,10 @@ async function startCall(video=false){
     // the user explicitly turns it on with the camera button.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false,cameraFacing:'user'};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false};
     clearCallStage();
-    if(video){ cameraCallBtn?.classList.remove('hidden'); switchCameraBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else { cameraCallBtn?.classList.add('hidden'); switchCameraBtn?.classList.add('hidden'); }
+    callStageAddParticipant(userId,name,null,true,false);
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('invite',callId,{callType:activeCall.type});
@@ -1649,9 +1661,11 @@ async function acceptIncomingCall(){
     const video=inc.payload?.callType==='video';
     // Even an incoming video call starts with camera OFF. Only microphone is requested.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false,cameraFacing:'user'};
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false};
     clearCallStage();
-    if(video){ cameraCallBtn?.classList.remove('hidden'); switchCameraBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else { cameraCallBtn?.classList.add('hidden'); switchCameraBtn?.classList.add('hidden'); }
+    callStageAddParticipant(userId,name,null,true,false);
+    callStageAddParticipant(inc.fromUserId,inc.fromName||'Member',null,false,false);
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Connecting…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
@@ -1667,7 +1681,7 @@ async function finishCall(notify=true,message='Call ended'){
     call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
   }
   peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
-  activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera Off';} if(switchCameraBtn) switchCameraBtn.classList.add('hidden'); closeCallModal();
+  activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera Off';} closeCallModal();
   if(message) showToast(message);
 }
 
@@ -1676,71 +1690,41 @@ endCallBtn?.addEventListener('click',()=>{ if(incomingCall){const inc=incomingCa
 muteCallBtn?.addEventListener('click',()=>{if(!activeCall?.stream)return;const track=activeCall.stream.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;muteCallBtn.textContent=track.enabled?'🎤 Mute':'🔇 Unmute';});
 speakerCallBtn?.addEventListener('click',()=>{document.querySelectorAll('#callStage video').forEach(v=>{v.muted=!v.muted});speakerCallBtn.textContent=speakerCallBtn.textContent.includes('Speaker')?'🔈 Earpiece':'🔊 Speaker';});
 
-async function replaceOutgoingVideoTrack(camTrack){
-  for(const [rid,pc] of peerConnections){
-    const sender=pc.getSenders().find(s=>s.track?.kind==='video');
-    if(sender) await sender.replaceTrack(camTrack || null);
-    else if(camTrack) pc.addTrack(camTrack,activeCall.stream);
-    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
-    await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
-  }
-}
 async function toggleCallCamera(){
   if(!activeCall || activeCall.type!=='video') return;
   try{
     if(!activeCall.cameraOn){
-      const camStream=await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:{ideal:activeCall.cameraFacing||'user'},width:{ideal:1280},height:{ideal:720}},
-        audio:false
-      });
+      const camStream=await navigator.mediaDevices.getUserMedia({video:true});
       const camTrack=camStream.getVideoTracks()[0];
-      activeCall.stream.getVideoTracks().forEach(t=>{try{t.stop()}catch(_){};activeCall.stream.removeTrack(t);});
       activeCall.stream.addTrack(camTrack);
       activeCall.cameraOn=true;
       callStageAddVideo('local',activeCall.stream,'You',true);
       if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera On';
-      await replaceOutgoingVideoTrack(camTrack);
+      // Add the new video track to every active peer and renegotiate.
+      for(const [rid,pc] of peerConnections){
+        const sender=pc.getSenders().find(s=>s.track?.kind==='video');
+        if(sender) await sender.replaceTrack(camTrack);
+        else pc.addTrack(camTrack,activeCall.stream);
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+        await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
+      }
     }else{
       const track=activeCall.stream.getVideoTracks()[0];
-      if(track){track.stop();activeCall.stream.removeTrack(track);}
+      if(track){track.stop(); activeCall.stream.removeTrack(track);}
       activeCall.cameraOn=false;
-      document.getElementById(callVideoDomId('local'))?.remove();
+      document.getElementById('call-video-local')?.remove();
       if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera Off';
-      await replaceOutgoingVideoTrack(null);
+      for(const [rid,pc] of peerConnections){
+        const sender=pc.getSenders().find(s=>s.track?.kind==='video');
+        if(sender) await sender.replaceTrack(null);
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+        await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
+      }
     }
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Could not change camera state'); }
 }
-async function switchCallCamera(){
-  if(!activeCall || activeCall.type!=='video' || !activeCall.cameraOn) return;
-  try{
-    activeCall.cameraFacing = activeCall.cameraFacing==='environment' ? 'user' : 'environment';
-    const camStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{exact:activeCall.cameraFacing},width:{ideal:1280},height:{ideal:720}},
-      audio:false
-    });
-    const newTrack=camStream.getVideoTracks()[0];
-    const oldTrack=activeCall.stream.getVideoTracks()[0];
-    activeCall.stream.addTrack(newTrack);
-    if(oldTrack) { oldTrack.stop(); activeCall.stream.removeTrack(oldTrack); }
-    callStageAddVideo('local',activeCall.stream,'You',true);
-    await replaceOutgoingVideoTrack(newTrack);
-    showToast(activeCall.cameraFacing==='environment'?'Rear camera':'Front camera');
-  }catch(e){
-    activeCall.cameraFacing=activeCall.cameraFacing==='environment'?'user':'environment';
-    showToast('Camera switch not supported on this device');
-  }
-}
-async function toggleCallFullscreen(){
-  const target=document.getElementById('callStage') || callModal;
-  try{
-    if(!document.fullscreenElement) await (target.requestFullscreen?.() || callModal?.requestFullscreen?.());
-    else await document.exitFullscreen();
-  }catch(_){ showToast('Fullscreen not available'); }
-}
+
 cameraCallBtn?.addEventListener('click',toggleCallCamera);
-switchCameraBtn?.addEventListener('click',switchCallCamera);
-fullscreenCallBtn?.addEventListener('click',toggleCallFullscreen);
-document.addEventListener('fullscreenchange',()=>{if(fullscreenCallBtn) fullscreenCallBtn.textContent=document.fullscreenElement?'⛶ Exit full screen':'⛶ Full screen';});
 document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));
 document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));
 

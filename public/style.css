@@ -173,14 +173,17 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 
 .admin-main-recycle-row{display:flex;justify-content:flex-end;margin:10px 0 14px}.admin-main-recycle-row .mini-btn{width:100%;justify-content:center}
 
-/* Full-screen multi-user video call UI */
-.call-card{width:min(96vw,1100px);max-width:1100px}
-.call-stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:10px 0;max-height:65vh;overflow:auto;background:#000;padding:8px;border-radius:12px}
-.call-video-wrap{position:relative;background:#111;border-radius:10px;overflow:hidden;min-height:180px;aspect-ratio:16/9}
-.call-video-wrap video{width:100%;height:100%;min-height:180px;object-fit:cover;display:block}
-.call-video-wrap video.local-preview{transform:none}
-#callStage:fullscreen{width:100vw;height:100vh;max-height:none;margin:0;padding:12px;display:grid;align-content:center;background:#000;border-radius:0}
-#callStage:fullscreen .call-video-wrap{min-height:0}
-#callStage:fullscreen .call-video-wrap video{min-height:0}
-#fullscreenCallBtn{font-weight:600}
-@media(max-width:760px){.call-card{width:100vw;max-width:none;height:100vh;max-height:100vh;border-radius:0}.call-stage{grid-template-columns:1fr 1fr;max-height:72vh}.call-video-wrap{min-height:120px}.call-video-wrap video{min-height:120px}}
+/* Group call: camera-off participants still get an avatar tile and their audio remains active. */
+.call-stage{position:relative;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:0;padding:10px;max-height:70vh;overflow:auto;background:#111;min-height:220px}
+.call-video-wrap{position:relative;background:#202124;border-radius:12px;overflow:hidden;min-height:180px;display:grid;place-items:center}
+.call-video-wrap video{width:100%;height:100%;min-height:180px;object-fit:cover;display:block;background:#111}
+.call-video-wrap:not(.has-video) video{opacity:0;position:absolute;pointer-events:none}
+.call-placeholder{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:8px;background:#202124;color:#fff}
+.call-placeholder.hidden{display:none}
+.call-placeholder-avatar{width:74px;height:74px;border-radius:50%;display:grid;place-items:center;background:#546e7a;color:#fff;font-size:30px;font-weight:600}
+.call-placeholder-name{font-size:14px;color:#fff}
+.call-video-wrap>span{position:absolute;left:8px;bottom:8px;z-index:3;background:rgba(0,0,0,.65);color:#fff;padding:4px 8px;border-radius:12px;font-size:12px}
+.call-card.call-fullscreen{width:100vw;max-width:none;height:100vh;max-height:none;border-radius:0;padding:0;background:#111;display:flex;flex-direction:column}
+.call-card.call-fullscreen .call-stage{flex:1;max-height:none}
+.call-card.call-fullscreen .call-actions{padding:12px;background:#111}
+@media(max-width:760px){.call-stage{grid-template-columns:1fr 1fr;min-height:45vh}.call-video-wrap{min-height:150px}.call-video-wrap video{min-height:150px}}
