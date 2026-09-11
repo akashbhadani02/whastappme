@@ -1545,7 +1545,16 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
     wrap.append(v,avatar,cap); stage.appendChild(wrap);
   }
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
-  if(v && stream){ v.srcObject=stream; v.muted=muted; v.play().catch(()=>{}); }
+  if(v && stream){
+    // Mobile Chrome/Android WebView needs an explicitly muted, inline video
+    // element for reliable local camera preview/autoplay.
+    v.autoplay=true; v.playsInline=true; v.muted=!!muted;
+    v.setAttribute('autoplay',''); v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+    if(v.srcObject!==stream) v.srcObject=stream;
+    const playLocal=()=>v.play().catch(()=>{});
+    v.onloadedmetadata=playLocal; v.oncanplay=playLocal;
+    playLocal();
+  }
   // Never change video visibility during an audio-only track update.
   if(hasVideo){
     const track=stream?.getVideoTracks?.()[0];
@@ -1556,7 +1565,17 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
 }
 function callStageAddVideo(id, stream, label, muted=false){
   const wrap=callStageAddParticipant(id,label,stream,muted,true);
-  if(wrap){ const v=wrap.querySelector('video'); if(v){v.muted=muted;v.style.opacity='1';v.play().catch(()=>{});} }
+  if(wrap){
+    const v=wrap.querySelector('video');
+    if(v){
+      v.autoplay=true; v.playsInline=true; v.muted=!!muted;
+      v.setAttribute('autoplay',''); v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+      v.srcObject=stream;
+      v.style.opacity='1';
+      const play=()=>v.play().catch(()=>{});
+      v.onloadedmetadata=play; v.oncanplay=play; play();
+    }
+  }
   return wrap;
 }
 function callStageAddAudio(id, stream, label){
