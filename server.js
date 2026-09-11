@@ -634,13 +634,31 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
     const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
       ? { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }
       : {};
-    const items = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
+    // Empty BOTH stores: the dedicated recycle_bin collection AND the
+    // soft-deleted messages kept in the main messages collection.  Previously
+    // only recycle_bin was cleared, so those soft-deleted messages reappeared
+    // in Main Recycle Bin immediately after an Empty action.
+    const recycleItems = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
+    const softFilter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
+      ? { deletedAt:{ $exists:true }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
+      : { deletedAt:{ $exists:true } };
+    const softItems = await db.collection(COLLECTION_NAME)
+      .find(softFilter, { projection:{ 'mediaId':1 } }).toArray();
+
+    const mediaIds = new Set();
+    for (const item of recycleItems) if (item.message?.mediaId) mediaIds.add(String(item.message.mediaId));
+    for (const item of softItems) if (item.mediaId) mediaIds.add(String(item.mediaId));
+
     const bucket = await getMediaBucket();
-    for (const item of items) {
-      if (item.message?.mediaId) { try { await bucket.delete(new ObjectId(String(item.message.mediaId))); } catch (_) {} }
+    for (const mediaId of mediaIds) {
+      if (ObjectId.isValid(mediaId)) {
+        try { await bucket.delete(new ObjectId(mediaId)); } catch (_) {}
+      }
     }
-    const result = await recycle.deleteMany(filter);
-    res.json({ ok:true, count:result.deletedCount || 0 });
+
+    const recycleResult = await recycle.deleteMany(filter);
+    const messageResult = await db.collection(COLLECTION_NAME).deleteMany(softFilter);
+    res.json({ ok:true, count:(recycleResult.deletedCount || 0) + (messageResult.deletedCount || 0) });
   } catch (error) {
     console.error('Admin recycle empty failed:', error.message);
     res.status(500).json({ ok:false, error:'Empty recycle bin failed' });
