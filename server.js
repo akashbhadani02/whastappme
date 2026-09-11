@@ -1224,6 +1224,8 @@ io.on('connection', async (socket) => {
 
   socket.on('register-user', (data) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
+    if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
+    if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
   });
 
   socket.on('join-group', async (data, ack) => {

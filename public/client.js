@@ -16,9 +16,8 @@ if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
   localStorage.setItem('wa_user_id', userId);
 }
-// IMPORTANT: userId is the account identity; callDeviceId makes each browser/device
-// a separate WebRTC peer. This allows the same account to join the same call from
-// a laptop and a phone without either side being mistaken for "self".
+// IMPORTANT: one account can be open on multiple devices. WebRTC must identify
+// each browser/device separately, otherwise the second device is mistaken for self.
 const callDeviceId = localStorage.getItem('wa_call_device_id') || (crypto.randomUUID ? crypto.randomUUID() : socketId);
 localStorage.setItem('wa_call_device_id', callDeviceId);
 const callPeerId = `${userId}:${callDeviceId}`;
@@ -1069,7 +1068,7 @@ function setOnlineStatus(state) {
 }
 socket.on('connect', () => {
   setOnlineStatus('online');
-  socket.emit('register-user', { userId });
+  socket.emit('register-user', { userId, peerId: callPeerId, deviceId: callDeviceId });
   socket.emit('join-group', { groupId: currentGroupId }, () => syncMessages().finally(markVisibleMessagesRead));
 });
 socket.on('disconnect', () => setOnlineStatus('connecting'));
@@ -1800,7 +1799,7 @@ function stopCallPresence(){ if(callPresenceTimer){clearInterval(callPresenceTim
 
 socket.on('call-presence', async e=>{
   try{
-    if(!e || !activeCall || activeCall.ended || String(e.groupId)!==String(currentGroupId) || e.callId!==activeCall.id || String(e.peerId || '')===String(callPeerId)) return;
+    if(!e || !activeCall || activeCall.ended || e.groupId!==currentGroupId || e.callId!==activeCall.id || String(e.peerId || '')===String(callPeerId)) return;
     const rid=String(e.peerId || e.userId); const remoteName=e.name||'Member';
     activeCall.participants.set(rid,{id:rid,userId:e.userId,name:remoteName});
     callStageAddParticipant(rid,remoteName,null,false,false);
