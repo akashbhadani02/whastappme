@@ -1168,7 +1168,7 @@ async function loadAdminRecycle() {
   adminRecycleError.textContent = '';
   adminRecycleList.innerHTML = '<div class="recycle-empty">Loading recycle bin…</div>';
   try {
-    const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password:PASSWORD, groupId:adminRecycleGroupId }) });
+    const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(adminRecycleGroupId === 'main' ? { password:PASSWORD } : { password:PASSWORD, groupId:adminRecycleGroupId }) });
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     const items = Array.isArray(data.items) ? data.items : [];
@@ -1238,7 +1238,7 @@ adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{
   if(!confirm(`Empty recycle bin for "${adminRecycleGroupName}"? This permanently deletes all stored media.`)) return;
   try {
-    const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,groupId:adminRecycleGroupId})});
+    const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(adminRecycleGroupId === 'main' ? {password:PASSWORD} : {password:PASSWORD,groupId:adminRecycleGroupId})});
     const d=await r.json(); if(!d.ok) throw new Error(d.error||'Empty failed');
     showToast(`${d.count||0} items permanently deleted`); loadAdminRecycle();
   } catch(e){ adminRecycleError.textContent=e.message||'Empty failed'; }
