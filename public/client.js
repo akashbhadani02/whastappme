@@ -1181,13 +1181,15 @@ async function loadAdminRecycle() {
       const m = item.message || {};
       const row = document.createElement('div'); row.className='recycle-item';
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
-      const name = m.fileName || m.message || 'Deleted message';
+      const sender = m.user || m.senderName || m.senderId || m.userId || 'Unknown user';
+      const content = m.message || m.fileName || (m.type === 'image' ? 'Photo' : m.type === 'video' ? 'Video' : m.type === 'audio' ? 'Audio' : m.type === 'document' ? 'Document' : 'Deleted message');
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
       const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
-      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
+      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
-      row.querySelector('.recycle-name').textContent=name;
+      row.querySelector('.recycle-sender').textContent=`Sent by: ${sender}`;
+      row.querySelector('.recycle-name').textContent=content;
       row.querySelector('.recycle-meta').textContent=when;
       const view=row.querySelector('.recycle-view-btn');
       const download=row.querySelector('.recycle-download-btn');
