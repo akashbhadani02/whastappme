@@ -172,3 +172,15 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 @media(max-width:600px){.recycle-item{align-items:stretch;flex-direction:column}.recycle-actions{justify-content:stretch}.recycle-actions button{flex:1;min-height:40px}.recycle-admin-actions{flex-direction:column}.recycle-admin-actions button{width:100%;min-height:42px}.admin-row-actions{flex-wrap:wrap}.admin-row-actions button{flex:1}}
 
 .admin-main-recycle-row{display:flex;justify-content:flex-end;margin:10px 0 14px}.admin-main-recycle-row .mini-btn{width:100%;justify-content:center}
+
+/* Full-screen multi-user video call UI */
+.call-card{width:min(96vw,1100px);max-width:1100px}
+.call-stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:10px 0;max-height:65vh;overflow:auto;background:#000;padding:8px;border-radius:12px}
+.call-video-wrap{position:relative;background:#111;border-radius:10px;overflow:hidden;min-height:180px;aspect-ratio:16/9}
+.call-video-wrap video{width:100%;height:100%;min-height:180px;object-fit:cover;display:block}
+.call-video-wrap video.local-preview{transform:none}
+#callStage:fullscreen{width:100vw;height:100vh;max-height:none;margin:0;padding:12px;display:grid;align-content:center;background:#000;border-radius:0}
+#callStage:fullscreen .call-video-wrap{min-height:0}
+#callStage:fullscreen .call-video-wrap video{min-height:0}
+#fullscreenCallBtn{font-weight:600}
+@media(max-width:760px){.call-card{width:100vw;max-width:none;height:100vh;max-height:100vh;border-radius:0}.call-stage{grid-template-columns:1fr 1fr;max-height:72vh}.call-video-wrap{min-height:120px}.call-video-wrap video{min-height:120px}}
