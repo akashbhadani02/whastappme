@@ -11,14 +11,17 @@ const socket = io({
 const PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-const callDeviceId = localStorage.getItem('wa_call_device_id') || (crypto.randomUUID ? crypto.randomUUID() : socketId);
-localStorage.setItem('wa_call_device_id', callDeviceId);
-const callPeerId = `${userId || 'user'}:${callDeviceId}`;
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
   localStorage.setItem('wa_user_id', userId);
 }
+// IMPORTANT: userId is the account identity; callDeviceId makes each browser/device
+// a separate WebRTC peer. This allows the same account to join the same call from
+// a laptop and a phone without either side being mistaken for "self".
+const callDeviceId = localStorage.getItem('wa_call_device_id') || (crypto.randomUUID ? crypto.randomUUID() : socketId);
+localStorage.setItem('wa_call_device_id', callDeviceId);
+const callPeerId = `${userId}:${callDeviceId}`;
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
@@ -1797,7 +1800,7 @@ function stopCallPresence(){ if(callPresenceTimer){clearInterval(callPresenceTim
 
 socket.on('call-presence', async e=>{
   try{
-    if(!e || !activeCall || activeCall.ended || e.groupId!==currentGroupId || e.callId!==activeCall.id || e.userId===userId) return;
+    if(!e || !activeCall || activeCall.ended || String(e.groupId)!==String(currentGroupId) || e.callId!==activeCall.id || String(e.peerId || '')===String(callPeerId)) return;
     const rid=String(e.peerId || e.userId); const remoteName=e.name||'Member';
     activeCall.participants.set(rid,{id:rid,userId:e.userId,name:remoteName});
     callStageAddParticipant(rid,remoteName,null,false,false);
@@ -1810,7 +1813,7 @@ socket.on('call-presence', async e=>{
 socket.on('call-event', e=>handleCallEvent(e).catch(err=>console.error('call event',err)));
 async function pollCallEvents(){
   try{
-    const r=await fetch(`/api/calls/events?groupId=${encodeURIComponent(currentGroupId)}&userId=${encodeURIComponent(userId)}&since=${encodeURIComponent(callPollSince)}`,{cache:'no-store'});
+    const r=await fetch(`/api/calls/events?groupId=${encodeURIComponent(currentGroupId)}&userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(callPeerId)}&since=${encodeURIComponent(callPollSince)}`,{cache:'no-store'});
     if(!r.ok)return; const data=await r.json();
     if(Array.isArray(data.events)) for(const e of data.events){
       if(e.createdAt) callPollSince=new Date(e.createdAt).toISOString();
