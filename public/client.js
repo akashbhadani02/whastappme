@@ -1562,13 +1562,21 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
   }
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
   if(v && stream){
-    // Mobile Chrome/Android WebView needs an explicitly muted, inline video
-    // element for reliable local camera preview/autoplay.
-    v.autoplay=true; v.playsInline=true; v.muted=!!muted;
+    // Mobile Chrome / Android WebView: local preview must be muted + inline and
+    // explicitly started. Do not wait for loadedmetadata because some mobile
+    // engines don't fire it again when srcObject is replaced.
+    v.autoplay=true; v.playsInline=true; v.muted=!!muted; v.defaultMuted=!!muted;
     v.setAttribute('autoplay',''); v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
     if(v.srcObject!==stream) v.srcObject=stream;
-    const playLocal=()=>v.play().catch(()=>{});
-    v.onloadedmetadata=playLocal; v.oncanplay=playLocal;
+    const playLocal=()=>{ const pr=v.play(); if(pr?.catch) pr.catch(()=>{}); };
+    v.onloadedmetadata=playLocal; v.oncanplay=playLocal; v.onloadeddata=playLocal;
+    if(muted){
+      // Local camera is known to be ON here; show it immediately even if the
+      // MediaStreamTrack is briefly muted while the mobile camera starts.
+      wrap.classList.add('has-video');
+      if(ph) ph.classList.add('hidden');
+      v.style.opacity='1';
+    }
     playLocal();
   }
   // Never change video visibility during an audio-only track update.
@@ -1629,10 +1637,25 @@ async function createPeer(remoteId, remoteName, initiator){
     let rs=activeCall.remoteStreams.get(remoteId); if(!rs){rs=new MediaStream();activeCall.remoteStreams.set(remoteId,rs);}
     if(!rs.getTracks().some(t=>t.id===e.track.id))rs.addTrack(e.track);
     if(e.track.kind==='video'){
-      callStageAddVideo(remoteId,rs,remoteName,false);
+      const wrap=callStageAddVideo(remoteId,rs,remoteName,false);
+      // A remote mobile camera can arrive muted for a short time. Keep the
+      // tile alive and reveal the actual video as soon as the track is unmuted.
       const state=activeCall.remoteCameraStates?.has(remoteId)?!!activeCall.remoteCameraStates.get(remoteId):true;
+      if(state!==false){
+        wrap?.classList.add('has-video');
+        wrap?.querySelector('.call-placeholder')?.classList.add('hidden');
+        const rv=wrap?.querySelector('video'); if(rv){rv.style.opacity='1'; rv.play().catch(()=>{});}
+      }
       setParticipantCameraState(remoteId,state);
-      e.track.onunmute=()=>setParticipantCameraState(remoteId,activeCall.remoteCameraStates?.has(remoteId)?!!activeCall.remoteCameraStates.get(remoteId):true);
+      const showRemote=()=>{
+        const allowed=activeCall?.remoteCameraStates?.has(remoteId)?!!activeCall.remoteCameraStates.get(remoteId):true;
+        if(allowed){
+          const w=document.getElementById(`call-video-${String(remoteId).replace(/[^a-zA-Z0-9_-]/g,'_')}`);
+          w?.classList.add('has-video'); w?.querySelector('.call-placeholder')?.classList.add('hidden');
+          const rv=w?.querySelector('video'); if(rv){rv.style.opacity='1'; rv.play().catch(()=>{});}
+        }
+      };
+      e.track.onunmute=showRemote;
       e.track.onended=()=>setParticipantCameraState(remoteId,false);
     }else if(e.track.kind==='audio') callStageAddAudio(remoteId,rs,remoteName);
   };
@@ -1813,7 +1836,9 @@ async function replaceCallVideoTrack(facingMode){
   setParticipantCameraState(userId,true);
   for(const [,pc] of peerConnections){
     const sender=pc.__videoSender || pc.getTransceivers().find(t=>t.receiver?.track?.kind==='video')?.sender || pc.getSenders().find(s=>s.track?.kind==='video');
-    if(sender) await sender.replaceTrack(camTrack);
+    if(sender){
+      try{ await sender.replaceTrack(camTrack); }catch(err){ console.warn('video replaceTrack failed',err); }
+    }
   }
   // replaceTrack keeps the existing WebRTC video m-line alive, so no offer/answer
   // renegotiation is needed just to switch the camera track.

@@ -1501,6 +1501,7 @@ let incomingCall = null;
 let callPollTimer = null;
 let callPollSince = new Date(Date.now() - 3000).toISOString();
 const peerConnections = new Map();
+const pendingIceCandidates = new Map();
 const RTC_CONFIG = { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
@@ -1537,7 +1538,8 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
   let wrap=document.getElementById(`call-video-${safeId}`);
   if(!wrap){
     wrap=document.createElement('div'); wrap.className='call-video-wrap call-participant'; wrap.id=`call-video-${safeId}`;
-    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=muted;
+    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=muted; v.setAttribute('playsinline','');
+    v.onloadedmetadata=()=>v.play().catch(()=>{});
     const avatar=document.createElement('div'); avatar.className='call-placeholder'; avatar.innerHTML=`<div class="call-placeholder-avatar">${String(label||'U').slice(0,1).toUpperCase()}</div><div class="call-placeholder-name"></div>`;
     const cap=document.createElement('span'); cap.textContent=label||'Participant';
     wrap.append(v,avatar,cap); stage.appendChild(wrap);
@@ -1559,54 +1561,107 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
     }, {passive:false});
   }
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
-  if(v && stream){ v.srcObject=stream; v.muted=muted; }
-  const hasLiveVideo=!!(stream && stream.getVideoTracks().some(t=>t.readyState==='live' && t.enabled) && hasVideo);
-  wrap.classList.toggle('has-video',hasLiveVideo);
-  if(ph) ph.classList.toggle('hidden',hasLiveVideo);
+  if(v && stream){
+    // Mobile Chrome / Android WebView: local preview must be muted + inline and
+    // explicitly started. Do not wait for loadedmetadata because some mobile
+    // engines don't fire it again when srcObject is replaced.
+    v.autoplay=true; v.playsInline=true; v.muted=!!muted; v.defaultMuted=!!muted;
+    v.setAttribute('autoplay',''); v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+    if(v.srcObject!==stream) v.srcObject=stream;
+    const playLocal=()=>{ const pr=v.play(); if(pr?.catch) pr.catch(()=>{}); };
+    v.onloadedmetadata=playLocal; v.oncanplay=playLocal; v.onloadeddata=playLocal;
+    if(muted){
+      // Local camera is known to be ON here; show it immediately even if the
+      // MediaStreamTrack is briefly muted while the mobile camera starts.
+      wrap.classList.add('has-video');
+      if(ph) ph.classList.add('hidden');
+      v.style.opacity='1';
+    }
+    playLocal();
+  }
+  // Never change video visibility during an audio-only track update.
+  if(hasVideo){
+    const track=stream?.getVideoTracks?.()[0];
+    const live=!!(track && track.readyState==='live' && track.enabled && !track.muted);
+    wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v) v.style.opacity=live?'1':'0';
+  }
   return wrap;
 }
 function callStageAddVideo(id, stream, label, muted=false){
-  return callStageAddParticipant(id,label,stream,muted,true);
+  const wrap=callStageAddParticipant(id,label,stream,muted,true);
+  if(wrap){
+    const v=wrap.querySelector('video');
+    if(v){
+      v.autoplay=true; v.playsInline=true; v.muted=!!muted;
+      v.setAttribute('autoplay',''); v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+      v.srcObject=stream;
+      v.style.opacity='1';
+      const play=()=>v.play().catch(()=>{});
+      v.onloadedmetadata=play; v.oncanplay=play; play();
+    }
+  }
+  return wrap;
 }
 function callStageAddAudio(id, stream, label){
+  // Audio must not hide an already connected video feed.
   const wrap=callStageAddParticipant(id,label,stream,false,false);
-  if(wrap){ const v=wrap.querySelector('video'); if(v){ v.muted=false; v.volume=1; v.play().catch(()=>{}); } }
+  if(wrap){ const v=wrap.querySelector('video'); if(v){v.muted=false;v.volume=1;v.play().catch(()=>{});} }
 }
 function clearCallStage(){ const stage=document.getElementById('callStage'); if(stage)stage.innerHTML=''; }
 function setParticipantCameraState(id, on){
-  const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_');
-  const wrap=document.getElementById(`call-video-${safeId}`); if(!wrap)return;
-  const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
-  const live=!!(on && v?.srcObject && v.srcObject.getVideoTracks().some(t=>t.readyState==='live' && t.enabled));
-  wrap.classList.toggle('has-video',live);
-  if(ph) ph.classList.toggle('hidden',live);
-  if(v) v.style.opacity=live?'1':'0';
+  const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_'); const wrap=document.getElementById(`call-video-${safeId}`); if(!wrap)return;
+  const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder'); const track=v?.srcObject?.getVideoTracks?.()[0];
+  // A real live remote track is enough to show video unless an explicit OFF event arrived.
+  const live=!!(track && track.readyState==='live' && track.enabled && !track.muted && on!==false);
+  wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v){v.style.opacity=live?'1':'0';if(live)v.play().catch(()=>{});}
 }
 function updateCallButtons(){
   if(!activeCall || activeCall.type!=='video') return;
-  if(cameraCallBtn){ cameraCallBtn.classList.remove('hidden'); cameraCallBtn.textContent=activeCall.cameraOn?'📷 Camera Off':'📷 Camera On'; }
-  if(switchCameraCallBtn){ switchCameraCallBtn.classList.remove('hidden'); switchCameraCallBtn.textContent=activeCall.facingMode==='environment'?'🔄 Front':'🔄 Rear'; }
+  if(cameraCallBtn){cameraCallBtn.classList.remove('hidden');cameraCallBtn.textContent=activeCall.cameraOn?'📷 Camera Off':'📷 Camera On';}
+  if(switchCameraCallBtn){switchCameraCallBtn.classList.remove('hidden');switchCameraCallBtn.textContent=activeCall.facingMode==='environment'?'🔄 Front':'🔄 Rear';}
 }
-function showCallModal(title,state){
-  document.getElementById('callTitle').textContent=title;
-  document.getElementById('callState').textContent=state;
-  document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();
-  callModal?.classList.remove('hidden'); callModal?.querySelector('.call-card')?.classList.add('call-fullscreen');
-}
-function closeCallModal(){ callModal?.classList.add('hidden'); callModal?.querySelector('.call-card')?.classList.remove('call-fullscreen'); const b=document.getElementById('acceptCallBtn'); if(b)b.classList.add('hidden'); }
+function showCallModal(title,state){document.getElementById('callTitle').textContent=title;document.getElementById('callState').textContent=state;document.getElementById('callAvatar').textContent=(groupName||'W').slice(0,1).toUpperCase();callModal?.classList.remove('hidden');callModal?.querySelector('.call-card')?.classList.add('call-fullscreen');}
+function closeCallModal(){callModal?.classList.add('hidden');callModal?.querySelector('.call-card')?.classList.remove('call-fullscreen');const b=document.getElementById('acceptCallBtn');if(b)b.classList.add('hidden');}
 
 async function createPeer(remoteId, remoteName, initiator){
   if(!activeCall || activeCall.ended || remoteId===userId) return;
-  let pc=peerConnections.get(remoteId);
-  if(pc) return pc;
-  pc=new RTCPeerConnection(RTC_CONFIG); peerConnections.set(remoteId,pc);
-  if(activeCall.stream) activeCall.stream.getTracks().forEach(t=>pc.addTrack(t,activeCall.stream));
-  pc.onicecandidate=e=>{ if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId); };
-  pc.ontrack=e=>{ const stream=e.streams?.[0]; if(!stream) return; if(e.track?.kind==='video') { callStageAddVideo(remoteId,stream,remoteName,false); setParticipantCameraState(remoteId,true); } else callStageAddAudio(remoteId,stream,remoteName); };
-  pc.onconnectionstatechange=()=>{ if(['failed','closed'].includes(pc.connectionState)){ try{pc.close()}catch(_){} peerConnections.delete(remoteId); } };
+  let pc=peerConnections.get(remoteId); if(pc) return pc;
+  pc=new RTCPeerConnection(RTC_CONFIG); pc.__remoteId=remoteId; pc.__remoteDescriptionSet=false; peerConnections.set(remoteId,pc);
+  const audioTrack=activeCall.stream?.getAudioTracks?.()[0]; if(audioTrack) pc.addTrack(audioTrack,activeCall.stream);
+  const tr=pc.addTransceiver('video',{direction:'sendrecv'}); pc.__videoSender=tr.sender;
+  const currentVideo=activeCall.stream?.getVideoTracks?.()[0]; if(currentVideo) await pc.__videoSender.replaceTrack(currentVideo);
+  pc.onicecandidate=e=>{if(e.candidate&&activeCall)sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId);};
+  pc.ontrack=e=>{
+    if(!activeCall||activeCall.ended||!e.track)return;
+    if(!activeCall.remoteStreams)activeCall.remoteStreams=new Map();
+    let rs=activeCall.remoteStreams.get(remoteId); if(!rs){rs=new MediaStream();activeCall.remoteStreams.set(remoteId,rs);}
+    if(!rs.getTracks().some(t=>t.id===e.track.id))rs.addTrack(e.track);
+    if(e.track.kind==='video'){
+      const wrap=callStageAddVideo(remoteId,rs,remoteName,false);
+      // A remote mobile camera can arrive muted for a short time. Keep the
+      // tile alive and reveal the actual video as soon as the track is unmuted.
+      const state=activeCall.remoteCameraStates?.has(remoteId)?!!activeCall.remoteCameraStates.get(remoteId):true;
+      if(state!==false){
+        wrap?.classList.add('has-video');
+        wrap?.querySelector('.call-placeholder')?.classList.add('hidden');
+        const rv=wrap?.querySelector('video'); if(rv){rv.style.opacity='1'; rv.play().catch(()=>{});}
+      }
+      setParticipantCameraState(remoteId,state);
+      const showRemote=()=>{
+        const allowed=activeCall?.remoteCameraStates?.has(remoteId)?!!activeCall.remoteCameraStates.get(remoteId):true;
+        if(allowed){
+          const w=document.getElementById(`call-video-${String(remoteId).replace(/[^a-zA-Z0-9_-]/g,'_')}`);
+          w?.classList.add('has-video'); w?.querySelector('.call-placeholder')?.classList.add('hidden');
+          const rv=w?.querySelector('video'); if(rv){rv.style.opacity='1'; rv.play().catch(()=>{});}
+        }
+      };
+      e.track.onunmute=showRemote;
+      e.track.onended=()=>setParticipantCameraState(remoteId,false);
+    }else if(e.track.kind==='audio') callStageAddAudio(remoteId,rs,remoteName);
+  };
+  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)){try{pc.close()}catch(_){}peerConnections.delete(remoteId);activeCall?.remoteStreams?.delete(remoteId);}};
   if(initiator){
-    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
-    await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+    try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);if(activeCall&&!activeCall.ended)await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);}catch(err){console.warn('initial offer failed',remoteId,err);}
   }
   return pc;
 }
@@ -1652,14 +1707,32 @@ async function handleCallEvent(e){
     const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
     callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     const pc=await createPeer(rid,e.fromName||'Member',false);
-    await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+    const desc=new RTCSessionDescription(e.payload.description);
+    if(pc.signalingState==='have-local-offer'){ try{await pc.setLocalDescription({type:'rollback'});}catch(_){} }
+    if(pc.signalingState==='stable' || pc.signalingState==='have-local-offer') await pc.setRemoteDescription(desc);
+    pc.__remoteDescriptionSet=true;
+    const queued=pendingIceCandidates.get(rid)||[];
+    for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
+    pendingIceCandidates.delete(rid);
     const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
     await sendCallEvent('answer',activeCall.id,{description:pc.localDescription},rid);
   } else if(e.type==='answer' && e.toUserId===userId){
-    const pc=peerConnections.get(e.fromUserId); if(pc) await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+    if(pc){
+      if(pc.signalingState==='stable') return;
+      await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description)); pc.__remoteDescriptionSet=true;
+      const queued=pendingIceCandidates.get(rid)||[];
+      for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
+      pendingIceCandidates.delete(rid);
+    }
   } else if(e.type==='ice' && e.toUserId===userId){
-    const pc=peerConnections.get(e.fromUserId); if(pc && e.payload?.candidate){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
+    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+    if(e.payload?.candidate){
+      if(pc?.remoteDescription){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
+      else { if(!pendingIceCandidates.has(rid)) pendingIceCandidates.set(rid,[]); pendingIceCandidates.get(rid).push(e.payload.candidate); }
+    }
   } else if(e.type==='camera-state' && (!e.toUserId || e.toUserId===userId)){
+    if(activeCall?.remoteCameraStates) activeCall.remoteCameraStates.set(e.fromUserId, !!e.payload?.on);
     setParticipantCameraState(e.fromUserId, !!e.payload?.on);
   } else if(e.type==='leave'){
     const pc=peerConnections.get(e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromUserId);}
@@ -1689,7 +1762,7 @@ async function startCall(video=false){
     // the user explicitly turns it on with the camera button.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
     clearCallStage();
     callStageAddParticipant(userId,name,null,true,false);
     if(video){ updateCallButtons(); } else { cameraCallBtn?.classList.add('hidden'); switchCameraCallBtn?.classList.add('hidden'); }
@@ -1706,7 +1779,7 @@ async function acceptIncomingCall(){
     const video=inc.payload?.callType==='video';
     // Even an incoming video call starts with camera OFF. Only microphone is requested.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
     clearCallStage();
     callStageAddParticipant(userId,name,null,true,false);
     callStageAddParticipant(inc.fromUserId,inc.fromName||'Member',null,false,false);
@@ -1720,13 +1793,10 @@ async function acceptIncomingCall(){
 
 async function finishCall(notify=true,message='Call ended'){
   const call=activeCall;
-  // Close the local call immediately. Do not wait for the signaling request;
-  // a slow/offline network must never leave the caller stuck in the call UI.
   if(call){
-    call.ended=true;
-    call.stream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}});
-    if(notify) sendCallEvent('end',call.id,{}).catch(()=>{});
-    else if(incomingCall) sendCallEvent('leave',call.id,{}).catch(()=>{});
+    if(notify) await sendCallEvent('end',call.id,{});
+    else if(incomingCall) await sendCallEvent('leave',call.id,{});
+    call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
   }
   peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
   activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera On';} closeCallModal();
@@ -1762,13 +1832,16 @@ async function replaceCallVideoTrack(facingMode){
   activeCall.stream.addTrack(camTrack);
   activeCall.cameraOn=true;
   activeCall.facingMode=facingMode;
-  callStageAddVideo('local',activeCall.stream,'You',true);
-  setParticipantCameraState('local',true);
-  for(const [rid,pc] of peerConnections){
-    const sender=pc.getSenders().find(s=>s.track?.kind==='video');
-    if(sender) await sender.replaceTrack(camTrack);
-    else pc.addTrack(camTrack,activeCall.stream);
+  callStageAddVideo(userId,activeCall.stream,name,true);
+  setParticipantCameraState(userId,true);
+  for(const [,pc] of peerConnections){
+    const sender=pc.__videoSender || pc.getTransceivers().find(t=>t.receiver?.track?.kind==='video')?.sender || pc.getSenders().find(s=>s.track?.kind==='video');
+    if(sender){
+      try{ await sender.replaceTrack(camTrack); }catch(err){ console.warn('video replaceTrack failed',err); }
+    }
   }
+  // replaceTrack keeps the existing WebRTC video m-line alive, so no offer/answer
+  // renegotiation is needed just to switch the camera track.
   await sendCallEvent('camera-state',activeCall.id,{on:true,facingMode},'');
   updateCallButtons();
 }
@@ -1787,16 +1860,14 @@ async function toggleCallCamera(){
   try{
     if(!activeCall.cameraOn){
       await replaceCallVideoTrack(activeCall.facingMode || 'user');
-      await renegotiateAllPeers();
     }else{
       const track=activeCall.stream.getVideoTracks()[0];
       if(track){ track.stop(); activeCall.stream.removeTrack(track); }
       activeCall.cameraOn=false;
-      document.getElementById('call-video-local')?.remove();
-      callStageAddParticipant('local',name,null,true,false);
+      document.getElementById(`call-video-${String(userId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
+      callStageAddParticipant(userId,name,null,true,false);
       await sendCallEvent('camera-state',activeCall.id,{on:false},'');
-      for(const [,pc] of peerConnections){ const sender=pc.getSenders().find(s=>s.track?.kind==='video'); if(sender) await sender.replaceTrack(null); }
-      await renegotiateAllPeers();
+      for(const [,pc] of peerConnections){ const sender=pc.__videoSender || pc.getTransceivers().find(t=>t.receiver?.track?.kind==='video')?.sender || pc.getSenders().find(s=>s.track?.kind==='video'); if(sender) await sender.replaceTrack(null); }
       updateCallButtons();
     }
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Could not change camera state'); }
@@ -1806,7 +1877,7 @@ async function switchCallCamera(){
   if(!activeCall || activeCall.type!=='video') return;
   if(!activeCall.cameraOn){ showToast('Turn camera on first'); return; }
   const next=activeCall.facingMode==='environment'?'user':'environment';
-  try{ await replaceCallVideoTrack(next); await renegotiateAllPeers(); }
+  try{ await replaceCallVideoTrack(next); }
   catch(e){
     if(next==='environment') showToast('Rear camera is not available on this device');
     else showToast('Could not switch camera');
