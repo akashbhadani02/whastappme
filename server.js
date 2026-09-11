@@ -1515,9 +1515,20 @@ io.on('connection', async (socket) => {
   socket.on('call-leave', (data) => {
     const callId = String(data?.callId || socket.callId || ''), call = activeCalls.get(callId);
     if (!call) return;
-    call.participants.delete(socket.id); socket.leave(callRoom(call.groupId)); socket.callId = '';
-    io.to(callRoom(call.groupId)).emit('call-peer-left', { callId, socketId: socket.id });
-    if (call.participants.size === 0) activeCalls.delete(callId);
+    const name = String(data?.name || '').slice(0, 60);
+    // If ANY participant presses End/Close, terminate the whole group call for everyone.
+    io.emit('call-ended', {
+      callId, reason: 'ended', endedBy: socket.id, name
+    });
+    for (const participantId of call.participants) {
+      const participantSocket = io.sockets.sockets.get(participantId);
+      if (participantSocket) {
+        participantSocket.leave(callRoom(call.groupId));
+        participantSocket.callId = '';
+        participantSocket.callType = '';
+      }
+    }
+    activeCalls.delete(callId);
   });
 
   socket.on('call-reject', (data) => {
