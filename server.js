@@ -539,27 +539,34 @@ app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const db = await getDb();
     if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
+
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
     const collection = db.collection(COLLECTION_NAME);
-    const rawId = String(req.body?.id || '');
+    const rawId = String(req.body?.id || '').trim();
+    if (!rawId) return res.status(400).json({ ok:false, error:'Missing recycle item id' });
+
     let item = null;
     let recycleId = null;
-    if (ObjectId.isValid(rawId)) { recycleId = new ObjectId(rawId); item = await recycle.findOne({ _id:recycleId }); }
+    if (ObjectId.isValid(rawId)) {
+      recycleId = new ObjectId(rawId);
+      item = await recycle.findOne({ _id: recycleId });
+    }
+
+    // Virtual recycle items are soft-deleted messages that were not archived.
     if (!item && rawId.startsWith('message:')) {
       const messageId = rawId.slice(8);
-      item = await collection.findOne({ id:messageId, deletedAt:{ $exists:true } });
+      const msg = await collection.findOne({ id: messageId, deletedAt:{ $exists:true } });
+      if (msg) item = { id:rawId, originalMessageId:messageId, message:msg, deletedGroupId:msg.groupId, deletedGroupName:msg.groupName };
     }
+
     if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
 
-    const msg = { ...(item.message || item) };
+    const msg = { ...(item.message || {}) };
+    delete msg._id;
     const originalMessageId = String(item.originalMessageId || msg.id || rawId.slice(8) || '').trim();
     const originalGroupId = normalizeGroupId(item.deletedGroupId || msg.groupId || DEFAULT_GROUP_ID);
     if (!originalMessageId) return res.status(400).json({ ok:false, error:'Invalid message' });
 
-    // Main Recycle must be an independent record. Do NOT convert the group
-    // recycle record in-place: doing so makes both views point at the same
-    // Mongo document, so deleting from Group Recycle could also remove the
-    // item that the user expects to keep in Main Recycle.
     const mainCopy = {
       originalMessageId,
       groupId: DEFAULT_GROUP_ID,
@@ -569,22 +576,27 @@ app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
       deleteReason: item.deleteReason || msg.deleteReason || 'delete',
       recycleStage: 'main',
       movedToMainRecycleAt: new Date(),
-      message: { ...msg }
+      message: { ...msg, groupId: originalGroupId }
     };
-    delete mainCopy.message._id;
-    // Avoid duplicate Main Recycle records if the action is retried.
-    await recycle.updateOne(
-      { originalMessageId, recycleStage:'main' },
-      { $setOnInsert: mainCopy },
-      { upsert:true }
-    );
-    // Once copied successfully, remove only the Group Recycle record.
-    if (recycleId) await recycle.deleteOne({ _id: recycleId });
-    else await collection.updateOne({ id:originalMessageId }, { $set:{ recycleStage:'main' } });
-    res.json({ ok:true });
+
+    // IMPORTANT: Main Recycle gets its own document. Never rename/mutate the
+    // Group Recycle document into Main Recycle.
+    const existingMain = await recycle.findOne({ originalMessageId, recycleStage:'main' });
+    if (!existingMain) {
+      await recycle.insertOne(mainCopy);
+    }
+
+    // Only after the Main copy exists do we remove the Group Recycle record.
+    // A virtual item has no recycle document, so its soft-deleted message stays
+    // untouched and is represented by the newly-created Main Recycle copy.
+    if (recycleId) {
+      await recycle.deleteOne({ _id: recycleId });
+    }
+
+    res.json({ ok:true, moved:true });
   } catch (error) {
-    console.error('Move recycle item to main failed:', error.message);
-    res.status(500).json({ ok:false, error:'Move to main failed' });
+    console.error('Move recycle item to main failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:`Move to main failed: ${error.message || 'unknown error'}` });
   }
 });
 
