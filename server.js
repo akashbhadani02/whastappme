@@ -212,6 +212,9 @@ app.post('/api/calls/event', async (req, res) => {
     const callId = String(body.callId || '').trim().slice(0, 120);
     const fromUserId = String(body.fromUserId || '').trim().slice(0, 160);
     if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
+    // `end` is a group-wide call termination event. The client handles it
+    // for every participant with the same callId, so one user ending the call
+    // closes the call for everyone, not just that user's peer connection.
     const event = {
       id: crypto.randomUUID(), groupId, callId, type, fromUserId,
       fromName: String(body.fromName || '').slice(0, 80),
