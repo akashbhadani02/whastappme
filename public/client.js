@@ -1758,13 +1758,17 @@ callPollTimer=setInterval(pollCallEvents,700);
 async function startCall(video=false){
   if(!currentGroupId || activeCall)return;
   try{
-    // Video calls start with microphone only. The camera is NOT opened until
-    // the user explicitly turns it on with the camera button.
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    // A real video call opens the camera at call start. Sending the first
+    // camera track in the initial SDP is much more reliable on mobile browsers
+    // than creating an empty video m-line and attaching the track later.
+    const stream=await navigator.mediaDevices.getUserMedia(video ? {
+      audio:true,
+      video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}
+    } : {audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:video,facingMode:'user'};
     clearCallStage();
-    callStageAddParticipant(userId,name,null,true,false);
+    if(video) callStageAddVideo(userId,activeCall.stream,name,true); else callStageAddParticipant(userId,name,null,true,false);
     if(video){ updateCallButtons(); } else { cameraCallBtn?.classList.add('hidden'); switchCameraCallBtn?.classList.add('hidden'); }
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
@@ -1777,11 +1781,15 @@ async function acceptIncomingCall(){
   const inc=incomingCall; incomingCall=null;
   try{
     const video=inc.payload?.callType==='video';
-    // Even an incoming video call starts with camera OFF. Only microphone is requested.
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    // For incoming video calls, acquire the camera before creating the peer
+    // connection so the initial answer contains the real video track.
+    const stream=await navigator.mediaDevices.getUserMedia(video ? {
+      audio:true,
+      video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}
+    } : {audio:true,video:false});
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:video,facingMode:'user'};
     clearCallStage();
-    callStageAddParticipant(userId,name,null,true,false);
+    if(video) callStageAddVideo(userId,activeCall.stream,name,true); else callStageAddParticipant(userId,name,null,true,false);
     callStageAddParticipant(inc.fromUserId,inc.fromName||'Member',null,false,false);
     if(video){ updateCallButtons(); } else { cameraCallBtn?.classList.add('hidden'); switchCameraCallBtn?.classList.add('hidden'); }
     showCallModal(video?'Video call':'Audio call','Connecting…');
@@ -1832,8 +1840,25 @@ async function replaceCallVideoTrack(facingMode){
   activeCall.stream.addTrack(camTrack);
   activeCall.cameraOn=true;
   activeCall.facingMode=facingMode;
-  callStageAddVideo(userId,activeCall.stream,name,true);
-  setParticipantCameraState(userId,true);
+  // Local self-preview: do NOT wait for MediaStreamTrack.muted to become false.
+  // Mobile Chrome/WebView can keep a newly-created camera track muted briefly;
+  // hiding the tile here makes the user's own camera look like a black/empty feed.
+  const localWrap=callStageAddVideo(userId,activeCall.stream,name,true);
+  const localVideo=localWrap?.querySelector('video');
+  const localTrack=camTrack;
+  if(localWrap){
+    localWrap.classList.add('has-video');
+    localWrap.querySelector('.call-placeholder')?.classList.add('hidden');
+  }
+  if(localVideo){
+    localVideo.muted=true; localVideo.defaultMuted=true; localVideo.autoplay=true; localVideo.playsInline=true;
+    localVideo.setAttribute('muted',''); localVideo.setAttribute('autoplay',''); localVideo.setAttribute('playsinline',''); localVideo.setAttribute('webkit-playsinline','');
+    localVideo.srcObject=activeCall.stream; localVideo.style.opacity='1';
+    const startPreview=()=>{const pr=localVideo.play(); if(pr?.catch)pr.catch(()=>{});};
+    localVideo.onloadedmetadata=startPreview; localVideo.onloadeddata=startPreview; localVideo.oncanplay=startPreview;
+    localTrack.onunmute=startPreview;
+    startPreview();
+  }
   for(const [,pc] of peerConnections){
     const sender=pc.__videoSender || pc.getTransceivers().find(t=>t.receiver?.track?.kind==='video')?.sender || pc.getSenders().find(s=>s.track?.kind==='video');
     if(sender){
