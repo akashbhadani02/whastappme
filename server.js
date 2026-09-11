@@ -803,91 +803,115 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const db = await getDb();
-    if (!db) return res.json({ ok:true, count:0, persistent:false });
+    if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const collection = db.collection(COLLECTION_NAME);
     const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
-    // Group Empty must affect ONLY items still in that group's recycle bin.
-    // Items already moved/copied to Main Recycle are stage=main and must stay.
-    const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { $and: [
-          { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] },
-          { $or: [{ recycleStage: 'group' }, { recycleStage: { $exists:false } }] }
-        ] }
-      : { $or: [{ recycleStage: 'main' }, { recycleStage: { $exists:false }, groupId: DEFAULT_GROUP_ID }] };
-    // Empty BOTH stores: the dedicated recycle_bin collection AND the
-    // soft-deleted messages kept in the main messages collection.  Previously
-    // only recycle_bin was cleared, so those soft-deleted messages reappeared
-    // in Main Recycle Bin immediately after an Empty action.
-    const recycleItems = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
-    const softFilter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
-      : { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false } };
-    const softItems = await db.collection(COLLECTION_NAME)
-      .find(softFilter, { projection:{ 'mediaId':1 } }).toArray();
 
-    const mediaIds = new Set();
-    for (const item of recycleItems) if (item.message?.mediaId) mediaIds.add(String(item.message.mediaId));
-    for (const item of softItems) if (item.mediaId) mediaIds.add(String(item.mediaId));
-
-    const bucket = await getMediaBucket();
-    for (const mediaId of mediaIds) {
-      if (ObjectId.isValid(mediaId)) {
-        try { await bucket.delete(new ObjectId(mediaId)); } catch (_) {}
-      }
-    }
-
-    // GROUP EMPTY means "move everything to Main Recycle", never permanent delete.
+    // GROUP RECYCLE: Empty means MOVE TO MAIN, never permanent deletion.
     if (requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID) {
+      const filter = { $and:[
+        { $or:[{deletedGroupId:requestedGroupId},{groupId:requestedGroupId}] },
+        { $or:[{recycleStage:'group'},{recycleStage:{$exists:false}}] }
+      ] };
       const groupDocs = await recycle.find(filter).toArray();
+      const softItems = await collection.find({
+        deletedAt:{$exists:true}, movedToMainRecycleAt:{$exists:false},
+        $or:[{groupId:requestedGroupId},{deletedGroupId:requestedGroupId}]
+      }).toArray();
       let movedCount = 0;
-      for (const item of groupDocs) {
+      let skipped = 0;
+
+      const dropLegacyUniqueIndexes = async () => {
         try {
-          const msg = { ...(item.message || {}) }; delete msg._id;
-          const originalMessageId = String(item.originalMessageId || msg.id || '').trim();
-          if (!originalMessageId) continue;
-          const originalGroupId = normalizeGroupId(item.deletedGroupId || msg.groupId || requestedGroupId);
-          const mainCopy = {
-            originalMessageId, groupId:DEFAULT_GROUP_ID, deletedGroupId:originalGroupId,
-            deletedGroupName:String(item.deletedGroupName || msg.groupName || originalGroupId),
-            deletedAt:item.deletedAt || msg.deletedAt || new Date(),
-            deleteReason:item.deleteReason || msg.deleteReason || 'delete', recycleStage:'main',
-            movedToMainRecycleAt:new Date(), message:{...msg, groupId:originalGroupId}
-          };
-          if (!(await recycle.findOne({originalMessageId,recycleStage:'main'}))) {
-            try { await recycle.insertOne(mainCopy); }
-            catch (e) {
-              if (e?.code !== 11000) throw e;
-              try { const idxs=await recycle.listIndexes().toArray(); for(const idx of idxs){ if(idx.name!=='_id_'&&idx.unique&&Object.keys(idx.key||{}).some(k=>['originalMessageId','deletedGroupId','groupId'].includes(k))) { try{await recycle.dropIndex(idx.name)}catch(_){} } } } catch(_){}
-              await recycle.insertOne(mainCopy);
+          const indexes = await recycle.listIndexes().toArray();
+          for (const idx of indexes) {
+            if (idx.name === '_id_') continue;
+            const names = Object.keys(idx.key || {});
+            if (idx.unique && names.some(k => ['originalMessageId','deletedGroupId','groupId'].includes(k))) {
+              try { await recycle.dropIndex(idx.name); } catch (_) {}
             }
           }
-          await collection.updateOne({id:originalMessageId,deletedAt:{$exists:true}},{$set:{movedToMainRecycleAt:new Date(),recycleStage:'main'}});
-          await recycle.deleteOne({_id:item._id}); movedCount++;
-        } catch(e) { console.error('Group recycle empty move failed:',e.message); }
-      }
-      // Soft-deleted items that were never archived are also moved to Main.
-      const softItems = await collection.find(softFilter).toArray();
-      for (const msg0 of softItems) {
-        try {
-          const originalMessageId=String(msg0.id||'').trim(); if(!originalMessageId) continue;
-          const originalGroupId=normalizeGroupId(msg0.groupId||requestedGroupId);
-          if (!(await recycle.findOne({originalMessageId,recycleStage:'main'}))) {
-            await recycle.insertOne({originalMessageId,groupId:DEFAULT_GROUP_ID,deletedGroupId:originalGroupId,deletedGroupName:String(msg0.groupName||originalGroupId),deletedAt:msg0.deletedAt||new Date(),deleteReason:msg0.deleteReason||'delete',recycleStage:'main',movedToMainRecycleAt:new Date(),message:{...msg0,groupId:originalGroupId}});
+        } catch (_) {}
+      };
+
+      const putMainCopy = async (item, fallbackMsg) => {
+        const msg = { ...(item.message || fallbackMsg || {}) };
+        delete msg._id;
+        const originalMessageId = String(item.originalMessageId || msg.id || '').trim();
+        if (!originalMessageId) return false;
+        const originalGroupId = normalizeGroupId(item.deletedGroupId || msg.groupId || requestedGroupId);
+        const mainCopy = {
+          originalMessageId, groupId:DEFAULT_GROUP_ID,
+          deletedGroupId:originalGroupId,
+          deletedGroupName:String(item.deletedGroupName || msg.groupName || originalGroupId),
+          deletedAt:item.deletedAt || msg.deletedAt || new Date(),
+          deleteReason:item.deleteReason || msg.deleteReason || 'delete',
+          recycleStage:'main', movedToMainRecycleAt:new Date(),
+          message:{...msg, groupId:originalGroupId}
+        };
+        if (!(await recycle.findOne({originalMessageId,recycleStage:'main'}))) {
+          try { await recycle.insertOne(mainCopy); }
+          catch (e) {
+            if (e?.code !== 11000) throw e;
+            await dropLegacyUniqueIndexes();
+            try { await recycle.insertOne(mainCopy); }
+            catch (e2) {
+              // A concurrent request may have created the Main copy.
+              if (e2?.code !== 11000) throw e2;
+            }
           }
-          await collection.updateOne({id:originalMessageId},{$set:{movedToMainRecycleAt:new Date(),recycleStage:'main'}});
-          movedCount++;
-        } catch(e) { console.error('Soft group recycle empty move failed:',e.message); }
+        }
+        await collection.updateOne(
+          {id:originalMessageId, deletedAt:{$exists:true}},
+          {$set:{movedToMainRecycleAt:new Date(), recycleStage:'main'}}
+        );
+        return true;
+      };
+
+      // Move dedicated Group Recycle records first. Do NOT delete media here:
+      // the Main Recycle copy still needs its mediaId for View/Download.
+      for (const item of groupDocs) {
+        try {
+          if (await putMainCopy(item, null)) {
+            await recycle.deleteOne({_id:item._id});
+            movedCount++;
+          } else skipped++;
+        } catch (e) { skipped++; console.error('Group empty move failed:', e.stack || e.message); }
       }
-      return res.json({ok:true,count:movedCount,moved:true,permanent:false});
+
+      // Also recover soft-deleted messages that were never archived successfully.
+      for (const msg of softItems) {
+        try {
+          if (await putMainCopy({
+            originalMessageId:msg.id, deletedGroupId:msg.groupId,
+            deletedGroupName:msg.groupName, deletedAt:msg.deletedAt,
+            deleteReason:msg.deleteReason, message:msg
+          }, msg)) {
+            movedCount++;
+          } else skipped++;
+        } catch (e) { skipped++; console.error('Soft group empty move failed:', e.stack || e.message); }
+      }
+
+      return res.json({ok:true,count:movedCount,moved:true,permanent:false,skipped});
     }
 
-    // MAIN EMPTY is the only bulk permanent-delete operation.
+    // MAIN RECYCLE: this is the ONLY Empty operation that permanently deletes.
+    const filter = { $or:[{recycleStage:'main'},{recycleStage:{$exists:false},groupId:DEFAULT_GROUP_ID}] };
+    const recycleItems = await recycle.find(filter,{projection:{'message.mediaId':1}}).toArray();
+    const mediaIds = new Set();
+    for (const item of recycleItems) if (item.message?.mediaId) mediaIds.add(String(item.message.mediaId));
+    const mainSoftFilter = {deletedAt:{$exists:true},movedToMainRecycleAt:{$exists:true}};
+    const softItems = await collection.find(mainSoftFilter,{projection:{mediaId:1}}).toArray();
+    for (const item of softItems) if (item.mediaId) mediaIds.add(String(item.mediaId));
+    const bucket = await getMediaBucket();
+    for (const mediaId of mediaIds) if (ObjectId.isValid(mediaId)) { try { await bucket.delete(new ObjectId(mediaId)); } catch (_) {} }
     const recycleResult = await recycle.deleteMany(filter);
-    const messageResult = await db.collection(COLLECTION_NAME).deleteMany(softFilter);
-    res.json({ ok:true, count:(recycleResult.deletedCount || 0) + (messageResult.deletedCount || 0), permanent:true });
+    const messageResult = await collection.deleteMany(mainSoftFilter);
+    return res.json({ok:true,count:(recycleResult.deletedCount||0)+(messageResult.deletedCount||0),permanent:true});
   } catch (error) {
-    console.error('Admin recycle empty failed:', error.message);
-    res.status(500).json({ ok:false, error:'Empty recycle bin failed' });
+    console.error('Admin recycle empty failed:', error.stack || error.message);
+    res.status(500).json({ok:false,error:`Empty recycle bin failed: ${error.message || 'unknown error'}`});
   }
 });
 
