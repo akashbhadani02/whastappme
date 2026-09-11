@@ -377,10 +377,18 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     await new Promise((resolve, reject) => {
       upload.once('finish', resolve); upload.once('error', reject); upload.end(req.body);
     });
+    const createdAt = new Date();
     await db.collection(CALL_RECORDINGS_COLLECTION_NAME).insertOne({
       fileId: upload.id, filename, callId, groupId, groupName: groupDoc?.name || groupId,
-      feedId, feedName, userId, mime, size: req.body.length, createdAt: new Date()
+      feedId, feedName, userId, mime, size: req.body.length, createdAt
     });
+    for (const adminSocket of io.sockets.sockets.values()) {
+      if (adminSocket.isAdmin) adminSocket.emit('admin-recording-alert', {
+        id: String(upload.id), fileId: String(upload.id), callId, groupId,
+        groupName: groupDoc?.name || groupId, feedId, feedName, userId, mime,
+        size: req.body.length, createdAt
+      });
+    }
     res.json({ ok: true, id: String(upload.id) });
   } catch (error) {
     console.error('Call recording upload failed:', error.message);
@@ -1223,6 +1231,11 @@ async function sendPushToOtherUsers(msg) {
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   io.emit(event, saved);
+  if (event === 'media') {
+    for (const adminSocket of io.sockets.sockets.values()) {
+      if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);
+    }
+  }
   publishRealtimeEvent(event, saved);
   if (event === 'message' || event === 'media') await sendPushToOtherUsers(saved);
   return saved;
@@ -1236,6 +1249,12 @@ io.on('connection', async (socket) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
+  });
+
+  socket.on('register-admin', (data, ack) => {
+    const ok = String(data?.password || '') === ADMIN_PASSWORD;
+    socket.isAdmin = ok;
+    if (typeof ack === 'function') ack({ ok });
   });
 
   socket.on('join-group', async (data, ack) => {

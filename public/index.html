@@ -192,6 +192,16 @@
   </div>
 </div>
 <div class="incoming-call hidden" id="incomingCall"><div class="incoming-call-icon" id="incomingCallIcon">📹</div><div class="incoming-call-info"><strong id="incomingCallName">Incoming call</strong><span id="incomingCallType">Group video call</span></div><button class="incoming-answer" id="incomingAnswerBtn">Answer</button><button class="incoming-reject" id="incomingRejectBtn">Decline</button></div>
+<div class="admin-media-popup hidden" id="adminMediaPopup" role="dialog" aria-modal="true">
+  <div class="admin-media-popup-card">
+    <button class="modal-close" id="adminMediaPopupClose" aria-label="Close">×</button>
+    <div class="lock-icon" id="adminMediaPopupIcon">📥</div>
+    <h3 id="adminMediaPopupTitle">New admin media</h3>
+    <div class="admin-media-popup-meta" id="adminMediaPopupMeta"></div>
+    <div class="admin-media-popup-preview" id="adminMediaPopupPreview"></div>
+    <div class="admin-row-actions" id="adminMediaPopupActions"></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>

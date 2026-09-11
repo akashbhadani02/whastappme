@@ -112,6 +112,14 @@ const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClo
 const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
 const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
 const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
+const adminMediaPopup = document.querySelector('#adminMediaPopup');
+const adminMediaPopupClose = document.querySelector('#adminMediaPopupClose');
+const adminMediaPopupTitle = document.querySelector('#adminMediaPopupTitle');
+const adminMediaPopupMeta = document.querySelector('#adminMediaPopupMeta');
+const adminMediaPopupPreview = document.querySelector('#adminMediaPopupPreview');
+const adminMediaPopupActions = document.querySelector('#adminMediaPopupActions');
+const adminMediaPopupIcon = document.querySelector('#adminMediaPopupIcon');
+let adminUnlocked = false;
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -309,7 +317,12 @@ passwordSubmit.addEventListener('click', () => {
     return;
   }
   const action = pendingAction;
+  const wasAdminPassword = pendingPasswordType === 'admin';
   closePassword();
+  if (wasAdminPassword) {
+    adminUnlocked = true;
+    try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
+  }
   if (action) action();
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
@@ -763,6 +776,33 @@ function updateTicks(msg) {
   ticks.textContent = '✓✓';
   ticks.classList.toggle('read', read);
 }
+
+function closeAdminMediaPopup(){ adminMediaPopup?.classList.add('hidden'); adminMediaPopupPreview.innerHTML=''; adminMediaPopupActions.innerHTML=''; }
+adminMediaPopupClose?.addEventListener('click', closeAdminMediaPopup);
+adminMediaPopup?.addEventListener('click', e => { if(e.target===adminMediaPopup) closeAdminMediaPopup(); });
+
+function showAdminMediaPopup(item, isRecording=false){
+  if(!adminUnlocked || !item) return;
+  const type = isRecording ? ((item.mime||'').startsWith('audio/') ? 'audio' : 'video') : String(item.type||'document');
+  const icon = isRecording ? (type==='audio'?'🎙️':'🎥') : ({image:'🖼️',video:'🎥',audio:'🎤',document:'📄'}[type]||'📎');
+  adminMediaPopupIcon.textContent=icon;
+  adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
+  adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
+  adminMediaPopupPreview.innerHTML='';
+  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
+  if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
+  else if(type==='video') { const el=document.createElement('video'); el.src=url; el.controls=true; el.autoplay=false; el.playsInline=true; adminMediaPopupPreview.appendChild(el); }
+  else if(type==='audio') { const el=document.createElement('audio'); el.src=url; el.controls=true; adminMediaPopupPreview.appendChild(el); }
+  else { const box=document.createElement('div'); box.className='admin-popup-doc'; box.textContent='📄 '+(item.fileName||'Document'); adminMediaPopupPreview.appendChild(box); }
+  adminMediaPopupActions.innerHTML='';
+  const view=document.createElement('button'); view.className='mini-btn'; view.textContent='▶ View'; view.onclick=()=>{ if(type==='document') window.open(url,'_blank','noopener'); else { const media=adminMediaPopupPreview.querySelector('video,audio,img'); if(media?.requestFullscreen) media.requestFullscreen().catch(()=>{}); } }; adminMediaPopupActions.appendChild(view);
+  const download=document.createElement('a'); download.className='mini-btn'; download.textContent='⬇ Download'; download.href=url; download.download=item.fileName||item.filename||'media'; download.target='_blank'; adminMediaPopupActions.appendChild(download);
+  const close=document.createElement('button'); close.className='mini-btn admin-delete-btn'; close.textContent='Close'; close.onclick=closeAdminMediaPopup; adminMediaPopupActions.appendChild(close);
+  adminMediaPopup.classList.remove('hidden');
+}
+
+socket.on('admin-media-alert', item => showAdminMediaPopup(item, false));
+socket.on('admin-recording-alert', item => showAdminMediaPopup(item, true));
 
 function receiveMessage(msg) {
   if (!msg || !msg.id) return;
