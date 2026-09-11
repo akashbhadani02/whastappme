@@ -583,7 +583,30 @@ app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
     // Group Recycle document into Main Recycle.
     const existingMain = await recycle.findOne({ originalMessageId, recycleStage:'main' });
     if (!existingMain) {
-      await recycle.insertOne(mainCopy);
+      try {
+        await recycle.insertOne(mainCopy);
+      } catch (insertError) {
+        // Older deployments may still have a legacy UNIQUE index on
+        // originalMessageId/deletedGroupId. That index can make a valid
+        // Group -> Main copy fail with MongoDB E11000. Remove only those
+        // legacy unique indexes and retry the insert once.
+        if (insertError && insertError.code === 11000) {
+          try {
+            const indexes = await recycle.listIndexes().toArray();
+            for (const idx of indexes) {
+              if (idx.name === '_id_') continue;
+              const keys = idx.key || {};
+              const names = Object.keys(keys);
+              if (idx.unique && names.some(k => ['originalMessageId','deletedGroupId','groupId'].includes(k))) {
+                try { await recycle.dropIndex(idx.name); } catch (_) {}
+              }
+            }
+          } catch (_) {}
+          await recycle.insertOne(mainCopy);
+        } else {
+          throw insertError;
+        }
+      }
     }
 
     // Only after the Main copy exists do we remove the Group Recycle record.
