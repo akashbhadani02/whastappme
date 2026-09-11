@@ -500,8 +500,8 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     // the original deleted message still exists here and must remain visible to the
     // admin. We therefore merge those soft-deleted messages into the recycle view.
     const softFilter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { deletedAt:{ $exists:true }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
-      : { deletedAt:{ $exists:true } };
+      ? { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
+      : { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false } };
     const softDeleted = await db.collection(COLLECTION_NAME).find(softFilter, { projection:{ _id:0 } }).toArray();
     const virtualItems = softDeleted
       .filter(m => !archivedMessageIds.has(String(m.id || '')))
@@ -609,9 +609,19 @@ app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
       }
     }
 
+    // Mark the original soft-deleted message as moved to Main. This is important:
+    // Group Recycle -> Empty must never remove a message that has already been
+    // copied into Main Recycle.
+    if (originalMessageId) {
+      try {
+        await collection.updateOne(
+          { id: originalMessageId, deletedAt: { $exists: true } },
+          { $set: { movedToMainRecycleAt: new Date(), recycleStage: 'main' } }
+        );
+      } catch (_) {}
+    }
+
     // Only after the Main copy exists do we remove the Group Recycle record.
-    // A virtual item has no recycle document, so its soft-deleted message stays
-    // untouched and is represented by the newly-created Main Recycle copy.
     if (recycleId) {
       await recycle.deleteOne({ _id: recycleId });
     }
@@ -735,17 +745,22 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
     if (!db) return res.json({ ok:true, count:0, persistent:false });
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
     const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    // Group Empty must affect ONLY items still in that group's recycle bin.
+    // Items already moved/copied to Main Recycle are stage=main and must stay.
     const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }
-      : {};
+      ? { $and: [
+          { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] },
+          { $or: [{ recycleStage: 'group' }, { recycleStage: { $exists:false } }] }
+        ] }
+      : { $or: [{ recycleStage: 'main' }, { recycleStage: { $exists:false }, groupId: DEFAULT_GROUP_ID }] };
     // Empty BOTH stores: the dedicated recycle_bin collection AND the
     // soft-deleted messages kept in the main messages collection.  Previously
     // only recycle_bin was cleared, so those soft-deleted messages reappeared
     // in Main Recycle Bin immediately after an Empty action.
     const recycleItems = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
     const softFilter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { deletedAt:{ $exists:true }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
-      : { deletedAt:{ $exists:true } };
+      ? { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false }, $or:[{ groupId:requestedGroupId }, { deletedGroupId:requestedGroupId }] }
+      : { deletedAt:{ $exists:true }, movedToMainRecycleAt:{ $exists:false } };
     const softItems = await db.collection(COLLECTION_NAME)
       .find(softFilter, { projection:{ 'mediaId':1 } }).toArray();
 
