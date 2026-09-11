@@ -1205,7 +1205,7 @@ async function loadAdminRecycle() {
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
       const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
       const isMainRecycle = adminRecycleGroupId === 'main';
-      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">♻️ Move to Main Recycle</button>'}</div>`;
+      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">🗑️ Delete → Main Recycle</button>'}</div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
       row.querySelector('.recycle-sender').textContent=`Sent by: ${sender}`;
@@ -1245,9 +1245,9 @@ async function loadAdminRecycle() {
       };
       const moveBtn = row.querySelector('.recycle-main-move-btn');
       if (moveBtn) moveBtn.onclick=async()=>{
-        if(!confirm('Move this deleted item to Main Recycle Bin?')) return;
+        if(!confirm('Delete this item from Group Recycle? It will move to Main Recycle and will NOT be permanently deleted.')) return;
         try {
-          const r=await fetch('/api/admin/recycle-bin/move-to-main',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
           const d=await r.json(); if(!d.ok) throw new Error(d.error||'Move failed');
           showToast('Moved to Main Recycle Bin'); loadAdminRecycle();
         } catch(e){ adminRecycleError.textContent=e.message||'Move failed'; }
@@ -1271,11 +1271,11 @@ adminMainRecycleFromGroupsBtn?.addEventListener('click',()=>openAdminRecycle('ma
 adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
 adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{
-  if(!confirm(`Empty recycle bin for "${adminRecycleGroupName}"? This permanently deletes all stored media.`)) return;
+  if(!confirm(adminRecycleGroupId === 'main' ? `Empty Main Recycle Bin for "${adminRecycleGroupName}"? This permanently deletes all stored data.` : `Empty Group Recycle Bin for "${adminRecycleGroupName}"? All items will move to Main Recycle Bin and will NOT be permanently deleted.`)) return;
   try {
     const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(adminRecycleGroupId === 'main' ? {password:PASSWORD} : {password:PASSWORD,groupId:adminRecycleGroupId})});
     const d=await r.json(); if(!d.ok) throw new Error(d.error||'Empty failed');
-    showToast(`${d.count||0} items permanently deleted`); loadAdminRecycle();
+    showToast(adminRecycleGroupId === 'main' ? `${d.count||0} items permanently deleted` : `${d.count||0} items moved to Main Recycle Bin`); loadAdminRecycle();
   } catch(e){ adminRecycleError.textContent=e.message||'Empty failed'; }
 });
 
