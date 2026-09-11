@@ -24,7 +24,6 @@ const EVENTS_COLLECTION_NAME = 'realtime_events';
 const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
-const CALL_EVENTS_COLLECTION_NAME = 'call_events';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
@@ -190,81 +189,6 @@ app.post('/api/push/unsubscribe', async (req, res) => {
     if (db) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ endpoint });
     res.json({ ok: true });
   } catch (error) { res.status(500).json({ ok: false }); }
-});
-
-// ===== WebRTC group-call signaling (REST fallback for Vercel/serverless) =====
-// WebRTC carries the actual audio/video peer-to-peer; these endpoints only relay
-// small signaling messages so every member of the same group can receive a call.
-async function getCallEventsCollection() {
-  const db = await getDb();
-  if (!db) return null;
-  const c = db.collection(CALL_EVENTS_COLLECTION_NAME);
-  try { await c.createIndex({ createdAt: 1 }, { expireAfterSeconds: 7200 }); } catch (_) {}
-  try { await c.createIndex({ groupId: 1, createdAt: 1 }); } catch (_) {}
-  return c;
-}
-
-app.get('/api/calls/ice-servers', async (req, res) => {
-  // Zero-config WebRTC: no TURN account or environment variables are required.
-  // STUN only helps peers discover a direct route; the actual media remains peer-to-peer.
-  return res.json({ ok:true, iceServers:[
-    { urls:'stun:stun.l.google.com:19302' },
-    { urls:'stun:stun1.l.google.com:19302' },
-    { urls:'stun:stun2.l.google.com:19302' },
-    { urls:'stun:stun.cloudflare.com:3478' }
-  ], turn:false });
-});
-
-app.post('/api/calls/event', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const groupId = normalizeGroupId(body.groupId);
-    const type = String(body.type || '').trim();
-    const callId = String(body.callId || '').trim().slice(0, 120);
-    const fromUserId = String(body.fromUserId || '').trim().slice(0, 160);
-    if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
-    const event = {
-      id: String(body.id || crypto.randomUUID()), groupId, callId, type, fromUserId,
-      fromPeerId: String(body.fromPeerId || body.fromUserId || '').slice(0,240),
-      fromDeviceId: String(body.fromDeviceId || '').slice(0,160),
-      fromName: String(body.fromName || '').slice(0, 80),
-      toUserId: body.toUserId ? String(body.toUserId).slice(0,160) : '',
-      toPeerId: body.toPeerId ? String(body.toPeerId).slice(0,240) : '',
-      toDeviceId: body.toDeviceId ? String(body.toDeviceId).slice(0,160) : '',
-      payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
-      createdAt: new Date()
-    };
-    const collection = await getCallEventsCollection();
-    if (collection) await collection.insertOne(event);
-    // Socket.IO makes it fast on traditional Node hosting; REST polling below
-    // remains the reliable path on Vercel where WebSocket lifetime is limited.
-    io.emit('call-event', event);
-    res.json({ ok:true, eventId:event.id, createdAt:event.createdAt.toISOString() });
-  } catch (error) {
-    console.error('Call event failed:', error.message);
-    res.status(500).json({ ok:false });
-  }
-});
-
-app.get('/api/calls/events', async (req, res) => {
-  try {
-    const groupId = normalizeGroupId(req.query.groupId);
-    const userId = String(req.query.userId || '').trim();
-    const sinceRaw = String(req.query.since || '');
-    const since = sinceRaw ? new Date(sinceRaw) : new Date(Date.now() - 15000);
-    const safeSince = Number.isNaN(since.getTime()) ? new Date(Date.now() - 15000) : since;
-    const collection = await getCallEventsCollection();
-    if (!collection) return res.json({ ok:true, events:[] });
-    const filter = { groupId, createdAt: { $gt: safeSince } };
-    const events = await collection.find(filter).sort({ createdAt: 1 }).limit(300).toArray();
-    // Do not send targeted SDP/ICE to unrelated users.
-    const peerId = String(req.query.peerId || '');
-    const visible = events.filter(e => (!e.toUserId && !e.toPeerId) || e.toUserId === userId || e.fromUserId === userId || (e.toPeerId && e.toPeerId === peerId));
-    res.json({ ok:true, events:visible.map(e => ({...e, _id:undefined})) });
-  } catch (error) {
-    console.error('Call events poll failed:', error.message);
-    res.status(500).json({ ok:false, events:[] });
-  }
 });
 
 app.get('/api/groups', async (req, res) => {
@@ -1462,48 +1386,6 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
-    }
-  });
-
-  // Fast in-call presence path. This is intentionally separate from the DB-backed
-  // signaling events so a participant can re-advertise every few seconds without
-  // filling the call_events collection. It repairs missed join/peer notifications,
-  // especially when a mobile browser reconnects or resumes from the background.
-  socket.on('call-presence', (data) => {
-    if (!data || !data.callId || !socket.groupId) return;
-    if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
-    if (data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
-    const payload = {
-      groupId: normalizeGroupId(socket.groupId),
-      callId: String(data.callId).slice(0,120),
-      userId: socket.userId || String(data.userId || ''),
-      name: String(data.name || '').slice(0,80),
-      callType: String(data.callType || 'video'),
-      cameraOn: !!data.cameraOn,
-      peerId: String(data.peerId || data.userId || '').slice(0,240),
-      deviceId: String(data.deviceId || '').slice(0,160)
-    };
-    for (const peer of io.sockets.sockets.values()) {
-      if (peer.id === socket.id) continue;
-      if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
-      peer.emit('call-presence', payload);
-    }
-  });
-
-  // Fast Socket.IO signaling path. REST /api/calls/events is the fallback.
-  socket.on('call-event', (data) => {
-    if (!data || !data.callId || !data.type || !socket.groupId) return;
-    if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
-    if (data.fromPeerId) socket.callPeerId = String(data.fromPeerId).slice(0,240);
-    // Broadcast signaling events to every socket in the same group. The client
-    // performs the final toPeerId/toUserId filtering. This avoids dropping SDP/ICE
-    // when a mobile socket reconnects before its device-level peerId registration
-    // reaches the server, which is a common cause of one-way mobile video.
-    const payload = { ...data, groupId: normalizeGroupId(socket.groupId), fromUserId: socket.userId || String(data.fromUserId || '') };
-    for (const peer of io.sockets.sockets.values()) {
-      if (peer.id === socket.id) continue;
-      if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
-      peer.emit('call-event', payload);
     }
   });
 

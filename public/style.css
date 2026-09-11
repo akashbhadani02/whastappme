@@ -111,29 +111,6 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 /* Advanced features */
 .chat-tools{display:flex;gap:6px;padding:6px 10px;border-top:1px solid rgba(0,0,0,.06);background:var(--panel,#fff);overflow:auto}.chat-tools button{border:1px solid #ddd;background:inherit;border-radius:16px;padding:6px 10px;white-space:nowrap;cursor:pointer}.chat-tools.hidden{display:none}.typing-bar{display:none;padding:3px 14px;font-size:12px;color:#667781}.typing-bar.show{display:block}.document-bubble{display:flex;align-items:center;gap:10px;padding:10px 12px;min-width:180px;border-radius:10px;background:rgba(0,0,0,.05)}.doc-icon{font-size:26px}.doc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.reactions{margin-left:6px}.edited-label{font-size:10px;opacity:.7}.info-body{display:grid;gap:8px}.info-row{display:flex;justify-content:space-between;gap:20px;padding:8px 0;border-bottom:1px solid #eee}.call-card{text-align:center}.call-avatar{width:80px;height:80px;border-radius:50%;margin:10px auto;background:#00a884;color:#fff;display:grid;place-items:center;font-size:32px}.call-actions{display:flex;justify-content:center;gap:8px}.call-actions button{padding:10px 14px;border:0;border-radius:20px}.danger-btn{background:#d32f2f;color:#fff}.mic-btn.recording{animation:pulse 1s infinite;background:#d32f2f!important;color:#fff}.search-hit{outline:3px solid #f5c542}@keyframes pulse{50%{transform:scale(1.08)}}body.dark-mode{background:#111b21;color:#e9edef}body.dark-mode .sidebar,body.dark-mode .chat-panel,body.dark-mode .chat-tools,body.dark-mode .modal-card{background:#202c33;color:#e9edef}body.dark-mode input,body.dark-mode textarea{background:#2a3942;color:#e9edef;border-color:#455a64}body.dark-mode .chat-tools button{color:#e9edef;border-color:#455a64}
 
-/* Call buttons in chat header */
-.call-header-btn {
-  display: inline-flex !important;
-  align-items: center;
-  justify-content: center;
-  min-width: 38px;
-  min-height: 38px;
-  font-size: 19px;
-  flex: 0 0 auto;
-}
-.header-actions { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
-@media (max-width:760px) {
-  .chat-header { min-width:0; gap:6px; }
-  .contact-info { min-width:0; flex:1 1 auto; overflow:hidden; }
-  .contact-info strong, .contact-info span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block; }
-  .header-actions { gap:2px; }
-  .call-header-btn { min-width:34px; min-height:34px; width:34px; height:34px; padding:0 !important; font-size:17px; }
-  .header-actions #chatSearchBtn, .header-actions #clearChatBtn { min-width:34px; }
-}
-.call-stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0;max-height:46vh;overflow:auto}.call-video-wrap{position:relative;background:#111;border-radius:10px;overflow:hidden;min-height:120px}.call-video-wrap video{width:100%;height:100%;min-height:120px;object-fit:cover;display:block}.call-video-wrap span{position:absolute;left:7px;bottom:7px;background:rgba(0,0,0,.6);color:#fff;padding:3px 7px;border-radius:10px;font-size:11px}.call-actions{flex-wrap:wrap}.call-actions .primary-btn{background:#00a884;color:#fff;border:0;border-radius:20px;padding:10px 14px}.call-actions .hidden{display:none!important}@media(max-width:760px){.call-card{width:min(94vw,430px);max-height:88vh;overflow:auto}.call-stage{grid-template-columns:1fr 1fr;max-height:45vh}.call-actions button{min-height:42px}}
-
-
-
 /* Desktop cleanup: hide chat-level Lock/Archive/Mute/Unread tools. */
 @media (min-width: 761px){
   .chat-tools{display:none!important;}
@@ -172,34 +149,3 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 
 .admin-main-recycle-row{display:flex;justify-content:flex-end;margin:10px 0 14px}.admin-main-recycle-row .mini-btn{width:100%;justify-content:center}
 
-/* Group call: camera-off participants still get an avatar tile and their audio remains active. */
-.call-stage{position:relative;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:0;padding:10px;max-height:70vh;overflow:auto;background:#111;min-height:220px}
-.call-video-wrap{position:relative;background:#202124;border-radius:12px;overflow:hidden;min-height:180px;display:grid;place-items:center}
-.call-video-wrap video{width:100%;height:100%;min-height:180px;object-fit:cover;display:block;background:#111}
-.call-video-wrap:not(.has-video) video{opacity:0;position:absolute;pointer-events:none}
-.call-placeholder{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:8px;background:#202124;color:#fff}
-.call-placeholder.hidden{display:none}
-.call-placeholder-avatar{width:74px;height:74px;border-radius:50%;display:grid;place-items:center;background:#546e7a;color:#fff;font-size:30px;font-weight:600}
-.call-placeholder-name{font-size:14px;color:#fff}
-.call-video-wrap>span{position:absolute;left:8px;bottom:8px;z-index:3;background:rgba(0,0,0,.65);color:#fff;padding:4px 8px;border-radius:12px;font-size:12px}
-.call-card.call-fullscreen{width:100vw;max-width:none;height:100vh;max-height:none;border-radius:0;padding:0;background:#111;display:flex;flex-direction:column}
-.call-card.call-fullscreen .call-stage{flex:1;max-height:none}
-.call-card.call-fullscreen .call-actions{padding:12px;background:#111}
-@media(max-width:760px){.call-stage{grid-template-columns:1fr 1fr;min-height:45vh}.call-video-wrap{min-height:150px}.call-video-wrap video{min-height:150px}}
-
-
-/* WhatsApp-style camera controls: available on desktop and mobile. */
-.call-card.call-fullscreen .call-actions{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;}
-.call-card.call-fullscreen .call-actions button{min-height:44px;min-width:112px;cursor:pointer;touch-action:manipulation;}
-#switchCameraCallBtn{background:#eef2f3;color:#111;border:0;border-radius:20px;padding:10px 14px;}
-@media(max-width:760px){
-  .call-card.call-fullscreen .call-actions{padding:12px 8px calc(14px + env(safe-area-inset-bottom));gap:7px;}
-  .call-card.call-fullscreen .call-actions button{flex:1 1 calc(50% - 7px);min-width:0;font-size:14px;}
-}
-
-/* Participant feed fullscreen */
-.call-video-wrap{cursor:pointer;touch-action:manipulation}
-.call-video-wrap:fullscreen{width:100vw;height:100vh;min-height:100vh;border-radius:0;background:#000;display:flex;align-items:center;justify-content:center}
-.call-video-wrap:fullscreen video{width:100vw;height:100vh;min-height:100vh;object-fit:contain;background:#000}
-.call-video-wrap:fullscreen .call-placeholder{max-width:90vw}
-@media(max-width:760px){.call-video-wrap:fullscreen video{object-fit:contain}}
