@@ -422,51 +422,53 @@ async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
   if (!db || !Array.isArray(items) || !items.length) return;
   const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
 
-  // Older builds created a unique index on originalMessageId alone. That is
-  // unsafe because message ids are only meaningful inside a group and can be
-  // reused/collide across groups. Remove that legacy index and use the pair
-  // (deletedGroupId, originalMessageId) instead.
+  // Every deletion event gets its OWN recycle-bin document. Do not use
+  // upsert/updateOne keyed by message id: a message can be deleted, restored,
+  // deleted again, and every deletion must remain visible in the admin bin.
+  // Also, message ids are not globally unique across groups.
   try {
     const indexes = await recycle.listIndexes().toArray();
     for (const idx of indexes) {
       const keys = idx.key || {};
-      if (idx.unique && Object.keys(keys).length === 1 && keys.originalMessageId === 1) {
-        await recycle.dropIndex(idx.name);
+      const keyNames = Object.keys(keys);
+      if (idx.unique && keyNames.some(k => k === 'originalMessageId' || k === 'deletedGroupId')) {
+        if (idx.name !== '_id_') await recycle.dropIndex(idx.name);
       }
     }
   } catch (_) {}
-  try {
-    await recycle.createIndex({ deletedGroupId: 1, originalMessageId: 1 }, { unique: true, name: 'recycle_group_message_unique' });
-  } catch (_) {}
 
+  // Non-unique indexes are safe and make Main/Group recycle-bin queries fast.
+  try { await recycle.createIndex({ deletedAt: -1, _id: -1 }, { name: 'recycle_deletedAt' }); } catch (_) {}
+  try { await recycle.createIndex({ deletedGroupId: 1, deletedAt: -1 }, { name: 'recycle_group_deletedAt' }); } catch (_) {}
+  try { await recycle.createIndex({ originalMessageId: 1 }, { name: 'recycle_original_message' }); } catch (_) {}
+
+  const docs = [];
   for (const item of items) {
+    if (!item) continue;
     const message = { ...item };
     delete message._id;
     const originalGroupId = normalizeGroupId(item.groupId || groupId);
     const originalMessageId = String(item.id || '').trim();
     if (!originalMessageId) continue;
-    const doc = {
+
+    docs.push({
       originalMessageId,
-      // Main Recycle Bin is represented by the main group id. The original
-      // group is retained separately so the item can be filtered/restored.
       groupId: DEFAULT_GROUP_ID,
       deletedGroupId: originalGroupId,
       deletedGroupName: String(item.groupName || item.deletedGroupName || originalGroupId),
       deletedAt: new Date(),
       deleteReason: reason,
       message: { ...message, groupId: originalGroupId },
-    };
-    try {
-      await recycle.updateOne(
-        { deletedGroupId: originalGroupId, originalMessageId },
-        { $set: doc },
-        { upsert: true }
-      );
-    } catch (error) {
-      // Do not allow one bad/duplicate item to prevent the rest of a clear or
-      // multi-delete operation from reaching the recycle bin.
-      console.error('Failed to archive recycle item:', error.message);
-    }
+    });
+  }
+
+  if (!docs.length) return;
+  try {
+    // ordered:false means one malformed record can never stop the remaining
+    // deleted messages from being archived.
+    await recycle.insertMany(docs, { ordered: false });
+  } catch (error) {
+    console.error('Failed to archive recycle items:', error.message);
   }
 }
 
@@ -1053,13 +1055,15 @@ io.on('connection', async (socket) => {
 
   socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
-    const deleteEvent = { id: data.id, groupId: normalizeGroupId(socket.groupId) };
+    const groupId = normalizeGroupId(socket.groupId);
+    const deleteEvent = { id: data.id, groupId };
     try {
       const collection = await getCollection();
       if (collection) {
-        const existing = await collection.findOne({ id: data.id });
-        if (existing) await moveMessagesToRecycleBin([existing], normalizeGroupId(socket.groupId), 'message-delete');
-        await collection.deleteOne({ id: data.id });
+        const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+        const existing = await collection.findOne({ $and: [groupFilter, { id: String(data.id) }] });
+        if (existing) await moveMessagesToRecycleBin([existing], groupId, 'message-delete');
+        await collection.deleteOne({ $and: [groupFilter, { id: String(data.id) }] });
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
