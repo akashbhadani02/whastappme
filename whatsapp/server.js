@@ -216,7 +216,7 @@ app.post('/api/calls/event', async (req, res) => {
     // for every participant with the same callId, so one user ending the call
     // closes the call for everyone, not just that user's peer connection.
     const event = {
-      id: crypto.randomUUID(), groupId, callId, type, fromUserId,
+      id: String(body.id || crypto.randomUUID()), groupId, callId, type, fromUserId,
       fromName: String(body.fromName || '').slice(0, 80),
       toUserId: body.toUserId ? String(body.toUserId).slice(0,160) : '',
       payload: body.payload && typeof body.payload === 'object' ? body.payload : {},

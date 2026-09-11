@@ -213,7 +213,7 @@ app.post('/api/calls/event', async (req, res) => {
     const fromUserId = String(body.fromUserId || '').trim().slice(0, 160);
     if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
     const event = {
-      id: crypto.randomUUID(), groupId, callId, type, fromUserId,
+      id: String(body.id || crypto.randomUUID()), groupId, callId, type, fromUserId,
       fromName: String(body.fromName || '').slice(0, 80),
       toUserId: body.toUserId ? String(body.toUserId).slice(0,160) : '',
       payload: body.payload && typeof body.payload === 'object' ? body.payload : {},

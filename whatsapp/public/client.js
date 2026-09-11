@@ -1517,8 +1517,9 @@ function ensureCallMediaUI(){
 }
 ensureCallMediaUI();
 
+const seenCallEventIds=new Set();
 function callEventBody(type, callId, payload={}, toUserId='') {
-  return { groupId: currentGroupId, callId, type, fromUserId:userId, fromName:name, toUserId, payload };
+  return { id: (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2)+Date.now())), groupId: currentGroupId, callId, type, fromUserId:userId, fromName:name, toUserId, payload };
 }
 async function sendCallEvent(type, callId, payload={}, toUserId='') {
   const body=callEventBody(type,callId,payload,toUserId);
@@ -1596,6 +1597,7 @@ async function createPeer(remoteId, remoteName, initiator){
 
 async function handleCallEvent(e){
   if(!e || !e.callId || e.groupId!==currentGroupId) return;
+  if(e.id){ if(seenCallEventIds.has(e.id)) return; seenCallEventIds.add(e.id); if(seenCallEventIds.size>2000){ const first=seenCallEventIds.values().next().value; seenCallEventIds.delete(first); } }
   // Ignore old calls after the user has moved to another call.
   if(e.type==='invite'){
     if(e.fromUserId===userId) return;
