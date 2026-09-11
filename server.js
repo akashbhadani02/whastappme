@@ -364,11 +364,21 @@ app.delete('/api/groups/:id', async (req, res) => {
       }
     } catch (_) {}
 
-    // Remove the group's live messages as well so a deleted group is fully removed.
+    // Move the group's live messages to the MAIN ADMIN recycle bin before removing them.
+    // This applies to text, images, videos, audio and documents because the complete
+    // message record (including mediaId/mime/fileName) is retained in recycle_bin.
     try {
       const messagesCollection = await getCollection();
-      if (messagesCollection) await messagesCollection.deleteMany({ groupId });
-    } catch (_) {}
+      if (messagesCollection) {
+        const liveMessages = await messagesCollection.find({ groupId }).toArray();
+        if (liveMessages.length) {
+          await moveMessagesToRecycleBin(liveMessages, groupId, 'group-delete');
+        }
+        await messagesCollection.deleteMany({ groupId });
+      }
+    } catch (error) {
+      console.error('Failed to archive group messages before group delete:', error.message);
+    }
     const event = { id: groupId };
     io.emit('group-deleted', event);
     await publishRealtimeEvent('group-deleted', event);
@@ -411,13 +421,17 @@ async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
   const db = await getDb();
   if (!db || !Array.isArray(items) || !items.length) return;
   const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
-  const docs = items.map(item => ({
-    originalMessageId: String(item.id),
-    groupId: normalizeGroupId(item.groupId || groupId),
-    deletedAt: new Date(),
-    deleteReason: reason,
-    message: { ...item, _id: undefined },
-  }));
+  const docs = items.map(item => {
+    const message = { ...item };
+    delete message._id;
+    return {
+      originalMessageId: String(item.id),
+      groupId: normalizeGroupId(item.groupId || groupId),
+      deletedAt: new Date(),
+      deleteReason: reason,
+      message,
+    };
+  });
   // Keep one recycle record per message id. A deleted message should never be
   // duplicated if a retry reaches the server twice.
   try { await recycle.createIndex({ originalMessageId: 1 }, { unique: true }); } catch (_) {}
