@@ -1702,10 +1702,13 @@ async function acceptIncomingCall(){
 
 async function finishCall(notify=true,message='Call ended'){
   const call=activeCall;
+  // Close the local call immediately. Do not wait for the signaling request;
+  // a slow/offline network must never leave the caller stuck in the call UI.
   if(call){
-    if(notify) await sendCallEvent('end',call.id,{});
-    else if(incomingCall) await sendCallEvent('leave',call.id,{});
-    call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
+    call.ended=true;
+    call.stream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}});
+    if(notify) sendCallEvent('end',call.id,{}).catch(()=>{});
+    else if(incomingCall) sendCallEvent('leave',call.id,{}).catch(()=>{});
   }
   peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
   activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera On';} closeCallModal();
