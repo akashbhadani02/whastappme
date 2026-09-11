@@ -556,30 +556,31 @@ app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
     const originalGroupId = normalizeGroupId(item.deletedGroupId || msg.groupId || DEFAULT_GROUP_ID);
     if (!originalMessageId) return res.status(400).json({ ok:false, error:'Invalid message' });
 
-    if (recycleId) {
-      await recycle.updateOne({ _id: recycleId }, { $set: {
-        groupId: DEFAULT_GROUP_ID,
-        deletedGroupId: originalGroupId,
-        deletedGroupName: String(item.deletedGroupName || msg.groupName || originalGroupId),
-        recycleStage: 'main',
-        movedToMainRecycleAt: new Date()
-      }});
-    } else {
-      // If this was only a soft-deleted legacy message, create a real recycle
-      // record now so Main Recycle Bin owns it from this point onward.
-      delete msg._id;
-      await recycle.insertOne({
-        originalMessageId,
-        groupId: DEFAULT_GROUP_ID,
-        deletedGroupId: originalGroupId,
-        deletedGroupName: String(msg.groupName || originalGroupId),
-        deletedAt: item.deletedAt || msg.deletedAt || new Date(),
-        deleteReason: item.deleteReason || msg.deleteReason || 'delete',
-        recycleStage: 'main',
-        movedToMainRecycleAt: new Date(),
-        message: msg
-      });
-    }
+    // Main Recycle must be an independent record. Do NOT convert the group
+    // recycle record in-place: doing so makes both views point at the same
+    // Mongo document, so deleting from Group Recycle could also remove the
+    // item that the user expects to keep in Main Recycle.
+    const mainCopy = {
+      originalMessageId,
+      groupId: DEFAULT_GROUP_ID,
+      deletedGroupId: originalGroupId,
+      deletedGroupName: String(item.deletedGroupName || msg.groupName || originalGroupId),
+      deletedAt: item.deletedAt || msg.deletedAt || new Date(),
+      deleteReason: item.deleteReason || msg.deleteReason || 'delete',
+      recycleStage: 'main',
+      movedToMainRecycleAt: new Date(),
+      message: { ...msg }
+    };
+    delete mainCopy.message._id;
+    // Avoid duplicate Main Recycle records if the action is retried.
+    await recycle.updateOne(
+      { originalMessageId, recycleStage:'main' },
+      { $setOnInsert: mainCopy },
+      { upsert:true }
+    );
+    // Once copied successfully, remove only the Group Recycle record.
+    if (recycleId) await recycle.deleteOne({ _id: recycleId });
+    else await collection.updateOne({ id:originalMessageId }, { $set:{ recycleStage:'main' } });
     res.json({ ok:true });
   } catch (error) {
     console.error('Move recycle item to main failed:', error.message);
@@ -658,12 +659,21 @@ app.post('/api/admin/recycle-bin/delete', async (req, res) => {
 
 app.post('/api/admin/recycle-bin/download', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD && String(req.body?.password || '') !== DOWNLOAD_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const db = await getDb();
-    if (!db || !ObjectId.isValid(String(req.body?.id || ''))) return res.status(400).json({ ok:false, error:'Invalid recycle item' });
-    const item = await db.collection(RECYCLE_BIN_COLLECTION_NAME).findOne({ _id:new ObjectId(String(req.body.id)) });
+    if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const collection = db.collection(COLLECTION_NAME);
+    const rawId = String(req.body?.id || '');
+    let item = null;
+    if (ObjectId.isValid(rawId)) item = await recycle.findOne({ _id:new ObjectId(rawId) });
+    if (!item && rawId.startsWith('message:')) {
+      const messageId = rawId.slice(8);
+      const msg = await collection.findOne({ id:messageId, deletedAt:{ $exists:true } });
+      if (msg) item = { id:rawId, originalMessageId:messageId, message:msg };
+    }
     if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
-    const mediaId = item.message?.mediaId;
+    const mediaId = item.message?.mediaId || item.mediaId;
     if (!mediaId || !ObjectId.isValid(String(mediaId))) return res.status(404).json({ ok:false, error:'No downloadable media' });
     const bucket = await getMediaBucket();
     const fileId = new ObjectId(String(mediaId));
@@ -671,7 +681,7 @@ app.post('/api/admin/recycle-bin/download', async (req, res) => {
     if (!files.length) return res.status(404).json({ ok:false, error:'Media file not found' });
     const file = files[0];
     const mime = file.metadata?.mime || 'application/octet-stream';
-    const safeName = String(file.metadata?.fileName || file.filename || `media-${fileId}`).replace(/[\\"\\r\\n]/g, '_');
+    const safeName = String(file.metadata?.fileName || file.filename || `media-${fileId}`).replace(/[\\"\r\n]/g, '_');
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Length', file.length);
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`);
