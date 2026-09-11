@@ -172,3 +172,8 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 @media(max-width:600px){.recycle-item{align-items:stretch;flex-direction:column}.recycle-actions{justify-content:stretch}.recycle-actions button{flex:1;min-height:40px}.recycle-admin-actions{flex-direction:column}.recycle-admin-actions button{width:100%;min-height:42px}.admin-row-actions{flex-wrap:wrap}.admin-row-actions button{flex:1}}
 
 .admin-main-recycle-row{display:flex;justify-content:flex-end;margin:10px 0 14px}.admin-main-recycle-row .mini-btn{width:100%;justify-content:center}
+
+
+/* Front/rear camera switch control */
+.call-actions #switchCameraCallBtn.hidden{display:none!important}
+.call-actions #switchCameraCallBtn{background:#eef2f3;color:#111}

@@ -434,11 +434,9 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const db = await getDb();
     if (!db) return res.json({ ok:true, items:[], persistent:false });
-    const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
-    // Main Recycle Bin must show ALL deleted items from every group.
-    // A specific group recycle bin is filtered only when a real group id is requested.
-    const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID ? { groupId: requestedGroupId } : {};
-    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1, _id:-1 }).toArray();
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const filter = groupId ? { groupId } : {};
+    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(1000).toArray();
     res.json({ ok:true, persistent:true, items: items.map(x => ({
       id:String(x._id), originalMessageId:String(x.originalMessageId), groupId:String(x.groupId),
       deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete',
@@ -531,8 +529,8 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
     const db = await getDb();
     if (!db) return res.json({ ok:true, count:0, persistent:false });
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
-    const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
-    const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID ? { groupId: requestedGroupId } : {};
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const filter = groupId ? { groupId } : {};
     const items = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
     const bucket = await getMediaBucket();
     for (const item of items) {
