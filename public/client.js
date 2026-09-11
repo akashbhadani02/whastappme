@@ -1501,6 +1501,7 @@ let incomingCall = null;
 let callPollTimer = null;
 let callPollSince = new Date(Date.now() - 3000).toISOString();
 const peerConnections = new Map();
+const pendingIceCandidates = new Map();
 const RTC_CONFIG = { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
@@ -1544,6 +1545,7 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
   if(v && stream){ v.srcObject=stream; v.muted=muted; }
   const hasLiveVideo=!!(stream && stream.getVideoTracks().some(t=>t.readyState==='live' && t.enabled) && hasVideo);
+  if(v && stream && hasVideo){ v.srcObject=stream; v.play().catch(()=>{}); }
   wrap.classList.toggle('has-video',hasLiveVideo);
   if(ph) ph.classList.toggle('hidden',hasLiveVideo);
   return wrap;
@@ -1560,10 +1562,10 @@ function setParticipantCameraState(id, on){
   const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_');
   const wrap=document.getElementById(`call-video-${safeId}`); if(!wrap)return;
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
-  const live=!!(on && v?.srcObject && v.srcObject.getVideoTracks().some(t=>t.readyState==='live' && t.enabled));
+  const live=!!(v?.srcObject && v.srcObject.getVideoTracks().some(t=>t.readyState==='live' && t.enabled) && on);
   wrap.classList.toggle('has-video',live);
   if(ph) ph.classList.toggle('hidden',live);
-  if(v) v.style.opacity=live?'1':'0';
+  if(v) { v.style.opacity=live?'1':'0'; if(live) v.play().catch(()=>{}); }
 }
 function updateCallButtons(){
   if(!activeCall || activeCall.type!=='video') return;
@@ -1584,6 +1586,11 @@ async function createPeer(remoteId, remoteName, initiator){
   if(pc) return pc;
 
   pc=new RTCPeerConnection(RTC_CONFIG);
+  pc.__remoteId=remoteId;
+  pc.__makingOffer=false;
+  pc.__ignoreOffer=false;
+  pc.__polite=String(userId)>String(remoteId);
+  pc.__remoteDescriptionSet=false;
   peerConnections.set(remoteId,pc);
 
   // Keep one stable audio track and one stable video transceiver per participant.
@@ -1599,6 +1606,17 @@ async function createPeer(remoteId, remoteName, initiator){
 
   pc.onicecandidate=e=>{
     if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId);
+  };
+  pc.onnegotiationneeded=async()=>{
+    if(!activeCall || activeCall.ended || pc.signalingState==='closed') return;
+    try{
+      pc.__makingOffer=true;
+      const offer=await pc.createOffer();
+      if(pc.signalingState!=='stable') return;
+      await pc.setLocalDescription(offer);
+      await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+    }catch(err){ console.warn('negotiation failed',remoteId,err); }
+    finally{ pc.__makingOffer=false; }
   };
 
   pc.ontrack=e=>{
@@ -1632,11 +1650,6 @@ async function createPeer(remoteId, remoteName, initiator){
     }
   };
 
-  if(initiator){
-    const offer=await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
-  }
   return pc;
 }
 
@@ -1680,13 +1693,32 @@ async function handleCallEvent(e){
     const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
     callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     const pc=await createPeer(rid,e.fromName||'Member',false);
-    await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+    const desc=new RTCSessionDescription(e.payload.description);
+    const offerCollision=pc.__makingOffer || pc.signalingState!=='stable';
+    pc.__ignoreOffer=!pc.__polite && offerCollision;
+    if(pc.__ignoreOffer) return;
+    if(offerCollision && pc.__polite && pc.signalingState!=='stable') await pc.setLocalDescription({type:'rollback'});
+    await pc.setRemoteDescription(desc);
+    pc.__remoteDescriptionSet=true;
+    const queued=pendingIceCandidates.get(rid)||[];
+    for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
+    pendingIceCandidates.delete(rid);
     const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
     await sendCallEvent('answer',activeCall.id,{description:pc.localDescription},rid);
   } else if(e.type==='answer' && e.toUserId===userId){
-    const pc=peerConnections.get(e.fromUserId); if(pc) await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description));
+    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+    if(pc){
+      await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description)); pc.__remoteDescriptionSet=true;
+      const queued=pendingIceCandidates.get(rid)||[];
+      for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
+      pendingIceCandidates.delete(rid);
+    }
   } else if(e.type==='ice' && e.toUserId===userId){
-    const pc=peerConnections.get(e.fromUserId); if(pc && e.payload?.candidate){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
+    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+    if(e.payload?.candidate){
+      if(pc?.remoteDescription){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
+      else { if(!pendingIceCandidates.has(rid)) pendingIceCandidates.set(rid,[]); pendingIceCandidates.get(rid).push(e.payload.candidate); }
+    }
   } else if(e.type==='camera-state' && (!e.toUserId || e.toUserId===userId)){
     if(activeCall?.remoteCameraStates) activeCall.remoteCameraStates.set(e.fromUserId, !!e.payload?.on);
     setParticipantCameraState(e.fromUserId, !!e.payload?.on);
@@ -1774,8 +1806,8 @@ async function replaceCallVideoTrack(facingMode){
   activeCall.stream.addTrack(camTrack);
   activeCall.cameraOn=true;
   activeCall.facingMode=facingMode;
-  callStageAddVideo('local',activeCall.stream,'You',true);
-  setParticipantCameraState('local',true);
+  callStageAddVideo(userId,activeCall.stream,name,true);
+  setParticipantCameraState(userId,true);
   for(const [,pc] of peerConnections){
     const sender=pc.getSenders().find(s=>s.kind==='video' || s.track?.kind==='video');
     if(sender) await sender.replaceTrack(camTrack);
@@ -1804,8 +1836,8 @@ async function toggleCallCamera(){
       const track=activeCall.stream.getVideoTracks()[0];
       if(track){ track.stop(); activeCall.stream.removeTrack(track); }
       activeCall.cameraOn=false;
-      document.getElementById('call-video-local')?.remove();
-      callStageAddParticipant('local',name,null,true,false);
+      document.getElementById(`call-video-${String(userId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
+      callStageAddParticipant(userId,name,null,true,false);
       await sendCallEvent('camera-state',activeCall.id,{on:false},'');
       for(const [,pc] of peerConnections){ const sender=pc.getSenders().find(s=>s.kind==='video' || s.track?.kind==='video'); if(sender) await sender.replaceTrack(null); }
       updateCallButtons();
