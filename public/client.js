@@ -1543,6 +1543,22 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
     const avatar=document.createElement('div'); avatar.className='call-placeholder'; avatar.innerHTML=`<div class="call-placeholder-avatar">${String(label||'U').slice(0,1).toUpperCase()}</div><div class="call-placeholder-name"></div>`;
     const cap=document.createElement('span'); cap.textContent=label||'Participant';
     wrap.append(v,avatar,cap); stage.appendChild(wrap);
+    // Double-click/tap a participant feed to open that feed fullscreen.
+    const openFeedFullscreen = async (ev)=>{
+      ev?.preventDefault?.();
+      const video=wrap.querySelector('video');
+      try {
+        if (wrap.requestFullscreen) await wrap.requestFullscreen();
+        else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
+        else if (video?.requestFullscreen) await video.requestFullscreen();
+      } catch(err) { console.warn('feed fullscreen failed',err); }
+    };
+    wrap.addEventListener('dblclick', openFeedFullscreen);
+    wrap.addEventListener('touchend', (ev)=>{
+      const now=Date.now(); const last=wrap.__lastTap||0;
+      wrap.__lastTap=now;
+      if(now-last < 320){ openFeedFullscreen(ev); wrap.__lastTap=0; }
+    }, {passive:false});
   }
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder');
   if(v && stream){

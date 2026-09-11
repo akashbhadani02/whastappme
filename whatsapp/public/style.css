@@ -197,3 +197,10 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
   .call-card.call-fullscreen .call-actions{padding:12px 8px calc(14px + env(safe-area-inset-bottom));gap:7px;}
   .call-card.call-fullscreen .call-actions button{flex:1 1 calc(50% - 7px);min-width:0;font-size:14px;}
 }
+
+/* Participant feed fullscreen */
+.call-video-wrap{cursor:pointer;touch-action:manipulation}
+.call-video-wrap:fullscreen{width:100vw;height:100vh;min-height:100vh;border-radius:0;background:#000;display:flex;align-items:center;justify-content:center}
+.call-video-wrap:fullscreen video{width:100vw;height:100vh;min-height:100vh;object-fit:contain;background:#000}
+.call-video-wrap:fullscreen .call-placeholder{max-width:90vw}
+@media(max-width:760px){.call-video-wrap:fullscreen video{object-fit:contain}}
