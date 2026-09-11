@@ -112,6 +112,11 @@ const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClo
 const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
 const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
 const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
+const adminMediaViewModal = document.querySelector('#adminMediaViewModal');
+const adminMediaViewClose = document.querySelector('#adminMediaViewClose');
+const adminMediaViewTitle = document.querySelector('#adminMediaViewTitle');
+const adminMediaViewMeta = document.querySelector('#adminMediaViewMeta');
+const adminMediaViewBody = document.querySelector('#adminMediaViewBody');
 const adminMediaPopup = document.querySelector('#adminMediaPopup');
 const adminMediaPopupClose = document.querySelector('#adminMediaPopupClose');
 const adminMediaPopupTitle = document.querySelector('#adminMediaPopupTitle');
@@ -1182,7 +1187,10 @@ async function loadAdminCallRecordings(groupId = '') {
         const when=item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
         const size=item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
         const url=`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
-        row.innerHTML=`<div class="admin-group-name">🎥 ${clean(item.feedName||'Participant',60)}<small style="display:block;opacity:.7">${clean(when,60)} · ${size}</small></div><div class="admin-row-actions"><a class="mini-btn" href="${url}" target="_blank" rel="noopener">▶ View</a><a class="mini-btn" href="${url}" download>⬇ Download</a><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
+        row.innerHTML=`<div class="admin-group-name">🎥 ${clean(item.feedName||'Participant',60)}<small style="display:block;opacity:.7">${clean(when,60)} · ${size}</small></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-view-recording-btn">▶ View</button><a class="mini-btn" href="${url}" download>⬇ Download</a><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
+        row.querySelector('.admin-view-recording-btn').addEventListener('click',()=>{
+          requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,item.feedName||'Call recording',when));
+        });
         row.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
           if(!confirm('Delete this call recording?')) return;
           const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
@@ -1192,6 +1200,23 @@ async function loadAdminCallRecordings(groupId = '') {
       });
     });
   } catch(e) { adminCallRecordingsList.innerHTML=''; adminCallRecordingsError.textContent=e.message||'Could not load recordings'; }
+}
+
+function showAdminMediaPopup(url,title,meta=''){
+  adminMediaViewTitle.textContent=title || 'Call recording';
+  adminMediaViewMeta.textContent=meta || '';
+  adminMediaViewBody.innerHTML='';
+  const video=document.createElement('video');
+  video.controls=true; video.autoplay=true; video.playsInline=true; video.preload='metadata';
+  video.src=url; video.setAttribute('controlsList','nodownload');
+  video.addEventListener('contextmenu',e=>e.preventDefault());
+  adminMediaViewBody.appendChild(video);
+  adminMediaViewModal.classList.remove('hidden');
+}
+
+function closeAdminMediaPopup(){
+  adminMediaViewBody.innerHTML='';
+  adminMediaViewModal.classList.add('hidden');
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
@@ -1387,6 +1412,8 @@ adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden
 adminCallRecordingsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminCallRecordings); });
 adminCallRecordingsClose?.addEventListener('click', () => adminCallRecordingsModal.classList.add('hidden'));
 adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === adminCallRecordingsModal) adminCallRecordingsModal.classList.add('hidden'); });
+adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
+adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
 adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
