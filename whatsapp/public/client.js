@@ -1724,8 +1724,22 @@ speakerCallBtn?.addEventListener('click',()=>{document.querySelectorAll('#callSt
 
 async function replaceCallVideoTrack(facingMode){
   if(!activeCall || activeCall.type!=='video') return;
-  const camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facingMode}},audio:false});
+  if(!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
+  // Mobile browsers/WebViews can reject an ideal facingMode constraint even when
+  // the camera itself is available. Try the requested camera first, then fall
+  // back to a plain video request so the feed can still start.
+  let camStream;
+  try {
+    camStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:facingMode},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}},
+      audio:false
+    });
+  } catch(firstErr) {
+    console.warn('Facing-mode camera request failed, retrying plain camera', firstErr);
+    camStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+  }
   const camTrack=camStream.getVideoTracks()[0];
+  if(!camTrack) throw new Error('No video track returned');
   const oldTrack=activeCall.stream.getVideoTracks()[0];
   if(oldTrack) oldTrack.stop();
   if(oldTrack) activeCall.stream.removeTrack(oldTrack);
