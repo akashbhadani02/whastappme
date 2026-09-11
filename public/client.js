@@ -106,6 +106,12 @@ const adminRecycleRefresh = document.querySelector('#adminRecycleRefresh');
 const adminRecycleEmpty = document.querySelector('#adminRecycleEmpty');
 const adminMainRecycleBtn = document.querySelector('#adminMainRecycleBtn');
 const adminMainRecycleFromGroupsBtn = document.querySelector('#adminMainRecycleFromGroupsBtn');
+const adminCallRecordingsBtn = document.querySelector('#adminCallRecordingsBtn');
+const adminCallRecordingsModal = document.querySelector('#adminCallRecordingsModal');
+const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClose');
+const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
+const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
+const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -1114,6 +1120,42 @@ async function requestAdminThen(action) {
   });
 }
 
+
+async function loadAdminCallRecordings(groupId = '') {
+  const clean = (v,n=80) => String(v ?? '').replace(/[<>]/g,'').slice(0,n);
+  adminCallRecordingsError.textContent = '';
+  adminCallRecordingsList.innerHTML = '<div class="admin-group-row">Loading recordings…</div>';
+  try {
+    const r = await fetch('/api/admin/call-recordings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password:PASSWORD, groupId }) });
+    const d = await r.json(); if (!d.ok) throw new Error(d.error || 'Unauthorized');
+    const list = d.recordings || [];
+    if (!list.length) { adminCallRecordingsList.innerHTML = '<div class="admin-group-row">No call recordings found.</div>'; return; }
+    const byGroup = new Map();
+    list.forEach(x => { const key = x.groupId || 'main'; if (!byGroup.has(key)) byGroup.set(key, {name:x.groupName || key, items:[]}); byGroup.get(key).items.push(x); });
+    adminCallRecordingsList.innerHTML = '';
+    byGroup.forEach(g => {
+      const head = document.createElement('div'); head.className='admin-group-row';
+      head.innerHTML = `<div class="admin-group-name">📁 ${clean(g.name,60)}</div><div class="password-error">${g.items.length} feed${g.items.length===1?'':'s'}</div>`;
+      adminCallRecordingsList.appendChild(head);
+      g.items.forEach(item => {
+        const row=document.createElement('div'); row.className='admin-group-row';
+        const when=item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+        const size=item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
+        const url=`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
+        row.innerHTML=`<div class="admin-group-name">🎥 ${clean(item.feedName||'Participant',60)}<small style="display:block;opacity:.7">${clean(when,60)} · ${size}</small></div><div class="admin-row-actions"><a class="mini-btn" href="${url}" target="_blank" rel="noopener">▶ View</a><a class="mini-btn" href="${url}" download>⬇ Download</a><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
+        row.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
+          if(!confirm('Delete this call recording?')) return;
+          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
+          const dd=await rr.json(); if(dd.ok) loadAdminCallRecordings(groupId); else showToast(dd.error||'Delete failed');
+        });
+        adminCallRecordingsList.appendChild(row);
+      });
+    });
+  } catch(e) { adminCallRecordingsList.innerHTML=''; adminCallRecordingsError.textContent=e.message||'Could not load recordings'; }
+}
+
+function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
+
 async function openAdminGroups() {
   adminGroupsError.textContent = '';
   try {
@@ -1302,6 +1344,10 @@ async function saveNewGroup() {
 }
 
 adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminGroups); });
+adminCallRecordingsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminCallRecordings); });
+adminCallRecordingsClose?.addEventListener('click', () => adminCallRecordingsModal.classList.add('hidden'));
+adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === adminCallRecordingsModal) adminCallRecordingsModal.classList.add('hidden'); });
+adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
@@ -1510,6 +1556,23 @@ updateAdvancedTools();
   const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
   let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false;
   const peers=new Map();
+  const recorders=new Map();
+  let recordingNoticeShown=false;
+  const recordingMime=()=>['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','audio/webm;codecs=opus','video/webm'].find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+  function startFeedRecording(feedId,feedName,stream){
+    if(!stream||recorders.has(feedId)||!window.MediaRecorder)return;
+    const mime=recordingMime(); if(!mime)return;
+    try{
+      const recordingCallId=activeCallId; const recordingGroupId=currentGroupId; const rec=new MediaRecorder(stream,{mimeType:mime}); const chunks=[];
+      rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+      rec.onstop=async()=>{
+        if(!chunks.length)return;
+        try{const blob=new Blob(chunks,{type:mime}); await fetch('/api/call-recordings/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Call-Id':recordingCallId||feedId,'X-Group-Id':recordingGroupId,'X-Feed-Id':feedId,'X-Feed-Name':feedName||'Participant','X-User-Id':String(userId||''),'X-Mime-Type':mime},body:blob});}catch(_){}
+      };
+      rec.start(1000); recorders.set(feedId,rec);
+    }catch(_){}
+  }
+  function stopFeedRecordings(){recorders.forEach(r=>{try{if(r.state!=='inactive')r.stop()}catch(_){}});recorders.clear()}
   const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
   const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
   const isActive=()=>!!activeCallId;
@@ -1520,16 +1583,16 @@ updateAdvancedTools();
   function removePeer(id){const x=peers.get(id);if(x){try{x.pc.close()}catch(_){}}peers.delete(id);document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`)?.remove();updateStatus()}
   function createPeer(id,nm,offer){let x=peers.get(id);if(x)return x.pc;const pc=new RTCPeerConnection(RTC_CONFIG);x={pc,name:safeText(nm||'Participant',60)};peers.set(id,x);if(localStream)localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
     pc.onicecandidate=e=>{if(e.candidate)socket.emit('call-signal',{callId:activeCallId,to:id,kind:'ice',data:e.candidate})};
-    pc.ontrack=e=>tile(id,x.name,e.streams?.[0]||new MediaStream([e.track]));
+    pc.ontrack=e=>{const st=e.streams?.[0]||new MediaStream([e.track]); tile(id,x.name,st); startFeedRecording('peer-'+id,x.name,st);};
     pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal();if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal();if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
-  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';updateStatus()}
+  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
   callMuteBtn?.addEventListener('click',()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);callMuteBtn.textContent=muted?'🔇':'🎙️'});
   callCameraBtn?.addEventListener('click',()=>{if(!localStream||activeCallType!=='video')return;cameraOff=!cameraOff;localStream.getVideoTracks().forEach(t=>t.enabled=!cameraOff);if(localCallVideo)localCallVideo.style.display=cameraOff?'none':'block';callCameraBtn.textContent=cameraOff?'🚫':'📷';callCameraBtn.title=cameraOff?'Turn camera on':'Turn camera off'});

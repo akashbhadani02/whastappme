@@ -25,6 +25,7 @@ const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
+const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -351,6 +352,79 @@ app.get('/api/group', async (req, res) => {
   } catch (error) {
     res.json({ ok: true, id: DEFAULT_GROUP_ID, name: 'WhatsApp' });
   }
+});
+
+
+// ---- Group call recordings (browser-side per-feed recordings stored in MongoDB GridFS) ----
+app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-stream', limit: '100mb' }), async (req, res) => {
+  try {
+    const db = await getDb();
+    const bucket = await getMediaBucket();
+    if (!db || !bucket) return res.status(503).json({ ok: false, error: 'MongoDB is required for call recordings.' });
+    const callId = String(req.headers['x-call-id'] || '').slice(0, 120);
+    const groupId = normalizeGroupId(req.headers['x-group-id'] || DEFAULT_GROUP_ID);
+    const feedId = String(req.headers['x-feed-id'] || '').slice(0, 120);
+    const feedName = String(req.headers['x-feed-name'] || 'Participant').slice(0, 80);
+    const mime = String(req.headers['x-mime-type'] || 'video/webm').slice(0, 120);
+    const userId = String(req.headers['x-user-id'] || '').slice(0, 120);
+    if (!callId || !feedId || !Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ ok: false, error: 'Invalid recording.' });
+    const groupDoc = await (await getGroupSettingsCollection())?.findOne({ _id: groupId });
+    const filename = `call-${groupId}-${callId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.webm`;
+    const upload = bucket.openUploadStream(filename, {
+      contentType: mime,
+      metadata: { kind: 'call-recording', callId, groupId, groupName: groupDoc?.name || groupId, feedId, feedName, userId, createdAt: new Date() }
+    });
+    await new Promise((resolve, reject) => {
+      upload.once('finish', resolve); upload.once('error', reject); upload.end(req.body);
+    });
+    await db.collection(CALL_RECORDINGS_COLLECTION_NAME).insertOne({
+      fileId: upload.id, filename, callId, groupId, groupName: groupDoc?.name || groupId,
+      feedId, feedName, userId, mime, size: req.body.length, createdAt: new Date()
+    });
+    res.json({ ok: true, id: String(upload.id) });
+  } catch (error) {
+    console.error('Call recording upload failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Recording upload failed.' });
+  }
+});
+
+app.post('/api/admin/call-recordings', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const db = await getDb();
+    if (!db) return res.json({ ok: true, recordings: [] });
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const query = groupId ? { groupId } : {};
+    const recordings = await db.collection(CALL_RECORDINGS_COLLECTION_NAME).find(query).sort({ createdAt: -1 }).limit(500).toArray();
+    res.json({ ok: true, recordings: recordings.map(r => ({ id: String(r.fileId), fileId: String(r.fileId), callId: r.callId, groupId: r.groupId, groupName: r.groupName, feedId: r.feedId, feedName: r.feedName, userId: r.userId, mime: r.mime, size: r.size, createdAt: r.createdAt })) });
+  } catch (error) { res.status(500).json({ ok: false, error: 'Could not load recordings.' }); }
+});
+
+app.get('/api/admin/call-recordings/:id', async (req, res) => {
+  try {
+    const password = String(req.query?.password || '');
+    if (password !== ADMIN_PASSWORD && password !== DOWNLOAD_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const db = await getDb(); const bucket = await getMediaBucket();
+    if (!db || !bucket) return res.status(503).end();
+    const id = new ObjectId(String(req.params.id));
+    const meta = await db.collection(CALL_RECORDINGS_COLLECTION_NAME).findOne({ fileId: id });
+    if (!meta) return res.status(404).end();
+    res.setHeader('Content-Type', meta.mime || 'video/webm');
+    res.setHeader('Content-Disposition', `inline; filename="${String(meta.filename || 'call-recording.webm').replace(/"/g, '')}"`);
+    bucket.openDownloadStream(id).on('error', () => { if (!res.headersSent) res.status(404); res.end(); }).pipe(res);
+  } catch (_) { res.status(400).end(); }
+});
+
+app.delete('/api/admin/call-recordings/:id', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const db = await getDb(); const bucket = await getMediaBucket();
+    if (!db || !bucket) return res.status(503).json({ ok: false });
+    const id = new ObjectId(String(req.params.id));
+    await db.collection(CALL_RECORDINGS_COLLECTION_NAME).deleteOne({ fileId: id });
+    try { await bucket.delete(id); } catch (_) {}
+    res.json({ ok: true });
+  } catch (_) { res.status(400).json({ ok: false, error: 'Delete failed.' }); }
 });
 
 app.post('/api/admin/groups', async (req, res) => {
