@@ -1582,13 +1582,59 @@ async function createPeer(remoteId, remoteName, initiator){
   if(!activeCall || activeCall.ended || remoteId===userId) return;
   let pc=peerConnections.get(remoteId);
   if(pc) return pc;
-  pc=new RTCPeerConnection(RTC_CONFIG); peerConnections.set(remoteId,pc);
-  if(activeCall.stream) activeCall.stream.getTracks().forEach(t=>pc.addTrack(t,activeCall.stream));
-  pc.onicecandidate=e=>{ if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId); };
-  pc.ontrack=e=>{ const stream=e.streams?.[0]; if(!stream) return; if(e.track?.kind==='video') { callStageAddVideo(remoteId,stream,remoteName,false); setParticipantCameraState(remoteId,true); } else callStageAddAudio(remoteId,stream,remoteName); };
-  pc.onconnectionstatechange=()=>{ if(['failed','closed'].includes(pc.connectionState)){ try{pc.close()}catch(_){} peerConnections.delete(remoteId); } };
+
+  pc=new RTCPeerConnection(RTC_CONFIG);
+  peerConnections.set(remoteId,pc);
+
+  // Keep one stable audio track and one stable video transceiver per participant.
+  // Video is initially trackless when the camera is OFF; turning it ON/OFF then
+  // uses replaceTrack(), which avoids repeatedly creating/destroying m-lines and
+  // prevents remote video elements from disappearing during renegotiation.
+  const audioTrack=activeCall.stream?.getAudioTracks?.()[0];
+  if(audioTrack) pc.addTrack(audioTrack,activeCall.stream);
+  const videoTransceiver=pc.addTransceiver('video',{direction:'sendrecv'});
+  const videoSender=videoTransceiver.sender;
+  const currentVideo=activeCall.stream?.getVideoTracks?.()[0];
+  if(currentVideo) await videoSender.replaceTrack(currentVideo);
+
+  pc.onicecandidate=e=>{
+    if(e.candidate) sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId);
+  };
+
+  pc.ontrack=e=>{
+    if(!activeCall || activeCall.ended) return;
+    const track=e.track;
+    if(!track) return;
+    // Build one persistent MediaStream for this participant. Some browsers emit
+    // an empty e.streams array for transceiver tracks, so never depend on streams[0].
+    if(!activeCall.remoteStreams) activeCall.remoteStreams=new Map();
+    let remoteStream=activeCall.remoteStreams.get(remoteId);
+    if(!remoteStream){
+      remoteStream=new MediaStream();
+      activeCall.remoteStreams.set(remoteId,remoteStream);
+    }
+    if(!remoteStream.getTracks().some(t=>t.id===track.id)) remoteStream.addTrack(track);
+
+    if(track.kind==='video'){
+      callStageAddVideo(remoteId,remoteStream,remoteName,false);
+      setParticipantCameraState(remoteId,!!activeCall.remoteCameraStates?.get(remoteId));
+      track.onended=()=>setParticipantCameraState(remoteId,false);
+    }else if(track.kind==='audio'){
+      callStageAddAudio(remoteId,remoteStream,remoteName);
+    }
+  };
+
+  pc.onconnectionstatechange=()=>{
+    if(['failed','closed'].includes(pc.connectionState)){
+      try{pc.close()}catch(_){}
+      peerConnections.delete(remoteId);
+      activeCall?.remoteStreams?.delete(remoteId);
+    }
+  };
+
   if(initiator){
-    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+    const offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
     await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
   }
   return pc;
@@ -1642,6 +1688,7 @@ async function handleCallEvent(e){
   } else if(e.type==='ice' && e.toUserId===userId){
     const pc=peerConnections.get(e.fromUserId); if(pc && e.payload?.candidate){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
   } else if(e.type==='camera-state' && (!e.toUserId || e.toUserId===userId)){
+    if(activeCall?.remoteCameraStates) activeCall.remoteCameraStates.set(e.fromUserId, !!e.payload?.on);
     setParticipantCameraState(e.fromUserId, !!e.payload?.on);
   } else if(e.type==='leave'){
     const pc=peerConnections.get(e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromUserId);}
@@ -1671,7 +1718,7 @@ async function startCall(video=false){
     // the user explicitly turns it on with the camera button.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
     clearCallStage();
     callStageAddParticipant(userId,name,null,true,false);
     if(video){ updateCallButtons(); } else { cameraCallBtn?.classList.add('hidden'); switchCameraCallBtn?.classList.add('hidden'); }
@@ -1688,7 +1735,7 @@ async function acceptIncomingCall(){
     const video=inc.payload?.callType==='video';
     // Even an incoming video call starts with camera OFF. Only microphone is requested.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false,facingMode:'user'};
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:false,facingMode:'user'};
     clearCallStage();
     callStageAddParticipant(userId,name,null,true,false);
     callStageAddParticipant(inc.fromUserId,inc.fromName||'Member',null,false,false);
@@ -1729,11 +1776,12 @@ async function replaceCallVideoTrack(facingMode){
   activeCall.facingMode=facingMode;
   callStageAddVideo('local',activeCall.stream,'You',true);
   setParticipantCameraState('local',true);
-  for(const [rid,pc] of peerConnections){
-    const sender=pc.getSenders().find(s=>s.track?.kind==='video');
+  for(const [,pc] of peerConnections){
+    const sender=pc.getSenders().find(s=>s.kind==='video' || s.track?.kind==='video');
     if(sender) await sender.replaceTrack(camTrack);
-    else pc.addTrack(camTrack,activeCall.stream);
   }
+  // replaceTrack keeps the existing WebRTC video m-line alive, so no offer/answer
+  // renegotiation is needed just to switch the camera track.
   await sendCallEvent('camera-state',activeCall.id,{on:true,facingMode},'');
   updateCallButtons();
 }
@@ -1752,7 +1800,6 @@ async function toggleCallCamera(){
   try{
     if(!activeCall.cameraOn){
       await replaceCallVideoTrack(activeCall.facingMode || 'user');
-      await renegotiateAllPeers();
     }else{
       const track=activeCall.stream.getVideoTracks()[0];
       if(track){ track.stop(); activeCall.stream.removeTrack(track); }
@@ -1760,8 +1807,7 @@ async function toggleCallCamera(){
       document.getElementById('call-video-local')?.remove();
       callStageAddParticipant('local',name,null,true,false);
       await sendCallEvent('camera-state',activeCall.id,{on:false},'');
-      for(const [,pc] of peerConnections){ const sender=pc.getSenders().find(s=>s.track?.kind==='video'); if(sender) await sender.replaceTrack(null); }
-      await renegotiateAllPeers();
+      for(const [,pc] of peerConnections){ const sender=pc.getSenders().find(s=>s.kind==='video' || s.track?.kind==='video'); if(sender) await sender.replaceTrack(null); }
       updateCallButtons();
     }
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Could not change camera state'); }
@@ -1771,7 +1817,7 @@ async function switchCallCamera(){
   if(!activeCall || activeCall.type!=='video') return;
   if(!activeCall.cameraOn){ showToast('Turn camera on first'); return; }
   const next=activeCall.facingMode==='environment'?'user':'environment';
-  try{ await replaceCallVideoTrack(next); await renegotiateAllPeers(); }
+  try{ await replaceCallVideoTrack(next); }
   catch(e){
     if(next==='environment') showToast('Rear camera is not available on this device');
     else showToast('Could not switch camera');
