@@ -1480,7 +1480,7 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    socket.to(`group:${groupId}`).emit('incoming-call', {
+    io.emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
@@ -1489,7 +1489,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (!call || call.groupId !== normalizeGroupId(socket.groupId)) {
+    if (!call) {
       return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
     }
     socket.join(callRoom(call.groupId)); socket.callId = callId; socket.callType = call.type;
