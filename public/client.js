@@ -1458,6 +1458,23 @@ let typingTimer=null, typingActive=false;
 function sendTyping(active){ if(!socket.connected)return; socket.emit('typing',{groupId:currentGroupId,userId,name,active}); }
 textarea?.addEventListener('input',()=>{if(!typingActive){typingActive=true;sendTyping(true)};clearTimeout(typingTimer);typingTimer=setTimeout(()=>{typingActive=false;sendTyping(false)},900)});
 socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)return; if(d.active){typingBar.textContent=`${d.name||'Someone'} is typing…`;typingBar.classList.add('show')}else typingBar.classList.remove('show')});
+// ===== Privacy / screenshot deterrents for the web app =====
+// Browsers cannot reliably block OS-level screenshots, but disable common
+// browser capture paths and context-menu saving where the browser permits it.
+document.addEventListener('contextmenu', e => e.preventDefault(), {capture:true});
+document.addEventListener('dragstart', e => {
+  if (e.target?.tagName === 'IMG' || e.target?.tagName === 'VIDEO') e.preventDefault();
+}, {capture:true});
+document.addEventListener('keydown', e => {
+  const k=(e.key||'').toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && ['p','s','u'].includes(k)) e.preventDefault();
+  if (e.key === 'PrintScreen') {
+    try { navigator.clipboard?.writeText(''); } catch (_) {}
+    document.body.classList.add('privacy-blur');
+    setTimeout(()=>document.body.classList.remove('privacy-blur'), 900);
+  }
+}, {capture:true});
+
 // ===== Real group Audio / Video calling =====
 // Media is WebRTC peer-to-peer. REST signaling is used as a reliable fallback for
 // Vercel/serverless deployments, while Socket.IO accelerates signaling when available.
