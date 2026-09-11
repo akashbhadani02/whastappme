@@ -225,8 +225,12 @@ app.post('/api/calls/event', async (req, res) => {
     if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
     const event = {
       id: String(body.id || crypto.randomUUID()), groupId, callId, type, fromUserId,
+      fromPeerId: String(body.fromPeerId || body.fromUserId || '').slice(0,240),
+      fromDeviceId: String(body.fromDeviceId || '').slice(0,160),
       fromName: String(body.fromName || '').slice(0, 80),
       toUserId: body.toUserId ? String(body.toUserId).slice(0,160) : '',
+      toPeerId: body.toPeerId ? String(body.toPeerId).slice(0,240) : '',
+      toDeviceId: body.toDeviceId ? String(body.toDeviceId).slice(0,160) : '',
       payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
       createdAt: new Date()
     };
@@ -254,7 +258,8 @@ app.get('/api/calls/events', async (req, res) => {
     const filter = { groupId, createdAt: { $gt: safeSince } };
     const events = await collection.find(filter).sort({ createdAt: 1 }).limit(300).toArray();
     // Do not send targeted SDP/ICE to unrelated users.
-    const visible = events.filter(e => !e.toUserId || e.toUserId === userId || e.fromUserId === userId);
+    const peerId = String(req.query.peerId || '');
+    const visible = events.filter(e => (!e.toUserId && !e.toPeerId) || e.toUserId === userId || e.fromUserId === userId || (e.toPeerId && e.toPeerId === peerId));
     res.json({ ok:true, events:visible.map(e => ({...e, _id:undefined})) });
   } catch (error) {
     console.error('Call events poll failed:', error.message);
@@ -1465,13 +1470,16 @@ io.on('connection', async (socket) => {
   socket.on('call-presence', (data) => {
     if (!data || !data.callId || !socket.groupId) return;
     if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
+    if (data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     const payload = {
       groupId: normalizeGroupId(socket.groupId),
       callId: String(data.callId).slice(0,120),
       userId: socket.userId || String(data.userId || ''),
       name: String(data.name || '').slice(0,80),
       callType: String(data.callType || 'video'),
-      cameraOn: !!data.cameraOn
+      cameraOn: !!data.cameraOn,
+      peerId: String(data.peerId || data.userId || '').slice(0,240),
+      deviceId: String(data.deviceId || '').slice(0,160)
     };
     for (const peer of io.sockets.sockets.values()) {
       if (peer.id === socket.id) continue;
@@ -1484,12 +1492,15 @@ io.on('connection', async (socket) => {
   socket.on('call-event', (data) => {
     if (!data || !data.callId || !data.type || !socket.groupId) return;
     if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
+    if (data.fromPeerId) socket.callPeerId = String(data.fromPeerId).slice(0,240);
     const target = data.toUserId ? String(data.toUserId) : '';
     const payload = { ...data, groupId: normalizeGroupId(socket.groupId), fromUserId: socket.userId || String(data.fromUserId || '') };
     for (const peer of io.sockets.sockets.values()) {
       if (peer.id === socket.id) continue;
       if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
+      const targetPeer = data.toPeerId ? String(data.toPeerId) : '';
       if (target && String(peer.userId || '') !== target) continue;
+      if (targetPeer && String(peer.callPeerId || '') !== targetPeer) continue;
       peer.emit('call-event', payload);
     }
   });

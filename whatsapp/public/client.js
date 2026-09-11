@@ -11,6 +11,9 @@ const socket = io({
 const PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+const callDeviceId = localStorage.getItem('wa_call_device_id') || (crypto.randomUUID ? crypto.randomUUID() : socketId);
+localStorage.setItem('wa_call_device_id', callDeviceId);
+const callPeerId = `${userId || 'user'}:${callDeviceId}`;
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -1534,10 +1537,12 @@ ensureCallMediaUI();
 
 const seenCallEventIds=new Set();
 function callEventBody(type, callId, payload={}, toUserId='') {
-  return { id: (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2)+Date.now())), groupId: currentGroupId, callId, type, fromUserId:userId, fromName:name, toUserId, payload };
+  return { id: (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2)+Date.now())), groupId: currentGroupId, callId, type, fromUserId:userId, fromPeerId:callPeerId, fromDeviceId:callDeviceId, fromName:name, toUserId, toPeerId:payload?.__toPeerId || '', toDeviceId:payload?.__toDeviceId || '', payload };
 }
-async function sendCallEvent(type, callId, payload={}, toUserId='') {
+async function sendCallEvent(type, callId, payload={}, toUserId='', toPeerId='') {
   const body=callEventBody(type,callId,payload,toUserId);
+  body.toPeerId=toPeerId || '';
+  body.toDeviceId='';
   try {
     const r=await fetch('/api/calls/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});
     if(!r.ok) throw new Error('call event failed');
@@ -1596,11 +1601,7 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
   // Never change video visibility during an audio-only track update.
   if(hasVideo){
     const track=stream?.getVideoTracks?.()[0];
-    // IMPORTANT for Android/iOS: a remote MediaStreamTrack may report muted=true
-    // temporarily (or remain muted during startup) even though RTP video is about
-    // to arrive. Never hide a connected remote tile just because track.muted is true.
-    // Only an explicit camera-state OFF or an ended/disabled track should hide it.
-    const live=!!(track && track.readyState==='live' && track.enabled);
+    const live=!!(track && track.readyState==='live' && track.enabled && !track.muted);
     wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v) v.style.opacity=live?'1':'0';
   }
   return wrap;
@@ -1630,10 +1631,7 @@ function setParticipantCameraState(id, on){
   const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_'); const wrap=document.getElementById(`call-video-${safeId}`); if(!wrap)return;
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder'); const track=v?.srcObject?.getVideoTracks?.()[0];
   // A real live remote track is enough to show video unless an explicit OFF event arrived.
-  // Do not use MediaStreamTrack.muted as the camera ON/OFF signal. Mobile
-  // browsers frequently expose a remote video track as muted during startup.
-  // The signaling camera-state event is the authoritative ON/OFF state.
-  const live=!!(track && track.readyState==='live' && track.enabled && on!==false);
+  const live=!!(track && track.readyState==='live' && track.enabled && !track.muted && on!==false);
   wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v){v.style.opacity=live?'1':'0';if(live)v.play().catch(()=>{});}
 }
 function updateCallButtons(){
@@ -1652,7 +1650,7 @@ async function createPeer(remoteId, remoteName, initiator){
   const audioTrack=activeCall.stream?.getAudioTracks?.()[0]; if(audioTrack) pc.addTrack(audioTrack,activeCall.stream);
   const tr=pc.addTransceiver('video',{direction:'sendrecv'}); pc.__videoSender=tr.sender;
   const currentVideo=activeCall.stream?.getVideoTracks?.()[0]; if(currentVideo) await pc.__videoSender.replaceTrack(currentVideo);
-  pc.onicecandidate=e=>{if(e.candidate&&activeCall)sendCallEvent('ice',activeCall.id,{candidate:e.candidate},remoteId);};
+  pc.onicecandidate=e=>{if(e.candidate&&activeCall)sendCallEvent('ice',activeCall.id,{candidate:e.candidate},activeCall.participants.get(remoteId)?.userId || remoteId,remoteId);};
   pc.ontrack=e=>{
     if(!activeCall||activeCall.ended||!e.track)return;
     if(!activeCall.remoteStreams)activeCall.remoteStreams=new Map();
@@ -1689,7 +1687,7 @@ async function createPeer(remoteId, remoteName, initiator){
         if(pc.restartIce) pc.restartIce();
         const offer=await pc.createOffer({iceRestart:true});
         await pc.setLocalDescription(offer);
-        if(activeCall&&!activeCall.ended) await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+        if(activeCall&&!activeCall.ended) await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},activeCall.participants.get(remoteId)?.userId || remoteId,remoteId);
       }catch(err){ console.warn('ICE restart failed',remoteId,err); }
     }
   };
@@ -1705,7 +1703,7 @@ async function createPeer(remoteId, remoteName, initiator){
     if(pc.connectionState==='closed'){ clearTimeout(retryTimer); }
   };
   if(initiator){
-    try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);if(activeCall&&!activeCall.ended)await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);}catch(err){console.warn('initial offer failed',remoteId,err);}
+    try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);if(activeCall&&!activeCall.ended)await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},activeCall.participants.get(remoteId)?.userId || remoteId,remoteId);}catch(err){console.warn('initial offer failed',remoteId,err);}
   }
   return pc;
 }
@@ -1715,7 +1713,7 @@ async function handleCallEvent(e){
   if(e.id){ if(seenCallEventIds.has(e.id)) return; seenCallEventIds.add(e.id); if(seenCallEventIds.size>2000){ const first=seenCallEventIds.values().next().value; seenCallEventIds.delete(first); } }
   // Ignore old calls after the user has moved to another call.
   if(e.type==='invite'){
-    if(e.fromUserId===userId) return;
+    if((e.fromPeerId || e.fromUserId)===callPeerId) return;
     if(activeCall && activeCall.id===e.callId) return;
     if(activeCall) return;
     incomingCall=e;
@@ -1729,26 +1727,26 @@ async function handleCallEvent(e){
   }
   if(!activeCall || activeCall.id!==e.callId) return;
   if(e.type==='join'){
-    const rid=e.fromUserId; if(rid===userId)return;
-    activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+    const rid=e.fromPeerId || e.fromUserId; if(rid===callPeerId)return;
+    activeCall.participants.set(rid,{id:rid,userId:e.fromUserId,name:e.fromName||'Member'});
     callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     // Tell the newly joined user about THIS participant too. This creates a full
     // mesh so every connected user gets every other user's audio/video feed.
-    await sendCallEvent('peer',activeCall.id,{userId, userName:name},rid);
+    await sendCallEvent('peer',activeCall.id,{}, activeCall.participants.get(rid)?.userId || rid, rid);
     // Only one side creates the offer, preventing duplicate negotiations.
-    const initiator=String(userId)<String(rid);
+    const initiator=String(callPeerId)<String(rid);
     await createPeer(rid,e.fromName||'Member',initiator);
     document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
-  } else if(e.type==='peer' && e.toUserId===userId){
-    const rid=e.fromUserId; if(rid===userId)return;
+  } else if(e.type==='peer' && (!e.toUserId || e.toUserId===userId) && (!e.toPeerId || e.toPeerId===callPeerId)){
+    const rid=e.fromPeerId || e.fromUserId; if(rid===callPeerId)return;
     const remoteName=e.fromName || e.payload?.userName || 'Member';
-    activeCall.participants.set(rid,{id:rid,name:remoteName});
+    activeCall.participants.set(rid,{id:rid,userId:e.userId,name:remoteName});
     callStageAddParticipant(rid,remoteName,null,false,false);
-    const initiator=String(userId)<String(rid);
+    const initiator=String(callPeerId)<String(rid);
     await createPeer(rid,remoteName,initiator);
     document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
-  } else if(e.type==='offer' && e.toUserId===userId){
-    const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
+  } else if(e.type==='offer' && (!e.toUserId || e.toUserId===userId) && (!e.toPeerId || e.toPeerId===callPeerId)){
+    const rid=e.fromPeerId || e.fromUserId; activeCall.participants.set(rid,{id:rid,userId:e.fromUserId,name:e.fromName||'Member'});
     callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
     const pc=await createPeer(rid,e.fromName||'Member',false);
     const desc=new RTCSessionDescription(e.payload.description);
@@ -1759,9 +1757,9 @@ async function handleCallEvent(e){
     for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
     pendingIceCandidates.delete(rid);
     const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
-    await sendCallEvent('answer',activeCall.id,{description:pc.localDescription},rid);
-  } else if(e.type==='answer' && e.toUserId===userId){
-    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+    await sendCallEvent('answer',activeCall.id,{description:pc.localDescription},activeCall.participants.get(rid)?.userId || rid,rid);
+  } else if(e.type==='answer' && (!e.toUserId || e.toUserId===userId) && (!e.toPeerId || e.toPeerId===callPeerId)){
+    const rid=e.fromPeerId || e.fromUserId; const pc=peerConnections.get(rid);
     if(pc){
       if(pc.signalingState==='stable') return;
       await pc.setRemoteDescription(new RTCSessionDescription(e.payload.description)); pc.__remoteDescriptionSet=true;
@@ -1769,20 +1767,20 @@ async function handleCallEvent(e){
       for(const c of queued){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch(_){} }
       pendingIceCandidates.delete(rid);
     }
-  } else if(e.type==='ice' && e.toUserId===userId){
-    const rid=e.fromUserId; const pc=peerConnections.get(rid);
+  } else if(e.type==='ice' && (!e.toUserId || e.toUserId===userId) && (!e.toPeerId || e.toPeerId===callPeerId)){
+    const rid=e.fromPeerId || e.fromUserId; const pc=peerConnections.get(rid);
     if(e.payload?.candidate){
       if(pc?.remoteDescription){ try{await pc.addIceCandidate(new RTCIceCandidate(e.payload.candidate));}catch(_){} }
       else { if(!pendingIceCandidates.has(rid)) pendingIceCandidates.set(rid,[]); pendingIceCandidates.get(rid).push(e.payload.candidate); }
     }
   } else if(e.type==='camera-state' && (!e.toUserId || e.toUserId===userId)){
-    if(activeCall?.remoteCameraStates) activeCall.remoteCameraStates.set(e.fromUserId, !!e.payload?.on);
-    setParticipantCameraState(e.fromUserId, !!e.payload?.on);
+    if(activeCall?.remoteCameraStates) activeCall.remoteCameraStates.set(e.fromPeerId || e.fromUserId, !!e.payload?.on);
+    setParticipantCameraState(e.fromPeerId || e.fromUserId, !!e.payload?.on);
   } else if(e.type==='leave'){
-    const pc=peerConnections.get(e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromUserId);}
-    document.getElementById(`call-video-${String(e.fromUserId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
+    const pc=peerConnections.get(e.fromPeerId || e.fromUserId); if(pc){try{pc.close()}catch(_){} peerConnections.delete(e.fromPeerId || e.fromUserId);}
+    document.getElementById(`call-video-${String(e.fromPeerId || e.fromUserId).replace(/[^a-zA-Z0-9_-]/g,'_')}`)?.remove();
   } else if(e.type==='end'){
-    if(e.fromUserId!==userId) finishCall(false, `${e.fromName||'Member'} ended the call`);
+    if((e.fromPeerId || e.fromUserId)!==callPeerId) finishCall(false, `${e.fromName||'Member'} ended the call`);
   }
 }
 
@@ -1790,7 +1788,7 @@ async function startCallPresence(){
   if(callPresenceTimer) clearInterval(callPresenceTimer);
   const announce=()=>{
     if(!activeCall || activeCall.ended || !socket.connected) return;
-    socket.emit('call-presence',{groupId:currentGroupId,callId:activeCall.id,userId,name,callType:activeCall.type,cameraOn:!!activeCall.cameraOn});
+    socket.emit('call-presence',{groupId:currentGroupId,callId:activeCall.id,userId,peerId:callPeerId,deviceId:callDeviceId,name,callType:activeCall.type,cameraOn:!!activeCall.cameraOn});
   };
   announce();
   callPresenceTimer=setInterval(announce,2000);
@@ -1800,11 +1798,11 @@ function stopCallPresence(){ if(callPresenceTimer){clearInterval(callPresenceTim
 socket.on('call-presence', async e=>{
   try{
     if(!e || !activeCall || activeCall.ended || e.groupId!==currentGroupId || e.callId!==activeCall.id || e.userId===userId) return;
-    const rid=String(e.userId); const remoteName=e.name||'Member';
-    activeCall.participants.set(rid,{id:rid,name:remoteName});
+    const rid=String(e.peerId || e.userId); const remoteName=e.name||'Member';
+    activeCall.participants.set(rid,{id:rid,userId:e.userId,name:remoteName});
     callStageAddParticipant(rid,remoteName,null,false,false);
     if(e.cameraOn && activeCall.remoteCameraStates) activeCall.remoteCameraStates.set(rid,true);
-    await createPeer(rid,remoteName,String(userId)<String(rid));
+    await createPeer(rid,remoteName,String(callPeerId)<String(rid));
     document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
   }catch(err){console.warn('call presence',err)}
 });
@@ -1857,15 +1855,15 @@ async function acceptIncomingCall(){
       audio:true,
       video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}
     } : {audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:video,facingMode:'user'};
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromPeerId || inc.fromUserId,{id:inc.fromPeerId || inc.fromUserId,userId:inc.fromUserId,name:inc.fromName||'Member'}]]),remoteStreams:new Map(),remoteCameraStates:new Map(),ended:false,muted:false,cameraOn:video,facingMode:'user'};
     clearCallStage();
     if(video) callStageAddVideo(userId,activeCall.stream,name,true); else callStageAddParticipant(userId,name,null,true,false);
-    callStageAddParticipant(inc.fromUserId,inc.fromName||'Member',null,false,false);
+    callStageAddParticipant(inc.fromPeerId || inc.fromUserId,inc.fromName||'Member',null,false,false);
     if(video){ updateCallButtons(); } else { cameraCallBtn?.classList.add('hidden'); switchCameraCallBtn?.classList.add('hidden'); }
     showCallModal(video?'Video call':'Audio call','Connecting…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
-    await createPeer(inc.fromUserId,inc.fromName||'Member',String(userId)<String(inc.fromUserId));
+    await createPeer(inc.fromPeerId || inc.fromUserId,inc.fromName||'Member',String(callPeerId)<String(inc.fromPeerId || inc.fromUserId));
     startCallPresence();
   }catch(e){ showToast('Microphone permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
 }
