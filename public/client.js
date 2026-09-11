@@ -1596,7 +1596,11 @@ function callStageAddParticipant(id, label, stream=null, muted=false, hasVideo=f
   // Never change video visibility during an audio-only track update.
   if(hasVideo){
     const track=stream?.getVideoTracks?.()[0];
-    const live=!!(track && track.readyState==='live' && track.enabled && !track.muted);
+    // IMPORTANT for Android/iOS: a remote MediaStreamTrack may report muted=true
+    // temporarily (or remain muted during startup) even though RTP video is about
+    // to arrive. Never hide a connected remote tile just because track.muted is true.
+    // Only an explicit camera-state OFF or an ended/disabled track should hide it.
+    const live=!!(track && track.readyState==='live' && track.enabled);
     wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v) v.style.opacity=live?'1':'0';
   }
   return wrap;
@@ -1626,7 +1630,10 @@ function setParticipantCameraState(id, on){
   const safeId=String(id).replace(/[^a-zA-Z0-9_-]/g,'_'); const wrap=document.getElementById(`call-video-${safeId}`); if(!wrap)return;
   const v=wrap.querySelector('video'); const ph=wrap.querySelector('.call-placeholder'); const track=v?.srcObject?.getVideoTracks?.()[0];
   // A real live remote track is enough to show video unless an explicit OFF event arrived.
-  const live=!!(track && track.readyState==='live' && track.enabled && !track.muted && on!==false);
+  // Do not use MediaStreamTrack.muted as the camera ON/OFF signal. Mobile
+  // browsers frequently expose a remote video track as muted during startup.
+  // The signaling camera-state event is the authoritative ON/OFF state.
+  const live=!!(track && track.readyState==='live' && track.enabled && on!==false);
   wrap.classList.toggle('has-video',live); if(ph) ph.classList.toggle('hidden',live); if(v){v.style.opacity=live?'1':'0';if(live)v.play().catch(()=>{});}
 }
 function updateCallButtons(){
