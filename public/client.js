@@ -298,6 +298,17 @@ function showToast(text) {
 }
 
 function requestPassword(title, text, action, passwordType = 'admin') {
+  // The password prompt must always be the top-most UI. Close/hide every
+  // other popup first so the admin password cannot appear behind another modal.
+  if (passwordType === 'admin') {
+    document.querySelectorAll('.modal:not(#passwordModal), .admin-media-popup').forEach(el => {
+      el.classList.add('hidden');
+    });
+    try { appMenu?.classList.add('hidden'); } catch (_) {}
+    passwordModal.style.zIndex = '100000';
+  } else {
+    passwordModal.style.zIndex = '10000';
+  }
   pendingAction = action;
   pendingPasswordType = passwordType;
   passwordTitle.textContent = title;
