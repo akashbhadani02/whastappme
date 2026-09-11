@@ -32,6 +32,18 @@ const DEFAULT_GROUP_ID = 'main';
 // In-memory fallback keeps group/password management working even when MongoDB
 // is not configured. MongoDB is still used automatically when MONGODB_URI exists.
 const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
+// WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
+const activeCalls = new Map();
+function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
+function removeSocketFromCalls(socket) {
+  for (const [callId, call] of activeCalls) {
+    if (!call.participants.has(socket.id)) continue;
+    call.participants.delete(socket.id);
+    io.to(callRoom(call.groupId)).emit('call-peer-left', { callId, socketId: socket.id });
+    if (call.participants.size === 0) activeCalls.delete(callId);
+  }
+}
+
 
 function getVapidKeys() {
   // Prefer an explicit VAPID private key. If it is not configured, derive a stable
@@ -1154,7 +1166,10 @@ io.on('connection', async (socket) => {
 
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
+    const previousGroupId = socket.groupId;
+    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
     socket.groupId = groupId;
+    socket.join(`group:${groupId}`);
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1450,7 +1465,71 @@ io.on('connection', async (socket) => {
     }
   });
 
+
+  // ---- WebRTC group audio/video call signaling ----
+  socket.on('call-start', async (data, ack) => {
+    const groupId = normalizeGroupId(socket.groupId || data?.groupId);
+    const type = data?.type === 'audio' ? 'audio' : 'video';
+    const callId = String(data?.callId || crypto.randomUUID()).slice(0, 100);
+    const existing = [...activeCalls.values()].find(c => c.groupId === groupId);
+    if (existing) return typeof ack === 'function' && ack({ ok: false, error: 'A call is already active in this group.' });
+    const call = {
+      callId, groupId, type, participants: new Set([socket.id]),
+      startedBy: socket.id, startedByUserId: String(socket.userId || data?.userId || ''),
+      startedByName: String(data?.name || '').slice(0, 60), createdAt: Date.now()
+    };
+    activeCalls.set(callId, call);
+    socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
+    socket.to(`group:${groupId}`).emit('incoming-call', {
+      callId, groupId, type, fromSocketId: socket.id,
+      fromUserId: call.startedByUserId, fromName: call.startedByName
+    });
+    if (typeof ack === 'function') ack({ ok: true, callId, type });
+  });
+
+  socket.on('call-join', async (data, ack) => {
+    const callId = String(data?.callId || ''), call = activeCalls.get(callId);
+    if (!call || call.groupId !== normalizeGroupId(socket.groupId)) {
+      return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
+    }
+    socket.join(callRoom(call.groupId)); socket.callId = callId; socket.callType = call.type;
+    const peers = [...call.participants].filter(id => id !== socket.id);
+    call.participants.add(socket.id);
+    socket.to(callRoom(call.groupId)).emit('call-peer-joined', {
+      callId, socketId: socket.id, userId: String(socket.userId || data?.userId || ''),
+      name: String(data?.name || '').slice(0, 60)
+    });
+    if (typeof ack === 'function') ack({ ok: true, callId, type: call.type, peers });
+  });
+
+  socket.on('call-signal', (data) => {
+    const callId = String(data?.callId || ''), call = activeCalls.get(callId);
+    if (!call || !call.participants.has(socket.id)) return;
+    const to = String(data?.to || '');
+    if (!to || !call.participants.has(to)) return;
+    io.to(to).emit('call-signal', {
+      callId, from: socket.id, kind: String(data?.kind || ''), data: data?.data || null
+    });
+  });
+
+  socket.on('call-leave', (data) => {
+    const callId = String(data?.callId || socket.callId || ''), call = activeCalls.get(callId);
+    if (!call) return;
+    call.participants.delete(socket.id); socket.leave(callRoom(call.groupId)); socket.callId = '';
+    io.to(callRoom(call.groupId)).emit('call-peer-left', { callId, socketId: socket.id });
+    if (call.participants.size === 0) activeCalls.delete(callId);
+  });
+
+  socket.on('call-reject', (data) => {
+    const callId = String(data?.callId || ''), call = activeCalls.get(callId);
+    if (!call) return;
+    io.to(callRoom(call.groupId)).emit('call-rejected', {
+      callId, socketId: socket.id, name: String(data?.name || '').slice(0, 60)
+    });
+  });
+
   socket.on('disconnect', (reason) => {
+    removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
     console.log('User disconnected:', socket.id, reason);

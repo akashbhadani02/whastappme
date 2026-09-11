@@ -1499,3 +1499,44 @@ const micBtn=document.getElementById('micBtn'); micBtn?.addEventListener('click'
 // Allow selecting a locked group only after PIN.
 const oldOpenGroup=openGroup; openGroup=async function(group){const g=advState[group?.id||''];if(g?.locked){currentGroupId=group.id;groupName=group.name; if(!requireUnlock())return;} return oldOpenGroup(group);};
 updateAdvancedTools();
+
+/* ===== WebRTC group audio/video calling ===== */
+(() => {
+  const audioCallBtn=document.getElementById('audioCallBtn'), videoCallBtn=document.getElementById('videoCallBtn');
+  const callModal=document.getElementById('callModal'), callTitle=document.getElementById('callTitle'), callStatus=document.getElementById('callStatus');
+  const callStage=document.getElementById('callStage'), callEmpty=document.getElementById('callEmpty'), callAvatar=document.getElementById('callAvatar'), callEmptyText=document.getElementById('callEmptyText');
+  const localCallVideo=document.getElementById('localCallVideo'), callMuteBtn=document.getElementById('callMuteBtn'), callCameraBtn=document.getElementById('callCameraBtn'), callEndBtn=document.getElementById('callEndBtn'), callCloseBtn=document.getElementById('callCloseBtn');
+  const incomingCall=document.getElementById('incomingCall'), incomingCallName=document.getElementById('incomingCallName'), incomingCallType=document.getElementById('incomingCallType'), incomingCallIcon=document.getElementById('incomingCallIcon');
+  const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
+  let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=false,callStartedByMe=false;
+  const peers=new Map();
+  const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
+  const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
+  const isActive=()=>!!activeCallId;
+  function status(t){if(callStatus)callStatus.textContent=t}
+  function updateStatus(){const n=peers.size+1;status(`${n} participant${n===1?'':'s'} · ${activeCallType==='video'?'Video':'Audio'}`);if(callEmptyText)callEmptyText.textContent=peers.size?`${n} people in call`:'Waiting for participants…';if(callEmpty)callEmpty.style.display=peers.size?'none':'flex'}
+  function showModal(){callTitle.textContent=groupName||'Group call';callAvatar.textContent=(groupName||'W').trim().charAt(0).toUpperCase();callModal.classList.remove('hidden');callModal.classList.toggle('video-call',activeCallType==='video');callModal.classList.toggle('audio-call',activeCallType==='audio')}
+  function tile(id,nm,stream){let el=document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`);if(!el){el=document.createElement('div');el.className='call-tile';el.dataset.peer=id;const v=document.createElement('video');v.autoplay=true;v.playsInline=true;const lab=document.createElement('span');lab.className='tile-name';lab.textContent=safeText(nm||'Participant',60);el.append(v,lab);callStage.appendChild(el)}const v=el.querySelector('video');if(v&&stream)v.srcObject=stream}
+  function removePeer(id){const x=peers.get(id);if(x){try{x.pc.close()}catch(_){}}peers.delete(id);document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`)?.remove();updateStatus()}
+  function createPeer(id,nm,offer){let x=peers.get(id);if(x)return x.pc;const pc=new RTCPeerConnection(RTC_CONFIG);x={pc,name:safeText(nm||'Participant',60)};peers.set(id,x);if(localStream)localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+    pc.onicecandidate=e=>{if(e.candidate)socket.emit('call-signal',{callId:activeCallId,to:id,kind:'ice',data:e.candidate})};
+    pc.ontrack=e=>tile(id,x.name,e.streams?.[0]||new MediaStream([e.track]));
+    pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
+    if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
+    updateStatus();return pc}
+  async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
+  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;showModal();if(type==='video')localCallVideo.srcObject=localStream;updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  function incoming(d){if(isActive()||pendingIncoming)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${groupName||'group'}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);showModal();if(activeCallType==='video')localCallVideo.srcObject=localStream;socket.emit('call-join',{callId:activeCallId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
+  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id});[...peers.keys()].forEach(removePeer);if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';updateStatus()}
+  audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>callModal.classList.toggle('hidden'));incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
+  callMuteBtn?.addEventListener('click',()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);callMuteBtn.textContent=muted?'🔇':'🎙️'});
+  callCameraBtn?.addEventListener('click',()=>{if(!localStream||activeCallType!=='video')return;cameraOff=!cameraOff;localStream.getVideoTracks().forEach(t=>t.enabled=!cameraOff);callCameraBtn.textContent=cameraOff?'🚫':'📷'});
+  socket.on('incoming-call',d=>{if(d?.groupId===currentGroupId)incoming(d)});
+  socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name,true)});
+  socket.on('call-signal',async d=>{if(!isActive()||d?.callId!==activeCallId||!d.from)return;let x=peers.get(d.from);if(d.kind==='offer'){const pc=createPeer(d.from,'Participant',false);try{await pc.setRemoteDescription(new RTCSessionDescription(d.data));const a=await pc.createAnswer();await pc.setLocalDescription(a);socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription})}catch(_){showToast('Call connection failed')}}else if(d.kind==='answer'){if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data))}catch(_){}}else if(d.kind==='ice'){if(x)try{await x.pc.addIceCandidate(new RTCIceCandidate(d.data))}catch(_){} }});
+  socket.on('call-peer-left',d=>{if(d?.callId===activeCallId)removePeer(d.socketId)});socket.on('call-rejected',d=>{if(d?.callId===activeCallId&&d.socketId!==socket.id)showToast(`${d.name||'Someone'} declined the call`)});
+  socket.on('disconnect',()=>{if(isActive())end(false);incomingCall?.classList.add('hidden');pendingIncoming=null});
+  window.waGroupCall={start:start,end:()=>end(true),isActive};
+})();

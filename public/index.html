@@ -60,6 +60,8 @@
           <button class="icon-btn danger-icon" id="deleteSelectedBtn" title="Delete for everyone">✖</button>
         </div>
         <div class="header-actions" id="normalHeaderActions">
+          <button class="icon-btn" id="audioCallBtn" title="Audio call" aria-label="Audio call">📞</button>
+          <button class="icon-btn" id="videoCallBtn" title="Video call" aria-label="Video call">📹</button>
           <button class="icon-btn" id="chatSearchBtn" title="Search">⌕</button>
           
           <button class="icon-btn" id="clearChatBtn" title="More options">⋮</button>
@@ -170,7 +172,16 @@
   <div class="modal hidden" id="forwardModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="forwardClose">×</button><div class="lock-icon">↗️</div><h3>Forward message</h3><p>Select a group to forward this message.</p><div id="forwardGroups" class="admin-groups-list"></div></div></div>
   <div class="modal hidden" id="messageInfoModal" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" id="messageInfoClose">×</button><div class="lock-icon">ℹ️</div><h3>Message info</h3><div id="messageInfoBody" class="info-body"></div></div></div>
   <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button></div>
-  <div class="toast" id="toast"></div>
+  <div class="call-modal hidden" id="callModal" aria-label="Group call">
+  <div class="call-card">
+    <header class="call-header"><div><strong id="callTitle">Group call</strong><span id="callStatus">Connecting…</span></div><button class="call-close" id="callCloseBtn" title="Minimize">⌄</button></header>
+    <div class="call-stage audio-stage" id="callStage"><div class="call-empty" id="callEmpty"><div class="call-big-avatar" id="callAvatar">W</div><strong id="callEmptyText">Waiting for participants…</strong></div></div>
+    <div class="call-controls"><button class="call-control" id="callMuteBtn" title="Mute microphone">🎙️</button><button class="call-control video-control" id="callCameraBtn" title="Turn camera off">📷</button><button class="call-control end-call" id="callEndBtn" title="End call">📵</button></div>
+    <video id="localCallVideo" class="local-call-video" autoplay playsinline muted></video>
+  </div>
+</div>
+<div class="incoming-call hidden" id="incomingCall"><div class="incoming-call-icon" id="incomingCallIcon">📹</div><div class="incoming-call-info"><strong id="incomingCallName">Incoming call</strong><span id="incomingCallType">Group video call</span></div><button class="incoming-answer" id="incomingAnswerBtn">Answer</button><button class="incoming-reject" id="incomingRejectBtn">Decline</button></div>
+<div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
 </body>
