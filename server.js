@@ -359,7 +359,7 @@ app.delete('/api/groups/:id', async (req, res) => {
       if (db) {
         await db.collection(RECYCLE_BIN_COLLECTION_NAME).updateMany(
           { groupId },
-          { $set: { groupId: DEFAULT_GROUP_ID, deletedGroupId: groupId, deletedGroupName: groupDoc?.name || groupId, movedToMainRecycleAt: new Date() } }
+          { $set: { groupId: DEFAULT_GROUP_ID, deletedGroupId: groupId, deletedGroupName: groupDoc?.name || groupId, movedToMainRecycleAt: new Date(), recycleStage: 'main' } }
         );
       }
     } catch (_) {}
@@ -458,6 +458,9 @@ async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
       deletedGroupName: String(item.groupName || item.deletedGroupName || originalGroupId),
       deletedAt: new Date(),
       deleteReason: reason,
+      // Normal message/clear-chat deletions first live in the group's recycle bin.
+      // Group deletion itself goes directly to the main admin recycle bin.
+      recycleStage: reason === 'group-delete' ? 'main' : 'group',
       message: { ...message, groupId: originalGroupId, senderId: String(item.senderId || item.userId || ''), senderName: String(item.user || item.senderName || '') },
     });
   }
@@ -481,9 +484,12 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     const db = await getDb();
     if (!db) return res.json({ ok:true, items:[], persistent:false });
     const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    // A normal deletion starts in the group's recycle bin. Once the admin
+    // moves it to Main Recycle, recycleStage becomes 'main'. Legacy records
+    // without a stage are treated as main so they are not lost.
     const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
-      ? { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }
-      : {};
+      ? { $and: [ { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }, { $or: [{ recycleStage: 'group' }, { recycleStage: { $exists:false } }] } ] }
+      : { $or: [{ recycleStage: 'main' }, { recycleStage: { $exists:false }, groupId: DEFAULT_GROUP_ID }] };
 
     // Read the dedicated recycle collection first.
     const recycleDocs = await db.collection(RECYCLE_BIN_COLLECTION_NAME)
@@ -525,6 +531,59 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
   } catch (error) {
     console.error('Admin recycle-bin list failed:', error.message);
     res.status(500).json({ ok:false, error:'Recycle bin unavailable' });
+  }
+});
+
+app.post('/api/admin/recycle-bin/move-to-main', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const collection = db.collection(COLLECTION_NAME);
+    const rawId = String(req.body?.id || '');
+    let item = null;
+    let recycleId = null;
+    if (ObjectId.isValid(rawId)) { recycleId = new ObjectId(rawId); item = await recycle.findOne({ _id:recycleId }); }
+    if (!item && rawId.startsWith('message:')) {
+      const messageId = rawId.slice(8);
+      item = await collection.findOne({ id:messageId, deletedAt:{ $exists:true } });
+    }
+    if (!item) return res.status(404).json({ ok:false, error:'Recycle item not found' });
+
+    const msg = { ...(item.message || item) };
+    const originalMessageId = String(item.originalMessageId || msg.id || rawId.slice(8) || '').trim();
+    const originalGroupId = normalizeGroupId(item.deletedGroupId || msg.groupId || DEFAULT_GROUP_ID);
+    if (!originalMessageId) return res.status(400).json({ ok:false, error:'Invalid message' });
+
+    if (recycleId) {
+      await recycle.updateOne({ _id: recycleId }, { $set: {
+        groupId: DEFAULT_GROUP_ID,
+        deletedGroupId: originalGroupId,
+        deletedGroupName: String(item.deletedGroupName || msg.groupName || originalGroupId),
+        recycleStage: 'main',
+        movedToMainRecycleAt: new Date()
+      }});
+    } else {
+      // If this was only a soft-deleted legacy message, create a real recycle
+      // record now so Main Recycle Bin owns it from this point onward.
+      delete msg._id;
+      await recycle.insertOne({
+        originalMessageId,
+        groupId: DEFAULT_GROUP_ID,
+        deletedGroupId: originalGroupId,
+        deletedGroupName: String(msg.groupName || originalGroupId),
+        deletedAt: item.deletedAt || msg.deletedAt || new Date(),
+        deleteReason: item.deleteReason || msg.deleteReason || 'delete',
+        recycleStage: 'main',
+        movedToMainRecycleAt: new Date(),
+        message: msg
+      });
+    }
+    res.json({ ok:true });
+  } catch (error) {
+    console.error('Move recycle item to main failed:', error.message);
+    res.status(500).json({ ok:false, error:'Move to main failed' });
   }
 });
 
@@ -865,6 +924,24 @@ app.post('/api/media/end', async (req, res) => {
   } catch (error) {
     console.error('REST media end failed:', error.message);
     res.status(500).json({ ok:false, error:'Upload could not be finalized' });
+  }
+});
+
+app.get('/api/messages/deleted', async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.query?.groupId);
+    const collection = await getCollection();
+    if (!collection) return res.json({ ok:true, ids:[] });
+    const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists:false } }] : [])] };
+    const docs = await collection.find(
+      { $and: [groupFilter, { deletedAt:{ $exists:true } }] },
+      { projection:{ _id:0, id:1 } }
+    ).toArray();
+    res.setHeader('Cache-Control','no-store');
+    res.json({ ok:true, ids:docs.map(x=>String(x.id)).filter(Boolean) });
+  } catch (error) {
+    console.error('Failed to load deleted message ids:', error.message);
+    res.status(500).json({ ok:false, ids:[] });
   }
 });
 

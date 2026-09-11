@@ -47,3 +47,6 @@ After saving variables, redeploy the project.
 - The sender is excluded by the exact registered `userId` on the push subscription.
 - Other subscribed users receive one push per message.
 - If the recipient already has the chat open and visible, the service worker suppresses the notification.
+
+## Recycle-bin flow
+Normal message/image/video/audio/document deletions are first kept in the group's Recycle Bin. From a group's Recycle Bin, an admin can use **Move to Main Recycle**. Once moved, the item appears in **Main Recycle Bin**. Only the Main Recycle Bin's **Delete permanently** action removes the recycle record, the soft-deleted message, and its stored media permanently. Group deletion archives its remaining messages directly to Main Recycle Bin.

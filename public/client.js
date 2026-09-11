@@ -831,6 +831,25 @@ async function syncMessages() {
     // from one sync response. A temporary Mongo/network/serverless failure can
     // return an incomplete/empty history. Messages disappear only after the
     // explicit delete-message / clear-chat action.
+    // Cross-device deletion reconciliation: even when Socket.IO/WebSocket is
+    // unavailable (for example on different Vercel instances), every device in
+    // the same group learns which messages were deleted and removes them locally.
+    try {
+      const deletedResponse = await fetch(`/api/messages/deleted?groupId=${encodeURIComponent(currentGroupId)}`, { cache:'no-store' });
+      if (deletedResponse.ok) {
+        const deletedData = await deletedResponse.json();
+        const deletedSet = new Set(Array.isArray(deletedData.ids) ? deletedData.ids.map(String) : []);
+        deletedSet.forEach(id => {
+          if (!messages.has(id)) return;
+          const el = document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
+          if (el) el.remove();
+          messages.delete(id);
+          deletedIds.add(id);
+          selectedMessageIds.delete(id);
+        });
+      }
+    } catch (_) {}
+
     data.messages.forEach(msg => {
       if (!msg || !msg.id) return;
       const existing = messages.get(msg.id);
@@ -1185,7 +1204,8 @@ async function loadAdminRecycle() {
       const content = m.message || m.fileName || (m.type === 'image' ? 'Photo' : m.type === 'video' ? 'Video' : m.type === 'audio' ? 'Audio' : m.type === 'document' ? 'Document' : 'Deleted message');
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
       const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
-      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
+      const isMainRecycle = adminRecycleGroupId === 'main';
+      row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">♻️ Move to Main Recycle</button>'}</div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
       row.querySelector('.recycle-sender').textContent=`Sent by: ${sender}`;
@@ -1214,13 +1234,23 @@ async function loadAdminRecycle() {
           showToast('Item restored'); loadAdminRecycle();
         } catch(e){ adminRecycleError.textContent=e.message||'Restore failed'; }
       };
-      row.querySelector('.recycle-delete-btn').onclick=async()=>{
+      const permanentDeleteBtn = row.querySelector('.recycle-delete-btn');
+      if (permanentDeleteBtn) permanentDeleteBtn.onclick=async()=>{
         if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return;
         try {
           const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
           const d=await r.json(); if(!d.ok) throw new Error(d.error||'Delete failed');
           showToast('Permanently deleted'); loadAdminRecycle();
         } catch(e){ adminRecycleError.textContent=e.message||'Delete failed'; }
+      };
+      const moveBtn = row.querySelector('.recycle-main-move-btn');
+      if (moveBtn) moveBtn.onclick=async()=>{
+        if(!confirm('Move this deleted item to Main Recycle Bin?')) return;
+        try {
+          const r=await fetch('/api/admin/recycle-bin/move-to-main',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const d=await r.json(); if(!d.ok) throw new Error(d.error||'Move failed');
+          showToast('Moved to Main Recycle Bin'); loadAdminRecycle();
+        } catch(e){ adminRecycleError.textContent=e.message||'Move failed'; }
       };
       adminRecycleList.appendChild(row);
     });
