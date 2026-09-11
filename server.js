@@ -424,12 +424,18 @@ async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
   const docs = items.map(item => {
     const message = { ...item };
     delete message._id;
+    const originalGroupId = normalizeGroupId(item.groupId || groupId);
     return {
       originalMessageId: String(item.id),
-      groupId: normalizeGroupId(item.groupId || groupId),
+      // Main Recycle Bin is represented by the main group id. Keep the original
+      // group separately so every deleted item can still be traced back to its
+      // chat/group and can be restored correctly.
+      groupId: DEFAULT_GROUP_ID,
+      deletedGroupId: originalGroupId,
+      deletedGroupName: String(item.groupName || item.deletedGroupName || originalGroupId),
       deletedAt: new Date(),
       deleteReason: reason,
-      message,
+      message: { ...message, groupId: originalGroupId },
     };
   });
   // Keep one recycle record per message id. A deleted message should never be
@@ -452,7 +458,7 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     // groupId=main is the ADMIN MAIN recycle bin: it intentionally shows
     // deleted items from every group, including the default group.
     const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID ? { groupId: requestedGroupId } : {};
-    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(1000).toArray();
+    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(10000).toArray();
     res.json({ ok:true, persistent:true, items: items.map(x => ({
       id:String(x._id), originalMessageId:String(x.originalMessageId), groupId:String(x.groupId),
       deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete',
@@ -480,7 +486,7 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     const exists = await collection.findOne({ id:String(item.originalMessageId) });
     if (exists) return res.status(409).json({ ok:false, error:'Message already exists' });
     msg.id = String(item.originalMessageId);
-    msg.groupId = normalizeGroupId(item.groupId);
+    msg.groupId = normalizeGroupId(item.deletedGroupId || item.message?.groupId || item.groupId);
     await collection.insertOne(msg);
     await recycle.deleteOne({ _id:item._id });
     const event = { message: msg, groupId: msg.groupId };

@@ -1173,6 +1173,9 @@ async function loadAdminRecycle() {
     if (!data.ok) throw new Error(data.error || 'Load failed');
     const items = Array.isArray(data.items) ? data.items : [];
     adminRecycleList.innerHTML = '';
+    if (adminRecycleGroupId === 'main') {
+      adminRecycleTitle.textContent = `♻️ Main Recycle Bin (${items.length})`;
+    }
     if (!items.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">Recycle bin is empty.</div>'; return; }
     items.forEach(item => {
       const m = item.message || {};
@@ -1180,7 +1183,7 @@ async function loadAdminRecycle() {
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
       const name = m.fileName || m.message || 'Deleted message';
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : '';
+      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
       row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
