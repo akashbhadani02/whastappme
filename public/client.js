@@ -1536,7 +1536,20 @@ updateAdvancedTools();
   socket.on('incoming-call',d=>incoming(d));
   socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name,true)});
   socket.on('call-signal',async d=>{if(!isActive()||d?.callId!==activeCallId||!d.from)return;let x=peers.get(d.from);if(d.kind==='offer'){const pc=createPeer(d.from,'Participant',false);try{await pc.setRemoteDescription(new RTCSessionDescription(d.data));const a=await pc.createAnswer();await pc.setLocalDescription(a);socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription})}catch(_){showToast('Call connection failed')}}else if(d.kind==='answer'){if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data))}catch(_){}}else if(d.kind==='ice'){if(x)try{await x.pc.addIceCandidate(new RTCIceCandidate(d.data))}catch(_){} }});
-  socket.on('call-peer-left',d=>{if(d?.callId===activeCallId)removePeer(d.socketId)});socket.on('call-rejected',d=>{if(d?.callId===activeCallId&&d.socketId!==socket.id)showToast(`${d.name||'Someone'} declined the call`)});
+  socket.on('call-peer-left',d=>{if(d?.callId===activeCallId)removePeer(d.socketId)});
+  socket.on('call-rejected',d=>{if(d?.callId===activeCallId&&d.socketId!==socket.id)showToast(`${d.name||'Someone'} declined the call`)});
+  socket.on('call-ended',d=>{
+    if(!d?.callId)return;
+    if(d.callId===activeCallId){
+      showToast(d.reason==='declined'?`${d.name||'Someone'} declined the call`:'Call ended');
+      end(false);
+    }
+    if(pendingIncoming?.callId===d.callId){
+      incomingCall.classList.add('hidden');
+      pendingIncoming=null;
+      showToast(d.reason==='declined'?`${d.name||'Someone'} declined the call`:'Call ended');
+    }
+  });
   socket.on('disconnect',()=>{if(isActive())end(false);incomingCall?.classList.add('hidden');pendingIncoming=null});
   window.waGroupCall={start:start,end:()=>end(true),isActive};
 })();

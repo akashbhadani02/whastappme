@@ -1523,9 +1523,19 @@ io.on('connection', async (socket) => {
   socket.on('call-reject', (data) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
     if (!call) return;
-    io.to(callRoom(call.groupId)).emit('call-rejected', {
-      callId, socketId: socket.id, name: String(data?.name || '').slice(0, 60)
+    const name = String(data?.name || '').slice(0, 60);
+    // If ANY group member declines, terminate the whole group call for everyone.
+    io.to(callRoom(call.groupId)).emit('call-ended', {
+      callId, reason: 'declined', declinedBy: socket.id, name
     });
+    for (const participantId of call.participants) {
+      const participantSocket = io.sockets.sockets.get(participantId);
+      if (participantSocket) {
+        participantSocket.callId = '';
+        participantSocket.callType = '';
+      }
+    }
+    activeCalls.delete(callId);
   });
 
   socket.on('disconnect', (reason) => {
