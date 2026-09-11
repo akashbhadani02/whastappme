@@ -1493,14 +1493,14 @@ io.on('connection', async (socket) => {
     if (!data || !data.callId || !data.type || !socket.groupId) return;
     if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
     if (data.fromPeerId) socket.callPeerId = String(data.fromPeerId).slice(0,240);
-    const target = data.toUserId ? String(data.toUserId) : '';
+    // Broadcast signaling events to every socket in the same group. The client
+    // performs the final toPeerId/toUserId filtering. This avoids dropping SDP/ICE
+    // when a mobile socket reconnects before its device-level peerId registration
+    // reaches the server, which is a common cause of one-way mobile video.
     const payload = { ...data, groupId: normalizeGroupId(socket.groupId), fromUserId: socket.userId || String(data.fromUserId || '') };
     for (const peer of io.sockets.sockets.values()) {
       if (peer.id === socket.id) continue;
       if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
-      const targetPeer = data.toPeerId ? String(data.toPeerId) : '';
-      if (target && String(peer.userId || '') !== target) continue;
-      if (targetPeer && String(peer.callPeerId || '') !== targetPeer) continue;
       peer.emit('call-event', payload);
     }
   });
