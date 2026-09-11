@@ -364,11 +364,21 @@ app.delete('/api/groups/:id', async (req, res) => {
       }
     } catch (_) {}
 
-    // Remove the group's live messages as well so a deleted group is fully removed.
+    // Move the group's live messages to the MAIN ADMIN recycle bin before removing them.
+    // This applies to text, images, videos, audio and documents because the complete
+    // message record (including mediaId/mime/fileName) is retained in recycle_bin.
     try {
       const messagesCollection = await getCollection();
-      if (messagesCollection) await messagesCollection.deleteMany({ groupId });
-    } catch (_) {}
+      if (messagesCollection) {
+        const liveMessages = await messagesCollection.find({ groupId }).toArray();
+        if (liveMessages.length) {
+          await moveMessagesToRecycleBin(liveMessages, groupId, 'group-delete');
+        }
+        await messagesCollection.deleteMany({ groupId });
+      }
+    } catch (error) {
+      console.error('Failed to archive group messages before group delete:', error.message);
+    }
     const event = { id: groupId };
     io.emit('group-deleted', event);
     await publishRealtimeEvent('group-deleted', event);
@@ -411,18 +421,52 @@ async function moveMessagesToRecycleBin(items, groupId, reason = 'delete') {
   const db = await getDb();
   if (!db || !Array.isArray(items) || !items.length) return;
   const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
-  const docs = items.map(item => ({
-    originalMessageId: String(item.id),
-    groupId: normalizeGroupId(item.groupId || groupId),
-    deletedAt: new Date(),
-    deleteReason: reason,
-    message: { ...item, _id: undefined },
-  }));
-  // Keep one recycle record per message id. A deleted message should never be
-  // duplicated if a retry reaches the server twice.
-  try { await recycle.createIndex({ originalMessageId: 1 }, { unique: true }); } catch (_) {}
-  for (const doc of docs) {
-    try { await recycle.updateOne({ originalMessageId: doc.originalMessageId }, { $set: doc }, { upsert: true }); } catch (_) {}
+
+  // Older builds created a unique index on originalMessageId alone. That is
+  // unsafe because message ids are only meaningful inside a group and can be
+  // reused/collide across groups. Remove that legacy index and use the pair
+  // (deletedGroupId, originalMessageId) instead.
+  try {
+    const indexes = await recycle.listIndexes().toArray();
+    for (const idx of indexes) {
+      const keys = idx.key || {};
+      if (idx.unique && Object.keys(keys).length === 1 && keys.originalMessageId === 1) {
+        await recycle.dropIndex(idx.name);
+      }
+    }
+  } catch (_) {}
+  try {
+    await recycle.createIndex({ deletedGroupId: 1, originalMessageId: 1 }, { unique: true, name: 'recycle_group_message_unique' });
+  } catch (_) {}
+
+  for (const item of items) {
+    const message = { ...item };
+    delete message._id;
+    const originalGroupId = normalizeGroupId(item.groupId || groupId);
+    const originalMessageId = String(item.id || '').trim();
+    if (!originalMessageId) continue;
+    const doc = {
+      originalMessageId,
+      // Main Recycle Bin is represented by the main group id. The original
+      // group is retained separately so the item can be filtered/restored.
+      groupId: DEFAULT_GROUP_ID,
+      deletedGroupId: originalGroupId,
+      deletedGroupName: String(item.groupName || item.deletedGroupName || originalGroupId),
+      deletedAt: new Date(),
+      deleteReason: reason,
+      message: { ...message, groupId: originalGroupId },
+    };
+    try {
+      await recycle.updateOne(
+        { deletedGroupId: originalGroupId, originalMessageId },
+        { $set: doc },
+        { upsert: true }
+      );
+    } catch (error) {
+      // Do not allow one bad/duplicate item to prevent the rest of a clear or
+      // multi-delete operation from reaching the recycle bin.
+      console.error('Failed to archive recycle item:', error.message);
+    }
   }
 }
 
@@ -434,9 +478,16 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const db = await getDb();
     if (!db) return res.json({ ok:true, items:[], persistent:false });
-    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
-    const filter = groupId ? { groupId } : {};
-    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1 }).limit(1000).toArray();
+    const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    // groupId=main is the ADMIN MAIN recycle bin: it intentionally shows
+    // deleted items from every group, including the default group.
+    const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
+      ? { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }
+      : {};
+    // Main Recycle Bin intentionally returns every archived item. Do not apply
+    // an arbitrary page/limit here; the UI should show everything currently
+    // stored in recycle_bin.
+    const items = await db.collection(RECYCLE_BIN_COLLECTION_NAME).find(filter).sort({ deletedAt:-1, _id:-1 }).toArray();
     res.json({ ok:true, persistent:true, items: items.map(x => ({
       id:String(x._id), originalMessageId:String(x.originalMessageId), groupId:String(x.groupId),
       deletedAt:x.deletedAt, deleteReason:x.deleteReason || 'delete',
@@ -464,7 +515,7 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     const exists = await collection.findOne({ id:String(item.originalMessageId) });
     if (exists) return res.status(409).json({ ok:false, error:'Message already exists' });
     msg.id = String(item.originalMessageId);
-    msg.groupId = normalizeGroupId(item.groupId);
+    msg.groupId = normalizeGroupId(item.deletedGroupId || item.message?.groupId || item.groupId);
     await collection.insertOne(msg);
     await recycle.deleteOne({ _id:item._id });
     const event = { message: msg, groupId: msg.groupId };
@@ -529,8 +580,10 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
     const db = await getDb();
     if (!db) return res.json({ ok:true, count:0, persistent:false });
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
-    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
-    const filter = groupId ? { groupId } : {};
+    const requestedGroupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
+      ? { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }
+      : {};
     const items = await recycle.find(filter, { projection:{ 'message.mediaId':1 } }).toArray();
     const bucket = await getMediaBucket();
     for (const item of items) {

@@ -1168,11 +1168,14 @@ async function loadAdminRecycle() {
   adminRecycleError.textContent = '';
   adminRecycleList.innerHTML = '<div class="recycle-empty">Loading recycle bin…</div>';
   try {
-    const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password:PASSWORD, groupId:adminRecycleGroupId }) });
+    const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(adminRecycleGroupId === 'main' ? { password:PASSWORD } : { password:PASSWORD, groupId:adminRecycleGroupId }) });
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     const items = Array.isArray(data.items) ? data.items : [];
     adminRecycleList.innerHTML = '';
+    if (adminRecycleGroupId === 'main') {
+      adminRecycleTitle.textContent = `♻️ Main Recycle Bin (${items.length})`;
+    }
     if (!items.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">Recycle bin is empty.</div>'; return; }
     items.forEach(item => {
       const m = item.message || {};
@@ -1180,7 +1183,7 @@ async function loadAdminRecycle() {
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
       const name = m.fileName || m.message || 'Deleted message';
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : '';
+      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
       row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button><button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button></div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
       row.querySelector('.recycle-kind').textContent=kind;
@@ -1238,7 +1241,7 @@ adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{
   if(!confirm(`Empty recycle bin for "${adminRecycleGroupName}"? This permanently deletes all stored media.`)) return;
   try {
-    const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,groupId:adminRecycleGroupId})});
+    const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(adminRecycleGroupId === 'main' ? {password:PASSWORD} : {password:PASSWORD,groupId:adminRecycleGroupId})});
     const d=await r.json(); if(!d.ok) throw new Error(d.error||'Empty failed');
     showToast(`${d.count||0} items permanently deleted`); loadAdminRecycle();
   } catch(e){ adminRecycleError.textContent=e.message||'Empty failed'; }
@@ -1441,7 +1444,7 @@ const advState = JSON.parse(localStorage.getItem('wa_adv_state') || '{}');
 function saveAdv(){ localStorage.setItem('wa_adv_state', JSON.stringify(advState)); }
 function groupAdv(){ advState[currentGroupId] ||= {archived:false,muted:false,unread:false,locked:false}; return advState[currentGroupId]; }
 const messageInfoModal=document.querySelector('#messageInfoModal'), messageInfoBody=document.querySelector('#messageInfoBody'), messageInfoClose=document.querySelector('#messageInfoClose');
-const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn'), cameraCallBtn=document.querySelector('#cameraCallBtn'), switchCameraCallBtn=document.querySelector('#switchCameraCallBtn');
+const callModal=document.querySelector('#callModal'), callClose=document.querySelector('#callClose'), endCallBtn=document.querySelector('#endCallBtn'), muteCallBtn=document.querySelector('#muteCallBtn'), speakerCallBtn=document.querySelector('#speakerCallBtn'), cameraCallBtn=document.querySelector('#cameraCallBtn');
 const chatTools=document.querySelector('#chatTools');
 function showMessageInfo(msg){ if(!messageInfoModal) return; const delivered=Array.isArray(msg.deliveredTo)?msg.deliveredTo.length:0, read=Array.isArray(msg.readBy)?msg.readBy.length:0; messageInfoBody.innerHTML=''; [['Message',msg.message||msg.fileName||msg.type||'Media'],['Sent',msg.time||''],['Delivered',String(delivered)],['Read',String(read)],['Edited',msg.edited?'Yes':'No'],['Forwarded',msg.forwarded?'Yes':'No']].forEach(([a,b])=>{const row=document.createElement('div');row.className='info-row';row.innerHTML='<b></b><span></span>';row.children[0].textContent=a;row.children[1].textContent=b;messageInfoBody.appendChild(row)}); messageInfoModal.classList.remove('hidden');}
 messageInfoClose?.addEventListener('click',()=>messageInfoModal.classList.add('hidden')); messageInfoModal?.addEventListener('click',e=>{if(e.target===messageInfoModal)messageInfoModal.classList.add('hidden')});
@@ -1591,16 +1594,9 @@ async function startCall(video=false){
     // the user explicitly turns it on with the camera button.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const callId=crypto.randomUUID?crypto.randomUUID():(Math.random().toString(36).slice(2)+Date.now());
-    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false,cameraFacingMode:'user'};
+    activeCall={id:callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}]]),ended:false,muted:false,cameraOn:false};
     clearCallStage();
-    if(video){
-      cameraCallBtn?.classList.remove('hidden');
-      switchCameraCallBtn?.classList.add('hidden');
-      cameraCallBtn.textContent='📷 Camera Off';
-    } else {
-      cameraCallBtn?.classList.add('hidden');
-      switchCameraCallBtn?.classList.add('hidden');
-    }
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('invite',callId,{callType:activeCall.type});
@@ -1614,16 +1610,9 @@ async function acceptIncomingCall(){
     const video=inc.payload?.callType==='video';
     // Even an incoming video call starts with camera OFF. Only microphone is requested.
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false,cameraFacingMode:'user'};
+    activeCall={id:inc.callId,type:video?'video':'audio',stream,participants:new Map([[userId,{id:userId,name}],[inc.fromUserId,{id:inc.fromUserId,name:inc.fromName||'Member'}]]),ended:false,muted:false,cameraOn:false};
     clearCallStage();
-    if(video){
-      cameraCallBtn?.classList.remove('hidden');
-      switchCameraCallBtn?.classList.add('hidden');
-      cameraCallBtn.textContent='📷 Camera Off';
-    } else {
-      cameraCallBtn?.classList.add('hidden');
-      switchCameraCallBtn?.classList.add('hidden');
-    }
+    if(video){ cameraCallBtn?.classList.remove('hidden'); cameraCallBtn.textContent='📷 Camera Off'; } else cameraCallBtn?.classList.add('hidden');
     showCallModal(video?'Video call':'Audio call','Connecting…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
@@ -1639,10 +1628,7 @@ async function finishCall(notify=true,message='Call ended'){
     call.ended=true; call.stream?.getTracks().forEach(t=>t.stop());
   }
   peerConnections.forEach(pc=>{try{pc.close()}catch(_){}}); peerConnections.clear();
-  activeCall=null; incomingCall=null; clearCallStage();
-  if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera Off';}
-  if(switchCameraCallBtn) switchCameraCallBtn.classList.add('hidden');
-  closeCallModal();
+  activeCall=null; incomingCall=null; clearCallStage(); if(cameraCallBtn){cameraCallBtn.classList.add('hidden');cameraCallBtn.textContent='📷 Camera Off';} closeCallModal();
   if(message) showToast(message);
 }
 
@@ -1655,19 +1641,13 @@ async function toggleCallCamera(){
   if(!activeCall || activeCall.type!=='video') return;
   try{
     if(!activeCall.cameraOn){
-      const mode=activeCall.cameraFacingMode||'user';
-      let camStream;
-      try{ camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:mode}}}); }
-      catch(_){ camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:mode}}); }
+      const camStream=await navigator.mediaDevices.getUserMedia({video:true});
       const camTrack=camStream.getVideoTracks()[0];
       activeCall.stream.addTrack(camTrack);
       activeCall.cameraOn=true;
       callStageAddVideo('local',activeCall.stream,'You',true);
       if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera On';
-      if(switchCameraCallBtn){
-        switchCameraCallBtn.classList.remove('hidden');
-        switchCameraCallBtn.textContent=mode==='user'?'🔄 Rear Camera':'🔄 Front Camera';
-      }
+      // Add the new video track to every active peer and renegotiate.
       for(const [rid,pc] of peerConnections){
         const sender=pc.getSenders().find(s=>s.track?.kind==='video');
         if(sender) await sender.replaceTrack(camTrack);
@@ -1681,7 +1661,6 @@ async function toggleCallCamera(){
       activeCall.cameraOn=false;
       document.getElementById('call-video-local')?.remove();
       if(cameraCallBtn) cameraCallBtn.textContent='📷 Camera Off';
-      if(switchCameraCallBtn) switchCameraCallBtn.classList.add('hidden');
       for(const [rid,pc] of peerConnections){
         const sender=pc.getSenders().find(s=>s.track?.kind==='video');
         if(sender) await sender.replaceTrack(null);
@@ -1692,42 +1671,7 @@ async function toggleCallCamera(){
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Could not change camera state'); }
 }
 
-async function switchCallCamera(){
-  if(!activeCall || activeCall.type!=='video' || !activeCall.cameraOn) return;
-  const oldTrack=activeCall.stream.getVideoTracks()[0];
-  const target=(activeCall.cameraFacingMode||'user')==='user'?'environment':'user';
-  try{
-    let camStream;
-    try{ camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:target}}}); }
-    catch(_){ camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:target}}); }
-    const newTrack=camStream.getVideoTracks()[0];
-    if(!newTrack) throw new Error('No camera track');
-    activeCall.stream.addTrack(newTrack);
-    activeCall.cameraFacingMode=target;
-
-    for(const [rid,pc] of peerConnections){
-      const sender=pc.getSenders().find(s=>s.track?.kind==='video');
-      if(sender) await sender.replaceTrack(newTrack);
-      else pc.addTrack(newTrack,activeCall.stream);
-      const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
-      await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},rid);
-    }
-
-    if(oldTrack && oldTrack!==newTrack){
-      oldTrack.stop();
-      activeCall.stream.removeTrack(oldTrack);
-    }
-    const localVideo=document.getElementById('call-video-local');
-    if(localVideo){ localVideo.srcObject=activeCall.stream; localVideo.play?.().catch(()=>{}); }
-    if(switchCameraCallBtn)
-      switchCameraCallBtn.textContent=target==='user'?'🔄 Rear Camera':'🔄 Front Camera';
-    showToast(target==='user'?'Front camera':'Rear camera');
-  }catch(e){
-    showToast(e?.name==='NotAllowedError'?'Camera permission denied':'Camera switch not supported on this device');
-  }
-}
-
-cameraCallBtn?.addEventListener('click',toggleCallCamera); switchCameraCallBtn?.addEventListener('click',switchCallCamera);
+cameraCallBtn?.addEventListener('click',toggleCallCamera);
 document.getElementById('callBtn')?.addEventListener('click',()=>startCall(false));
 document.getElementById('videoCallBtn')?.addEventListener('click',()=>startCall(true));
 
