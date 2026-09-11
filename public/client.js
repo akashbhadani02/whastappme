@@ -1601,9 +1601,20 @@ async function handleCallEvent(e){
     const rid=e.fromUserId; if(rid===userId)return;
     activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
     callStageAddParticipant(rid,e.fromName||'Member',null,false,false);
+    // Tell the newly joined user about THIS participant too. This creates a full
+    // mesh so every connected user gets every other user's audio/video feed.
+    await sendCallEvent('peer',activeCall.id,{userId, userName:name},rid);
     // Only one side creates the offer, preventing duplicate negotiations.
     const initiator=String(userId)<String(rid);
     await createPeer(rid,e.fromName||'Member',initiator);
+    document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
+  } else if(e.type==='peer' && e.toUserId===userId){
+    const rid=e.fromUserId; if(rid===userId)return;
+    const remoteName=e.fromName || e.payload?.userName || 'Member';
+    activeCall.participants.set(rid,{id:rid,name:remoteName});
+    callStageAddParticipant(rid,remoteName,null,false,false);
+    const initiator=String(userId)<String(rid);
+    await createPeer(rid,remoteName,initiator);
     document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
   } else if(e.type==='offer' && e.toUserId===userId){
     const rid=e.fromUserId; activeCall.participants.set(rid,{id:rid,name:e.fromName||'Member'});
