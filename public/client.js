@@ -1499,6 +1499,7 @@ socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)
 let activeCall = null;
 let incomingCall = null;
 let callPollTimer = null;
+let callPresenceTimer = null;
 let callPollSince = new Date(Date.now() - 3000).toISOString();
 const peerConnections = new Map();
 const pendingIceCandidates = new Map();
@@ -1778,6 +1779,29 @@ async function handleCallEvent(e){
   }
 }
 
+async function startCallPresence(){
+  if(callPresenceTimer) clearInterval(callPresenceTimer);
+  const announce=()=>{
+    if(!activeCall || activeCall.ended || !socket.connected) return;
+    socket.emit('call-presence',{groupId:currentGroupId,callId:activeCall.id,userId,name,callType:activeCall.type,cameraOn:!!activeCall.cameraOn});
+  };
+  announce();
+  callPresenceTimer=setInterval(announce,2000);
+}
+function stopCallPresence(){ if(callPresenceTimer){clearInterval(callPresenceTimer);callPresenceTimer=null;} }
+
+socket.on('call-presence', async e=>{
+  try{
+    if(!e || !activeCall || activeCall.ended || e.groupId!==currentGroupId || e.callId!==activeCall.id || e.userId===userId) return;
+    const rid=String(e.userId); const remoteName=e.name||'Member';
+    activeCall.participants.set(rid,{id:rid,name:remoteName});
+    callStageAddParticipant(rid,remoteName,null,false,false);
+    if(e.cameraOn && activeCall.remoteCameraStates) activeCall.remoteCameraStates.set(rid,true);
+    await createPeer(rid,remoteName,String(userId)<String(rid));
+    document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
+  }catch(err){console.warn('call presence',err)}
+});
+
 socket.on('call-event', e=>handleCallEvent(e).catch(err=>console.error('call event',err)));
 async function pollCallEvents(){
   try{
@@ -1810,6 +1834,7 @@ async function startCall(video=false){
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('invite',callId,{callType:activeCall.type});
+    startCallPresence();
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Microphone permission denied':'Could not start call'); }
 }
 
@@ -1834,10 +1859,12 @@ async function acceptIncomingCall(){
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
     await createPeer(inc.fromUserId,inc.fromName||'Member',String(userId)<String(inc.fromUserId));
+    startCallPresence();
   }catch(e){ showToast('Microphone permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
 }
 
 async function finishCall(notify=true,message='Call ended'){
+  stopCallPresence();
   const call=activeCall;
   if(call){
     if(notify) await sendCallEvent('end',call.id,{});

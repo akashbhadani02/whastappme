@@ -1499,27 +1499,26 @@ socket.on('typing',d=>{if(!d || d.groupId!==currentGroupId || d.userId===userId)
 let activeCall = null;
 let incomingCall = null;
 let callPollTimer = null;
+let callPresenceTimer = null;
 let callPollSince = new Date(Date.now() - 3000).toISOString();
 const peerConnections = new Map();
 const pendingIceCandidates = new Map();
+// No provider/account setup is required. Use public STUN discovery by default.
+// This keeps the app zero-config; WebRTC will use a direct peer path whenever
+// the participating networks allow it.
 const RTC_CONFIG = { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-]};
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+], iceCandidatePoolSize: 10 };
 let callIceLoadedAt = 0;
 let callIceLoadPromise = null;
 async function loadCallIceServers(force=false){
-  if(!force && RTC_CONFIG.iceServers?.length && Date.now()-callIceLoadedAt < 10*60*1000) return RTC_CONFIG.iceServers;
-  if(callIceLoadPromise) return callIceLoadPromise;
-  callIceLoadPromise=(async()=>{
-    try{
-      const r=await fetch('/api/calls/ice-servers',{cache:'no-store'});
-      if(r.ok){ const data=await r.json(); if(Array.isArray(data.iceServers)&&data.iceServers.length){ RTC_CONFIG.iceServers=data.iceServers; callIceLoadedAt=Date.now(); } }
-    }catch(e){ console.warn('ICE server discovery failed; using STUN fallback',e); }
-    finally{ callIceLoadPromise=null; }
-    return RTC_CONFIG.iceServers;
-  })();
-  return callIceLoadPromise;
+  // Deliberately do not require TURN/provider environment variables.
+  // The built-in public STUN list is always available.
+  callIceLoadedAt=Date.now();
+  return RTC_CONFIG.iceServers;
 }
 
 function ensureCallMediaUI(){
@@ -1675,7 +1674,29 @@ async function createPeer(remoteId, remoteName, initiator){
       e.track.onended=()=>setParticipantCameraState(remoteId,false);
     }else if(e.track.kind==='audio') callStageAddAudio(remoteId,rs,remoteName);
   };
-  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)){try{pc.close()}catch(_){}peerConnections.delete(remoteId);activeCall?.remoteStreams?.delete(remoteId);}};
+  let retryTimer=null;
+  pc.oniceconnectionstatechange=async()=>{
+    if(!activeCall || activeCall.ended || peerConnections.get(remoteId)!==pc) return;
+    if(pc.iceConnectionState==='failed'){
+      try{
+        if(pc.restartIce) pc.restartIce();
+        const offer=await pc.createOffer({iceRestart:true});
+        await pc.setLocalDescription(offer);
+        if(activeCall&&!activeCall.ended) await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+      }catch(err){ console.warn('ICE restart failed',remoteId,err); }
+    }
+  };
+  pc.onconnectionstatechange=()=>{
+    if(pc.connectionState==='disconnected'){
+      clearTimeout(retryTimer);
+      retryTimer=setTimeout(async()=>{
+        if(pc.connectionState!=='connected' && activeCall&&!activeCall.ended){
+          try{ if(pc.restartIce) pc.restartIce(); }catch(_){}
+        }
+      },1500);
+    }
+    if(pc.connectionState==='closed'){ clearTimeout(retryTimer); }
+  };
   if(initiator){
     try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);if(activeCall&&!activeCall.ended)await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);}catch(err){console.warn('initial offer failed',remoteId,err);}
   }
@@ -1758,6 +1779,29 @@ async function handleCallEvent(e){
   }
 }
 
+async function startCallPresence(){
+  if(callPresenceTimer) clearInterval(callPresenceTimer);
+  const announce=()=>{
+    if(!activeCall || activeCall.ended || !socket.connected) return;
+    socket.emit('call-presence',{groupId:currentGroupId,callId:activeCall.id,userId,name,callType:activeCall.type,cameraOn:!!activeCall.cameraOn});
+  };
+  announce();
+  callPresenceTimer=setInterval(announce,2000);
+}
+function stopCallPresence(){ if(callPresenceTimer){clearInterval(callPresenceTimer);callPresenceTimer=null;} }
+
+socket.on('call-presence', async e=>{
+  try{
+    if(!e || !activeCall || activeCall.ended || e.groupId!==currentGroupId || e.callId!==activeCall.id || e.userId===userId) return;
+    const rid=String(e.userId); const remoteName=e.name||'Member';
+    activeCall.participants.set(rid,{id:rid,name:remoteName});
+    callStageAddParticipant(rid,remoteName,null,false,false);
+    if(e.cameraOn && activeCall.remoteCameraStates) activeCall.remoteCameraStates.set(rid,true);
+    await createPeer(rid,remoteName,String(userId)<String(rid));
+    document.getElementById('callState').textContent=`${activeCall.participants.size} participant(s) connected`;
+  }catch(err){console.warn('call presence',err)}
+});
+
 socket.on('call-event', e=>handleCallEvent(e).catch(err=>console.error('call event',err)));
 async function pollCallEvents(){
   try{
@@ -1790,6 +1834,7 @@ async function startCall(video=false){
     showCallModal(video?'Video call':'Audio call','Calling group members…');
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('invite',callId,{callType:activeCall.type});
+    startCallPresence();
   }catch(e){ showToast(e?.name==='NotAllowedError'?'Microphone permission denied':'Could not start call'); }
 }
 
@@ -1814,10 +1859,12 @@ async function acceptIncomingCall(){
     document.getElementById('endCallBtn').textContent='📞 End';
     await sendCallEvent('join',activeCall.id,{});
     await createPeer(inc.fromUserId,inc.fromName||'Member',String(userId)<String(inc.fromUserId));
+    startCallPresence();
   }catch(e){ showToast('Microphone permission denied'); await sendCallEvent('leave',inc.callId,{}); closeCallModal(); }
 }
 
 async function finishCall(notify=true,message='Call ended'){
+  stopCallPresence();
   const call=activeCall;
   if(call){
     if(notify) await sendCallEvent('end',call.id,{});

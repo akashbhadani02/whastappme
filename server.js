@@ -1458,6 +1458,28 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // Fast in-call presence path. This is intentionally separate from the DB-backed
+  // signaling events so a participant can re-advertise every few seconds without
+  // filling the call_events collection. It repairs missed join/peer notifications,
+  // especially when a mobile browser reconnects or resumes from the background.
+  socket.on('call-presence', (data) => {
+    if (!data || !data.callId || !socket.groupId) return;
+    if (normalizeGroupId(data.groupId || socket.groupId) !== normalizeGroupId(socket.groupId)) return;
+    const payload = {
+      groupId: normalizeGroupId(socket.groupId),
+      callId: String(data.callId).slice(0,120),
+      userId: socket.userId || String(data.userId || ''),
+      name: String(data.name || '').slice(0,80),
+      callType: String(data.callType || 'video'),
+      cameraOn: !!data.cameraOn
+    };
+    for (const peer of io.sockets.sockets.values()) {
+      if (peer.id === socket.id) continue;
+      if (normalizeGroupId(peer.groupId) !== normalizeGroupId(socket.groupId)) continue;
+      peer.emit('call-presence', payload);
+    }
+  });
+
   // Fast Socket.IO signaling path. REST /api/calls/events is the fallback.
   socket.on('call-event', (data) => {
     if (!data || !data.callId || !data.type || !socket.groupId) return;
