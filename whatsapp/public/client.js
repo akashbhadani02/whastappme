@@ -1506,6 +1506,21 @@ const RTC_CONFIG = { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
 ]};
+let callIceLoadedAt = 0;
+let callIceLoadPromise = null;
+async function loadCallIceServers(force=false){
+  if(!force && RTC_CONFIG.iceServers?.length && Date.now()-callIceLoadedAt < 10*60*1000) return RTC_CONFIG.iceServers;
+  if(callIceLoadPromise) return callIceLoadPromise;
+  callIceLoadPromise=(async()=>{
+    try{
+      const r=await fetch('/api/calls/ice-servers',{cache:'no-store'});
+      if(r.ok){ const data=await r.json(); if(Array.isArray(data.iceServers)&&data.iceServers.length){ RTC_CONFIG.iceServers=data.iceServers; callIceLoadedAt=Date.now(); } }
+    }catch(e){ console.warn('ICE server discovery failed; using STUN fallback',e); }
+    finally{ callIceLoadPromise=null; }
+    return RTC_CONFIG.iceServers;
+  })();
+  return callIceLoadPromise;
+}
 
 function ensureCallMediaUI(){
   if (!callModal) return;
@@ -1625,6 +1640,7 @@ function closeCallModal(){callModal?.classList.add('hidden');callModal?.querySel
 
 async function createPeer(remoteId, remoteName, initiator){
   if(!activeCall || activeCall.ended || remoteId===userId) return;
+  await loadCallIceServers();
   let pc=peerConnections.get(remoteId); if(pc) return pc;
   pc=new RTCPeerConnection(RTC_CONFIG); pc.__remoteId=remoteId; pc.__remoteDescriptionSet=false; peerConnections.set(remoteId,pc);
   const audioTrack=activeCall.stream?.getAudioTracks?.()[0]; if(audioTrack) pc.addTrack(audioTrack,activeCall.stream);
@@ -1758,6 +1774,7 @@ callPollTimer=setInterval(pollCallEvents,700);
 async function startCall(video=false){
   if(!currentGroupId || activeCall)return;
   try{
+    await loadCallIceServers(true);
     // A real video call opens the camera at call start. Sending the first
     // camera track in the initial SDP is much more reliable on mobile browsers
     // than creating an empty video m-line and attaching the track later.
@@ -1778,6 +1795,7 @@ async function startCall(video=false){
 
 async function acceptIncomingCall(){
   if(!incomingCall)return;
+  await loadCallIceServers(true);
   const inc=incomingCall; incomingCall=null;
   try{
     const video=inc.payload?.callType==='video';

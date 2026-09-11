@@ -1502,10 +1502,23 @@ let callPollTimer = null;
 let callPollSince = new Date(Date.now() - 3000).toISOString();
 const peerConnections = new Map();
 const pendingIceCandidates = new Map();
+// No provider/account setup is required. Use public STUN discovery by default.
+// This keeps the app zero-config; WebRTC will use a direct peer path whenever
+// the participating networks allow it.
 const RTC_CONFIG = { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-]};
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+], iceCandidatePoolSize: 10 };
+let callIceLoadedAt = 0;
+let callIceLoadPromise = null;
+async function loadCallIceServers(force=false){
+  // Deliberately do not require TURN/provider environment variables.
+  // The built-in public STUN list is always available.
+  callIceLoadedAt=Date.now();
+  return RTC_CONFIG.iceServers;
+}
 
 function ensureCallMediaUI(){
   if (!callModal) return;
@@ -1625,6 +1638,7 @@ function closeCallModal(){callModal?.classList.add('hidden');callModal?.querySel
 
 async function createPeer(remoteId, remoteName, initiator){
   if(!activeCall || activeCall.ended || remoteId===userId) return;
+  await loadCallIceServers();
   let pc=peerConnections.get(remoteId); if(pc) return pc;
   pc=new RTCPeerConnection(RTC_CONFIG); pc.__remoteId=remoteId; pc.__remoteDescriptionSet=false; peerConnections.set(remoteId,pc);
   const audioTrack=activeCall.stream?.getAudioTracks?.()[0]; if(audioTrack) pc.addTrack(audioTrack,activeCall.stream);
@@ -1659,7 +1673,29 @@ async function createPeer(remoteId, remoteName, initiator){
       e.track.onended=()=>setParticipantCameraState(remoteId,false);
     }else if(e.track.kind==='audio') callStageAddAudio(remoteId,rs,remoteName);
   };
-  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)){try{pc.close()}catch(_){}peerConnections.delete(remoteId);activeCall?.remoteStreams?.delete(remoteId);}};
+  let retryTimer=null;
+  pc.oniceconnectionstatechange=async()=>{
+    if(!activeCall || activeCall.ended || peerConnections.get(remoteId)!==pc) return;
+    if(pc.iceConnectionState==='failed'){
+      try{
+        if(pc.restartIce) pc.restartIce();
+        const offer=await pc.createOffer({iceRestart:true});
+        await pc.setLocalDescription(offer);
+        if(activeCall&&!activeCall.ended) await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);
+      }catch(err){ console.warn('ICE restart failed',remoteId,err); }
+    }
+  };
+  pc.onconnectionstatechange=()=>{
+    if(pc.connectionState==='disconnected'){
+      clearTimeout(retryTimer);
+      retryTimer=setTimeout(async()=>{
+        if(pc.connectionState!=='connected' && activeCall&&!activeCall.ended){
+          try{ if(pc.restartIce) pc.restartIce(); }catch(_){}
+        }
+      },1500);
+    }
+    if(pc.connectionState==='closed'){ clearTimeout(retryTimer); }
+  };
   if(initiator){
     try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);if(activeCall&&!activeCall.ended)await sendCallEvent('offer',activeCall.id,{description:pc.localDescription},remoteId);}catch(err){console.warn('initial offer failed',remoteId,err);}
   }
@@ -1758,6 +1794,7 @@ callPollTimer=setInterval(pollCallEvents,700);
 async function startCall(video=false){
   if(!currentGroupId || activeCall)return;
   try{
+    await loadCallIceServers(true);
     // A real video call opens the camera at call start. Sending the first
     // camera track in the initial SDP is much more reliable on mobile browsers
     // than creating an empty video m-line and attaching the track later.
@@ -1778,6 +1815,7 @@ async function startCall(video=false){
 
 async function acceptIncomingCall(){
   if(!incomingCall)return;
+  await loadCallIceServers(true);
   const inc=incomingCall; incomingCall=null;
   try{
     const video=inc.payload?.callType==='video';

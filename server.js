@@ -204,6 +204,17 @@ async function getCallEventsCollection() {
   return c;
 }
 
+app.get('/api/calls/ice-servers', async (req, res) => {
+  // Zero-config WebRTC: no TURN account or environment variables are required.
+  // STUN only helps peers discover a direct route; the actual media remains peer-to-peer.
+  return res.json({ ok:true, iceServers:[
+    { urls:'stun:stun.l.google.com:19302' },
+    { urls:'stun:stun1.l.google.com:19302' },
+    { urls:'stun:stun2.l.google.com:19302' },
+    { urls:'stun:stun.cloudflare.com:3478' }
+  ], turn:false });
+});
+
 app.post('/api/calls/event', async (req, res) => {
   try {
     const body = req.body || {};

@@ -204,6 +204,17 @@ async function getCallEventsCollection() {
   return c;
 }
 
+app.get('/api/calls/ice-servers', async (req, res) => {
+  // Zero-config WebRTC: no TURN account or environment variables are required.
+  // STUN only helps peers discover a direct route; the actual media remains peer-to-peer.
+  return res.json({ ok:true, iceServers:[
+    { urls:'stun:stun.l.google.com:19302' },
+    { urls:'stun:stun1.l.google.com:19302' },
+    { urls:'stun:stun2.l.google.com:19302' },
+    { urls:'stun:stun.cloudflare.com:3478' }
+  ], turn:false });
+});
+
 app.post('/api/calls/event', async (req, res) => {
   try {
     const body = req.body || {};
@@ -212,9 +223,6 @@ app.post('/api/calls/event', async (req, res) => {
     const callId = String(body.callId || '').trim().slice(0, 120);
     const fromUserId = String(body.fromUserId || '').trim().slice(0, 160);
     if (!groupId || !type || !callId || !fromUserId) return res.status(400).json({ ok:false });
-    // `end` is a group-wide call termination event. The client handles it
-    // for every participant with the same callId, so one user ending the call
-    // closes the call for everyone, not just that user's peer connection.
     const event = {
       id: String(body.id || crypto.randomUUID()), groupId, callId, type, fromUserId,
       fromName: String(body.fromName || '').slice(0, 80),
