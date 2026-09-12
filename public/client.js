@@ -1099,9 +1099,14 @@ async function verifyAndOpenGroup() {
     groupPasswordModal.classList.add('hidden');
     groupPasswordTarget = null;
     if (socket.connected) {
-      await new Promise(resolve => socket.emit('authorize-group', { groupId: group.id, password }, () => resolve()));
+      const auth = await new Promise(resolve => socket.emit('authorize-group', { groupId: group.id, password }, response => resolve(response || { ok:false })));
+      if (!auth.ok) { groupPasswordError.textContent = auth.error || 'Wrong group password'; groupPasswordInput.select(); return; }
     }
-    await joinGroup(group.id, true);
+    const joined = await joinGroup(group.id, true);
+    if (!joined) {
+      groupPasswordError.textContent = 'Could not join this group';
+      return;
+    }
   } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
 }
 
@@ -1115,12 +1120,20 @@ async function joinGroup(groupId, openAfter=true) {
   messageArea.innerHTML = '';
   updateGroupNameUI(); renderGroupList();
   loadLocalMessageHistory();
+  let joinResult = { ok: true };
   await new Promise(resolve => {
     if (!socket.connected) { resolve(); return; }
-    socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
+    socket.emit('join-group', { groupId: currentGroupId }, response => { joinResult = response || { ok:false }; resolve(); });
   });
+  if (!joinResult.ok) {
+    currentGroupId = '';
+    localStorage.removeItem('wa_group_id');
+    renderGroupList();
+    return false;
+  }
   await syncMessages();
   if (openAfter) openChat();
+  return true;
 }
 
 loadGroups();

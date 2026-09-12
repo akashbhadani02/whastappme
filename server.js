@@ -1259,13 +1259,53 @@ async function broadcastSaved(event, msg) {
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
+  // A socket must prove the selected group's password before it can join that
+  // group's realtime room or receive/send its messages. Keep authorization
+  // per socket so changing groups cannot accidentally reuse another group's
+  // password/session.
+  socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
+
+  async function verifyGroupPassword(groupId, password) {
+    const gid = normalizeGroupId(groupId);
+    const supplied = String(password || '');
+    const collection = await getGroupSettingsCollection();
+    if (!collection) {
+      const group = fallbackGroups.get(gid);
+      return !!group && supplied === String(group.password || '');
+    }
+    const group = await collection.findOne({ _id: gid });
+    return !!group && supplied === String(group.password || '');
+  }
 
   socket.on('register-user', (data) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
   });
 
+  socket.on('authorize-group', async (data, ack) => {
+    const groupId = normalizeGroupId(data?.groupId);
+    try {
+      const valid = await verifyGroupPassword(groupId, data?.password);
+      if (!valid) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Wrong group password' });
+        return;
+      }
+      socket.authorizedGroups.add(groupId);
+      if (typeof ack === 'function') ack({ ok: true, groupId });
+    } catch (error) {
+      console.error('Group password verification failed:', error.message);
+      if (typeof ack === 'function') ack({ ok: false, error: 'Could not verify group password' });
+    }
+  });
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
+    // A custom group can only be joined after its exact password has been
+    // verified on this socket. This prevents simply changing groupId in the
+    // browser from entering another password-protected group.
+    if (!socket.authorizedGroups.has(groupId)) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Group password required' });
+      return;
+    }
     // Switching groups while a call is active must not leave a stale call behind.
     for (const [callId, call] of activeCalls) {
       if (call.participants.has(socket.id) && call.groupId !== groupId) endActiveCall(callId, 'group-switched');
