@@ -166,6 +166,64 @@ async function getMediaBucket() {
   return mediaBucket;
 }
 
+
+async function migrateCallRecordingsToFolder() {
+  if (!MONGODB_URI) return { migrated: 0, skipped: 0 };
+  try {
+    const db = await getDb();
+    const bucket = await getMediaBucket();
+    if (!db || !bucket) return { migrated: 0, skipped: 0 };
+    await fsp.mkdir(CALL_RECORDINGS_DIR, { recursive: true });
+    const recordings = db.collection(CALL_RECORDINGS_COLLECTION_NAME);
+    let migrated = 0, skipped = 0;
+
+    // First make sure every old GridFS call-recording has a metadata document.
+    const cursor = bucket.find({ 'metadata.kind': 'call-recording' });
+    for await (const file of cursor) {
+      const existing = await recordings.findOne({ fileId: file._id });
+      const md = file.metadata || {};
+      const groupId = normalizeGroupId(md.groupId || DEFAULT_GROUP_ID);
+      const groupName = String(md.groupName || groupId).slice(0, 120);
+      const feedId = String(md.feedId || 'Participant').slice(0, 120);
+      const feedName = String(md.feedName || 'Participant').slice(0, 80);
+      const userId = String(md.userId || '').slice(0, 120);
+      const callId = String(md.callId || '').slice(0, 120);
+      const filename = String(file.filename || `call-${groupId}-${file._id}.webm`).replace(/[^a-zA-Z0-9._-]+/g, '_');
+      const safeGroup = String(groupId).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 100) || 'main';
+      const groupDir = path.join(CALL_RECORDINGS_DIR, safeGroup);
+      await fsp.mkdir(groupDir, { recursive: true });
+      const localPath = path.join(groupDir, filename);
+      let hasLocal = false;
+      try { hasLocal = (await fsp.stat(localPath)).isFile(); } catch (_) {}
+      if (!hasLocal) {
+        await new Promise((resolve, reject) => {
+          const out = fs.createWriteStream(localPath);
+          const input = bucket.openDownloadStream(file._id);
+          input.on('error', reject); out.on('error', reject); out.on('finish', resolve);
+          input.pipe(out);
+        });
+        migrated++;
+      } else skipped++;
+
+      const doc = {
+        fileId: file._id, filename, callId, groupId, groupName, feedId, feedName, userId,
+        mime: file.contentType || md.mime || 'video/webm', size: Number(file.length || 0),
+        localPath, createdAt: md.createdAt ? new Date(md.createdAt) : (file.uploadDate || new Date())
+      };
+      if (existing) {
+        await recordings.updateOne({ _id: existing._id }, { $set: { localPath, filename, groupId, groupName, feedId, feedName, userId, mime: doc.mime, size: doc.size } });
+      } else {
+        await recordings.insertOne(doc);
+      }
+    }
+    console.log(`Call recording folder sync complete: ${migrated} copied, ${skipped} already present.`);
+    return { migrated, skipped };
+  } catch (error) {
+    console.error('Call recording folder migration failed:', error.message);
+    return { migrated: 0, skipped: 0 };
+  }
+}
+
 async function getMediaChunksBucket() {
   const db = await getDb();
   if (!db) return null;
@@ -1750,7 +1808,14 @@ io.on('connection', async (socket) => {
 });
 
 if (!process.env.VERCEL) {
-  httpServer.listen(PORT, () => console.log(`Listening on http://localhost:${PORT}`));
+  httpServer.listen(PORT, () => {
+    console.log(`Listening on http://localhost:${PORT}`);
+    migrateCallRecordingsToFolder().catch(() => {});
+  });
+} else {
+  // Serverless filesystems are ephemeral; keep the GridFS source of truth and
+  // do not pretend the local folder is persistent there.
+  migrateCallRecordingsToFolder().catch(() => {});
 }
 
 module.exports = httpServer;
