@@ -629,30 +629,49 @@ function clearChat(broadcast=true) {
 
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
-attachBtn.addEventListener('click', () => fileInput.click());
+attachBtn.addEventListener('click', () => {
+  // Do not use capture here: on phones this opens the normal gallery/file picker,
+  // where the user can select photos and videos already stored on the device.
+  fileInput.value = '';
+  fileInput.click();
+});
+
 fileInput.addEventListener('change', async e => {
-  const files=[...e.target.files];
+  const files = Array.from(e.target.files || []);
   if (!files.length) return;
-  const allowed = /^(image\/|video\/|audio\/)/i;
-  const docs = /^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i;
+
   for (const file of files) {
-    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
-    // Some mobile browsers return an empty MIME type. Use the extension as a safe fallback.
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const mediaMime = file.type || ({
-      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
-      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
-      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo', mp3:'audio/mpeg', m4a:'audio/mp4',
-      wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg'
-    })[ext] || '';
-    const normalized = file.type ? file : new File([file], file.name, { type: mediaMime || 'application/octet-stream', lastModified: file.lastModified });
-    if (!allowed.test(normalized.type) && !docs.test(normalized.type) && !mediaMime) {
-      showToast(`Unsupported file type: ${file.name}`);
+    if (!file || file.size <= 0) {
+      showToast('Empty file cannot be uploaded');
       continue;
     }
+
+    // Gallery/file pickers on some Android browsers may report an empty MIME type.
+    // Resolve it from the extension so selected photos/videos still send normally.
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const extMime = {
+      jpg:'image/jpeg', jpeg:'image/jpeg', jpe:'image/jpeg', png:'image/png', gif:'image/gif',
+      webp:'image/webp', heic:'image/heic', heif:'image/heif', avif:'image/avif',
+      mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime', m4v:'video/x-m4v',
+      mkv:'video/x-matroska', avi:'video/x-msvideo'
+    }[ext] || '';
+    const mime = String(file.type || extMime).toLowerCase();
+
+    if (!mime.startsWith('image/') && !mime.startsWith('video/')) {
+      showToast(`Only photos and videos can be sent: ${file.name}`);
+      continue;
+    }
+
+    const normalized = file.type
+      ? file
+      : new File([file], file.name, { type: mime, lastModified: file.lastModified });
+
+    // Upload directly. No separate preview/view card is inserted before the
+    // upload finishes; the real message card is rendered only after success.
     await uploadMedia(normalized);
   }
-  e.target.value='';
+
+  e.target.value = '';
 });
 
 function makeUploadBubble(file, type) {
