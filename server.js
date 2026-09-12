@@ -25,6 +25,7 @@ const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
+const CALL_RECORDINGS_BUCKET_NAME = 'call_recordings';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -51,6 +52,11 @@ let dbPromise = null;
 let mediaBucket = null;
 let mediaChunksBucket = null;
 let realtimeWatchStarted = false;
+let callRecordingsBucket = null;
+
+// Active calls are intentionally kept in memory: WebRTC signaling is live session state.
+// Every socket is checked against its current groupId so calls never cross groups.
+const activeCalls = new Map();
 
 async function getDb() {
   if (!MONGODB_URI) return null;
@@ -151,6 +157,30 @@ async function getMediaChunksBucket() {
   if (!db) return null;
   mediaChunksBucket = mediaChunksBucket || new GridFSBucket(db, { bucketName: MEDIA_CHUNKS_BUCKET_NAME });
   return mediaChunksBucket;
+}
+
+async function getCallRecordingsBucket() {
+  const db = await getDb();
+  if (!db) return null;
+  callRecordingsBucket = callRecordingsBucket || new GridFSBucket(db, { bucketName: CALL_RECORDINGS_BUCKET_NAME });
+  return callRecordingsBucket;
+}
+
+function socketsInGroup(groupId) {
+  const gid = normalizeGroupId(groupId);
+  return [...io.sockets.sockets.values()].filter(s => normalizeGroupId(s.groupId) === gid);
+}
+
+function endActiveCall(callId, reason = 'ended') {
+  const call = activeCalls.get(String(callId));
+  if (!call) return false;
+  const payload = { callId: String(callId), groupId: call.groupId, reason };
+  for (const socketId of call.participants) {
+    const target = io.sockets.sockets.get(socketId);
+    if (target) target.emit('call-ended', payload);
+  }
+  activeCalls.delete(String(callId));
+  return true;
 }
 
 app.use(express.json({ limit: '2mb' }));
@@ -298,7 +328,10 @@ app.delete('/api/groups/:id', async (req, res) => {
       const db = await getDb();
       if (db) {
         await db.collection(RECYCLE_BIN_COLLECTION_NAME).updateMany(
-          { groupId },
+          { $and: [
+            { $or: [{ groupId }, { deletedGroupId: groupId }] },
+            { $or: [{ recycleStage: 'group' }, { recycleStage: { $exists: false } }] }
+          ] },
           { $set: { groupId: DEFAULT_GROUP_ID, deletedGroupId: groupId, deletedGroupName: groupDoc?.name || groupId, movedToMainRecycleAt: new Date(), recycleStage: 'main' } }
         );
       }
@@ -899,6 +932,87 @@ app.get('/api/media/:id', async (req, res) => {
   }
 });
 
+
+// ===== Group call recording storage (admin only) =====
+app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-stream', limit: '200mb' }), async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.headers['x-group-id']);
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!body.length) return res.status(400).json({ ok:false, error:'Empty recording' });
+    const bucket = await getCallRecordingsBucket();
+    if (!bucket) return res.status(503).json({ ok:false, error:'MongoDB is required for call recording storage' });
+    const callId = String(req.headers['x-call-id'] || '').slice(0,160);
+    const feedId = String(req.headers['x-feed-id'] || '').slice(0,160);
+    const feedName = String(req.headers['x-feed-name'] || 'Participant').slice(0,100);
+    const mime = String(req.headers['x-mime-type'] || 'video/webm').slice(0,100);
+    const fileName = `call-${groupId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.webm`;
+    const upload = bucket.openUploadStream(fileName, {
+      contentType: mime,
+      metadata: { callId, groupId, feedId, feedName, userId:String(req.headers['x-user-id']||'') }
+    });
+    await new Promise((resolve,reject)=>{ upload.once('finish',resolve); upload.once('error',reject); upload.end(body); });
+    res.json({ok:true,fileId:String(upload.id)});
+  } catch (e) {
+    console.error('Call recording upload failed:', e.message);
+    res.status(500).json({ok:false,error:'Recording upload failed'});
+  }
+});
+
+app.post('/api/admin/call-recordings', async (req,res)=>{
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(401).json({ok:false,error:'Unauthorized'});
+    const bucket = await getCallRecordingsBucket();
+    if (!bucket) return res.json({ok:true,recordings:[]});
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : '';
+    const filter = groupId ? {'metadata.groupId':groupId} : {};
+    const docs = await bucket.find(filter,{sort:{uploadDate:-1}}).toArray();
+    const groups = await getGroupSettingsCollection();
+    const out=[];
+    for (const d of docs) {
+      let groupName=d.metadata?.groupId || 'main';
+      if (groups) {
+        const g=await groups.findOne({_id:d.metadata?.groupId});
+        if (g?.name) groupName=g.name;
+      }
+      out.push({
+        fileId:String(d._id), groupId:d.metadata?.groupId || 'main', groupName,
+        feedId:d.metadata?.feedId || '', feedName:d.metadata?.feedName || 'Participant',
+        size:Number(d.length||0), mime:d.contentType || 'video/webm', createdAt:d.uploadDate
+      });
+    }
+    res.json({ok:true,recordings:out});
+  } catch(e) {
+    console.error('Load call recordings failed:',e.message);
+    res.status(500).json({ok:false,error:'Could not load recordings'});
+  }
+});
+
+app.get('/api/admin/call-recordings/:id', async (req,res)=>{
+  try {
+    if (String(req.query?.password || '') !== ADMIN_PASSWORD) return res.status(401).end();
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).end();
+    const bucket=await getCallRecordingsBucket();
+    if (!bucket) return res.status(503).end();
+    const docs=await bucket.find({_id:new ObjectId(req.params.id)}).limit(1).toArray();
+    if (!docs.length) return res.status(404).end();
+    const d=docs[0];
+    res.setHeader('Content-Type',d.contentType||'video/webm');
+    res.setHeader('Content-Disposition',`inline; filename="${String(d.filename||'call-recording.webm').replace(/"/g,'')}"`);
+    bucket.openDownloadStream(d._id).on('error',()=>{ if(!res.headersSent) res.status(404).end(); }).pipe(res);
+  } catch(e) { res.status(500).end(); }
+});
+
+app.delete('/api/admin/call-recordings/:id', async (req,res)=>{
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(401).json({ok:false,error:'Unauthorized'});
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ok:false});
+    const bucket=await getCallRecordingsBucket();
+    if (!bucket) return res.status(503).json({ok:false});
+    await bucket.delete(new ObjectId(req.params.id));
+    res.json({ok:true});
+  } catch(e) { res.status(500).json({ok:false,error:'Delete failed'}); }
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     const collection = await getCollection();
@@ -1152,6 +1266,10 @@ io.on('connection', async (socket) => {
 
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
+    // Switching groups while a call is active must not leave a stale call behind.
+    for (const [callId, call] of activeCalls) {
+      if (call.participants.has(socket.id) && call.groupId !== groupId) endActiveCall(callId, 'group-switched');
+    }
     socket.groupId = groupId;
     try {
       const history = await loadMessages('', groupId);
@@ -1368,7 +1486,7 @@ io.on('connection', async (socket) => {
       if (collection) {
         const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
         const existing = await collection.find(
-          { $and: [groupFilter, { id: { $in: ids } }] }
+          { $and: [groupFilter, { id: { $in: ids } }, { deletedAt: { $exists:false } }] }
         ).toArray();
 
         if (existing.length) {
@@ -1385,6 +1503,65 @@ io.on('connection', async (socket) => {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
     }
+  });
+
+
+  // ===== WebRTC group audio/video call signaling =====
+  socket.on('call-start', (data, ack) => {
+    const groupId = normalizeGroupId(data?.groupId || socket.groupId);
+    if (groupId !== normalizeGroupId(socket.groupId)) return typeof ack === 'function' && ack({ok:false,error:'Group mismatch'});
+    const callId = String(data?.callId || '').slice(0,160);
+    const type = data?.type === 'video' ? 'video' : 'audio';
+    if (!callId) return typeof ack === 'function' && ack({ok:false,error:'Invalid call'});
+    // One active call id maps to exactly one group.
+    if (activeCalls.has(callId)) return typeof ack === 'function' && ack({ok:false,error:'Call already exists'});
+    const participants = new Set([socket.id]);
+    activeCalls.set(callId,{callId,groupId,type,creator:socket.id,participants});
+    for (const target of socketsInGroup(groupId)) {
+      if (target.id !== socket.id) target.emit('incoming-call',{
+        callId, groupId, type, userId:String(socket.userId||data?.userId||''), name:String(data?.name||'Participant').slice(0,100)
+      });
+    }
+    if (typeof ack === 'function') ack({ok:true});
+  });
+
+  socket.on('call-join', (data, ack) => {
+    const callId=String(data?.callId||'');
+    const call=activeCalls.get(callId);
+    const groupId=normalizeGroupId(data?.groupId || socket.groupId);
+    if (!call || call.groupId!==groupId || groupId!==normalizeGroupId(socket.groupId))
+      return typeof ack === 'function' && ack({ok:false,error:'Call is no longer available'});
+    if (!call.participants.has(socket.id)) call.participants.add(socket.id);
+    const peers=[...call.participants].filter(id=>id!==socket.id);
+    for (const peerId of peers) {
+      const peer=io.sockets.sockets.get(peerId);
+      if (peer) peer.emit('call-peer-joined',{callId,socketId:socket.id,name:String(data?.name||'Participant').slice(0,100),groupId});
+    }
+    if (typeof ack === 'function') ack({ok:true,peers});
+  });
+
+  socket.on('call-signal', (data) => {
+    const callId=String(data?.callId||'');
+    const call=activeCalls.get(callId);
+    const targetId=String(data?.to||'');
+    if (!call || !call.participants.has(socket.id) || !call.participants.has(targetId)) return;
+    const target=io.sockets.sockets.get(targetId);
+    if (!target || normalizeGroupId(target.groupId)!==call.groupId) return;
+    target.emit('call-signal',{callId,from:socket.id,kind:data?.kind,data:data?.data});
+  });
+
+  socket.on('call-reject', (data) => {
+    const callId=String(data?.callId||'');
+    const call=activeCalls.get(callId);
+    if (!call || call.groupId!==normalizeGroupId(socket.groupId)) return;
+    const caller=io.sockets.sockets.get(call.creator);
+    if (caller) caller.emit('call-rejected',{callId,socketId:socket.id,name:String(data?.name||'Participant').slice(0,100)});
+  });
+
+  socket.on('call-leave', (data) => {
+    const callId=String(data?.callId||'');
+    // A user ending the call ends the group call for everyone.
+    endActiveCall(callId,'ended');
   });
 
   socket.on('typing', (data) => {
@@ -1433,7 +1610,7 @@ io.on('connection', async (socket) => {
       if (collection) {
         const gid = normalizeGroupId(socket.groupId);
         const groupFilter = { $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
-        const allMessages = await collection.find(groupFilter).toArray();
+        const allMessages = await collection.find({ $and: [groupFilter, { deletedAt: { $exists:false } }] }).toArray();
         if (allMessages.length) {
           await moveMessagesToRecycleBin(allMessages, gid, 'clear-chat');
           await collection.updateMany({ $and: [groupFilter, { deletedAt: { $exists:false } }] }, { $set: { deletedAt: new Date(), deletedBy: String(socket.userId || ''), deleteReason: 'clear-chat' } });
@@ -1449,6 +1626,7 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('disconnect', (reason) => {
+    for (const [callId, call] of activeCalls) { if (call.participants.has(socket.id)) endActiveCall(callId, 'disconnected'); }
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
     console.log('User disconnected:', socket.id, reason);
