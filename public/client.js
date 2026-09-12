@@ -21,13 +21,12 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
 let groupPasswordTarget = null;
+const groupStartGate = document.querySelector('#groupStartGate');
+const groupStartList = document.querySelector('#groupStartList');
 let verifiedGroupPasswords = new Map();
 let selectionMode = false;
 const selectedMessageIds = new Set();
-while (!name) {
-  name = (prompt('Please enter your name:') || '').trim();
-}
-localStorage.setItem('wa_name', name);
+
 
 document.title = 'WhatsApp';
 
@@ -1049,6 +1048,28 @@ socket.on('group-updated', data => {
   if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
 });
 
+function setGroupStartGate(visible){
+  groupStartGate?.classList.toggle('hidden', !visible);
+  app?.classList.toggle('group-locked', visible);
+}
+
+function renderGroupStartList(){
+  if(!groupStartList) return;
+  groupStartList.innerHTML='';
+  if(!groups.length){ groupStartList.innerHTML='<div class="group-start-empty">No groups available.</div>'; return; }
+  groups.forEach(group=>{
+    const button=document.createElement('button');
+    button.type='button'; button.className='group-start-item';
+    const avatar=document.createElement('div'); avatar.className='group-start-avatar'; avatar.textContent=firstCharacter(group.name);
+    const text=document.createElement('div'); text.className='group-start-item-text';
+    const strong=document.createElement('strong'); strong.textContent=group.name;
+    const span=document.createElement('span'); span.textContent='🔒 Password required';
+    text.append(strong,span); button.append(avatar,text);
+    button.addEventListener('click',()=>openGroup(group));
+    groupStartList.appendChild(button);
+  });
+}
+
 async function loadGroups() {
   try {
     const response = await fetch('/api/groups', { cache: 'no-store' });
@@ -1078,10 +1099,14 @@ async function loadGroups() {
       updateGroupNameUI();
     }
     renderGroupList();
+    renderGroupStartList();
+    setGroupStartGate(true);
   } catch (_) {
     groups = [];
     currentGroupId = '';
     renderGroupList();
+    renderGroupStartList();
+    setGroupStartGate(true);
     updateGroupNameUI();
   }
 }
@@ -1133,6 +1158,10 @@ async function verifyAndOpenGroup() {
 }
 
 async function joinGroup(groupId, openAfter=true) {
+  if (!name) {
+    while (!name) name=(prompt('Please enter your name:')||'').trim();
+    localStorage.setItem('wa_name',name);
+  }
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
   groupName = group.name || 'WhatsApp';
@@ -1149,6 +1178,7 @@ async function joinGroup(groupId, openAfter=true) {
   });
   await syncMessages();
   if (openAfter) openChat();
+  setGroupStartGate(false);
 }
 
 loadGroups();
