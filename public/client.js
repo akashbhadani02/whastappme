@@ -243,7 +243,7 @@ async function setupWebPush() {
     const saveResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, subscription })
+      body: JSON.stringify({ userId, groupId: currentGroupId, subscription })
     });
     if (!saveResponse.ok) return false;
     const saveData = await saveResponse.json().catch(() => ({}));
