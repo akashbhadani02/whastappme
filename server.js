@@ -1788,7 +1788,7 @@ io.on('connection', async (socket) => {
       for (const targetId of room) {
         if (targetId === socket.id) continue;
         const target = io.sockets.sockets.get(targetId);
-        if (target && normalizeGroupId(target.groupId) === groupId && target.authorizedGroups?.has(groupId)) {
+        if (target && target.authorizedGroups?.has(groupId)) {
           target.emit('incoming-call', invite);
           notified.add(targetId);
         }
@@ -1796,7 +1796,7 @@ io.on('connection', async (socket) => {
     }
     for (const target of io.sockets.sockets.values()) {
       if (notified.has(target.id)) continue;
-      if (normalizeGroupId(target.groupId) === groupId && target.authorizedGroups?.has(groupId)) {
+      if (target.authorizedGroups?.has(groupId)) {
         target.emit('incoming-call', invite);
         notified.add(target.id);
       }
@@ -1806,7 +1806,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (call && (normalizeGroupId(socket.groupId) !== normalizeGroupId(call.groupId) || !socket.authorizedGroups?.has(call.groupId))) {
+    if (call && !socket.authorizedGroups?.has(call.groupId)) {
       return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group call.' });
     }
     if (!call) {
