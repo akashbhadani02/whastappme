@@ -1844,11 +1844,13 @@ updateAdvancedTools();
   function startRecordingTimer(){
     clearInterval(recordingTimerInterval); recordingTimerStartedAt=Date.now();
     callRecordingTimer?.classList.remove('hidden');
-    const tick=()=>{if(callRecordingTimer)callRecordingTimer.textContent=`🔴 ${formatRecordingTime(Date.now()-recordingTimerStartedAt)}`};
+    callRecordingTimer?.classList.add('recording-active');
+    const tick=()=>{if(callRecordingTimer)callRecordingTimer.textContent=`🔴 REC ${formatRecordingTime(Date.now()-recordingTimerStartedAt)}`};
     tick(); recordingTimerInterval=setInterval(tick,1000);
   }
   function stopRecordingTimer(){
     clearInterval(recordingTimerInterval); recordingTimerInterval=null; recordingTimerStartedAt=0;
+    callRecordingTimer?.classList.remove('recording-active');
     callRecordingTimer?.classList.add('hidden');
   }
   function stopFeedRecordings(){
@@ -1912,7 +1914,13 @@ updateAdvancedTools();
     swappingCamera=true;
     try{
       const nextFacing=cameraFacing==='user'?'environment':'user';
-      const cam=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:nextFacing},width:{ideal:1280},height:{ideal:720}},audio:false});
+      let cam;
+      try {
+        cam=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:nextFacing},width:{ideal:1280},height:{ideal:720}},audio:false});
+      } catch (_) {
+        // Some phones do not accept exact facingMode constraints; retry with an ideal hint.
+        cam=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:nextFacing},width:{ideal:1280},height:{ideal:720}},audio:false});
+      }
       const newTrack=cam.getVideoTracks()[0];
       if(!newTrack)throw new Error('Camera switch failed');
       for(const {pc} of peers.values()){
