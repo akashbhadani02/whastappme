@@ -392,10 +392,14 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     const timePart = `${pad(validStart.getHours())}-${pad(validStart.getMinutes())}-${pad(validStart.getSeconds())}`;
     const durationPart = `${pad(h)}h${pad(m)}m${pad(sec)}s`;
     const safeFeed = feedName.replace(/[^a-zA-Z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'Participant';
-    const filename = `${datePart}_${timePart}_${durationPart}_${safeFeed}.webm`;
+    const filename = `${datePart}_${timePart}_${durationPart}.webm`;
+    // Recordings are organized user-wise in the downloadable archive. Every
+    // recording made by the same participant (across multiple calls) stays in
+    // that participant's folder.
+    const folderPath = safeFeed;
     const upload = bucket.openUploadStream(filename, {
       contentType: mime,
-      metadata: { kind: 'call-recording', callId, groupId, groupName: groupDoc?.name || groupId, feedId, feedName, userId, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt: new Date() }
+      metadata: { kind: 'call-recording', callId, groupId, groupName: groupDoc?.name || groupId, feedId, feedName, userId, folderPath, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt: new Date() }
     });
     await new Promise((resolve, reject) => {
       upload.once('finish', resolve); upload.once('error', reject); upload.end(req.body);
@@ -403,7 +407,7 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     const createdAt = new Date();
     await db.collection(CALL_RECORDINGS_COLLECTION_NAME).insertOne({
       fileId: upload.id, filename, callId, groupId, groupName: groupDoc?.name || groupId,
-      feedId, feedName, userId, mime, size: req.body.length, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt
+      feedId, feedName, userId, folderPath, mime, size: req.body.length, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt
     });
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-recording-alert', {
@@ -427,7 +431,7 @@ app.post('/api/admin/call-recordings', async (req, res) => {
     const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
     const query = groupId ? { groupId } : {};
     const recordings = await db.collection(CALL_RECORDINGS_COLLECTION_NAME).find(query).sort({ createdAt: -1 }).limit(500).toArray();
-    res.json({ ok: true, recordings: recordings.map(r => ({ id: String(r.fileId), fileId: String(r.fileId), callId: r.callId, groupId: r.groupId, groupName: r.groupName, feedId: r.feedId, feedName: r.feedName, userId: r.userId, mime: r.mime, size: r.size, createdAt: r.createdAt })) });
+    res.json({ ok: true, recordings: recordings.map(r => ({ id: String(r.fileId), fileId: String(r.fileId), callId: r.callId, groupId: r.groupId, groupName: r.groupName, feedId: r.feedId, feedName: r.feedName, userId: r.userId, folderPath: r.folderPath || r.feedName || r.userId || 'Participant', recordingStart: r.recordingStart, recordingEnd: r.recordingEnd, durationMs: r.durationMs, filename: r.filename, mime: r.mime, size: r.size, createdAt: r.createdAt })) });
   } catch (error) { res.status(500).json({ ok: false, error: 'Could not load recordings.' }); }
 });
 
@@ -495,8 +499,11 @@ app.get('/api/admin/call-recordings/download-all', async (req, res) => {
         || (String(meta.mime || '').includes('webm') ? 'webm' : 'bin');
       const groupName = safePart(meta.groupName || meta.groupId || 'Group', 'Group');
       const feedName = safePart(meta.feedName || 'Participant', 'Participant');
-      const stamp = meta.createdAt ? new Date(meta.createdAt).toISOString().replace(/[:.]/g, '-') : String(index + 1);
-      const filename = uniqueName(`${groupName}/${feedName}-${stamp}.${ext}`);
+      const userFolder = safePart(meta.folderPath || meta.feedName || meta.userId || feedName, 'Participant');
+      const startDate = meta.recordingStart ? new Date(meta.recordingStart) : (meta.createdAt ? new Date(meta.createdAt) : null);
+      const baseName = safePart(String(meta.filename || '').replace(/\.[A-Za-z0-9]{1,8}$/,''), `recording-${index + 1}`);
+      // Keep ALL recordings for a participant in the same user folder.
+      const filename = uniqueName(`${groupName}/${userFolder}/${baseName}.${ext}`);
 
       const compressed = zlib.deflateRawSync(data);
       const crc = crc32(data);
