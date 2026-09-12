@@ -114,7 +114,6 @@ const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClo
 const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
 const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
 const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
-const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordingsDownloadAll');
 const adminMediaViewModal = document.querySelector('#adminMediaViewModal');
 const adminMediaViewClose = document.querySelector('#adminMediaViewClose');
 const adminMediaViewTitle = document.querySelector('#adminMediaViewTitle');
@@ -1060,6 +1059,7 @@ async function loadGroups() {
     const saved = groups.find(g => g.id === currentGroupId);
     const selected = saved || groups[0];
     currentGroupId = '';
+    app?.classList.add('group-locked');
     composer?.classList.add('hidden');
     messageArea.innerHTML = '';
     messages.clear();
@@ -1137,6 +1137,7 @@ async function joinGroup(groupId, openAfter=true) {
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
   groupName = group.name || 'WhatsApp';
+  app?.classList.remove('group-locked');
   composer?.classList.remove('hidden');
   localStorage.setItem('wa_group_id', currentGroupId);
   localStorage.setItem('wa_group_name', groupName);
@@ -1491,7 +1492,6 @@ adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === admi
 adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
 adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
 adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
-adminCallRecordingsDownloadAll?.addEventListener('click', () => { const a=document.createElement('a'); a.href=`/api/admin/call-recordings/download-all?password=${encodeURIComponent(PASSWORD)}`; a.download='call-recordings-all-groups.zip'; document.body.appendChild(a); a.click(); a.remove(); });
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });

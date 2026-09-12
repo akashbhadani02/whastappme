@@ -30,6 +30,20 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 .composer{min-height:60px;background:var(--wa-panel);display:flex;align-items:flex-end;gap:5px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));z-index:5}.composer textarea{flex:1;min-width:0;resize:none;border:0;outline:0;border-radius:9px;background:#fff;min-height:42px;max-height:120px;padding:11px 14px;font-size:15px;line-height:20px}.send-btn{width:42px;height:42px;border-radius:50%;background:var(--wa-green);color:#fff;font-size:19px;display:grid;place-items:center;flex:none}.send-btn:hover{background:#008f72}
 .modal{position:fixed;inset:0;background:rgba(11,20,26,.55);display:grid;place-items:center;z-index:100;padding:16px}.modal.hidden{display:none}.modal-card{width:min(92vw,380px);max-height:calc(100dvh - 32px);overflow:auto;background:#fff;border-radius:12px;padding:28px;position:relative;text-align:center;box-shadow:0 12px 40px #0004}.modal-close{position:absolute;right:12px;top:8px;font-size:26px;color:#667781}.lock-icon{font-size:35px;margin-bottom:8px}.modal-card h3{font-size:20px;margin-bottom:6px}.modal-card p{font-size:13px;color:#667781;margin-bottom:18px}.modal-card input{width:100%;border:1px solid #cfd5d8;border-radius:7px;padding:12px;outline:0}.modal-card input:focus{border-color:var(--wa-green)}.primary-btn{width:100%;margin-top:14px;background:var(--wa-green);color:#fff;padding:11px;border-radius:7px;font-weight:600}.password-error{height:18px;color:#d32f2f;font-size:12px;padding-top:5px}.toast{position:fixed;bottom:80px;left:50%;max-width:calc(100vw - 32px);transform:translateX(-50%) translateY(15px);background:#202c33;color:#fff;padding:10px 16px;border-radius:7px;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:200;text-align:center}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 @media (min-width:761px){.app-shell{max-width:1450px;height:96dvh;box-shadow:0 4px 25px #0002;border-radius:2px}.chat-panel{display:flex!important}.sidebar{display:flex!important}}
+
+/* Before a group password is verified, keep the existing desktop two-panel layout
+   but show no group name, messages, composer, or call controls in the chat panel.
+   Groups are selected from the normal left sidebar list. */
+@media (min-width:761px){
+  .app-shell.group-locked .chat-panel{position:relative;background:var(--wa-chat);}
+  .app-shell.group-locked .chat-panel > *{visibility:hidden!important;pointer-events:none!important;}
+  .app-shell.group-locked .chat-panel::after{
+    content:'Select a group from the left panel';
+    position:absolute;inset:0;display:grid;place-items:center;
+    color:var(--wa-muted);font-size:15px;font-weight:500;
+    visibility:visible;pointer-events:none;
+  }
+}
 @media (max-width:760px){
  html,body{background:#fff}body{display:block}.app-shell{width:100%;height:100dvh;min-height:100dvh;position:relative;padding-bottom:env(safe-area-inset-bottom)}.sidebar{width:100%;min-width:0;height:100%;border-right:0}.chat-panel{display:none;width:100%;height:100%;min-height:0}.app-shell.chat-open .sidebar{display:none}.app-shell.chat-open .chat-panel{display:flex}
  .sidebar-top{height:58px;min-height:58px;padding:0 10px}.top-actions{gap:0}.search-wrap{margin:7px 10px 5px;height:46px;min-height:46px}.filter-row{padding:4px 10px 9px}.chat-item{padding:11px 12px;gap:12px}.chat-list{-webkit-overflow-scrolling:touch}.sidebar-footer{display:none}
