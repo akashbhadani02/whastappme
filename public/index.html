@@ -72,7 +72,7 @@
 
       <div class="typing-bar" id="typingBar">typing…</div>
 
-      <footer class="composer">
+      <footer class="composer hidden" id="composer">
         <button class="round-btn" id="cameraBtn" title="Open camera" aria-label="Open camera">📷</button>
         <button class="round-btn gallery-btn" id="galleryBtn" title="Choose photo or video from gallery" aria-label="Choose photo or video from gallery">🖼️</button>
         <input type="file" id="cameraInput" accept="image/*,video/*" capture="environment" hidden>
@@ -85,16 +85,11 @@
 
   <div class="camera-modal hidden" id="cameraModal" role="dialog" aria-modal="true" aria-label="Camera">
     <div class="camera-card">
-      <div class="camera-preview-wrap"><video id="cameraPreview" autoplay playsinline muted></video><div id="cameraRecordTimer" class="camera-record-timer hidden">● 00:00</div></div>
-      <video id="cameraReviewVideo" class="camera-review hidden" controls playsinline></video>
-      <img id="cameraReviewImage" class="camera-review hidden" alt="Camera preview">
+      <video id="cameraPreview" autoplay playsinline muted></video>
       <div class="camera-controls">
         <button class="round-btn" id="cameraCloseBtn" title="Close camera">×</button>
-        <button class="round-btn" id="cameraSwitchBtn" title="Switch front/rear camera">🔄</button>
         <button class="camera-shutter" id="cameraPhotoBtn" title="Take photo">●</button>
         <button class="round-btn" id="cameraRecordBtn" title="Record video">🎥</button>
-        <button class="round-btn camera-send-btn hidden" id="cameraSendBtn" title="Send">➤</button>
-        <button class="round-btn camera-cancel-btn hidden" id="cameraCancelBtn" title="Cancel">↩</button>
       </div>
     </div>
   </div>
