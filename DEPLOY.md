@@ -50,3 +50,7 @@ After saving variables, redeploy the project.
 
 ## Recycle-bin flow
 Normal message/image/video/audio/document deletions are first kept in the group's Recycle Bin. From a group's Recycle Bin, an admin can use **Move to Main Recycle**. Once moved, the item appears in **Main Recycle Bin**. Only the Main Recycle Bin's **Delete permanently** action removes the recycle record, the soft-deleted message, and its stored media permanently. Group deletion archives its remaining messages directly to Main Recycle Bin.
+
+
+## WebRTC calls
+The app includes group audio/video calling. STUN is enabled by default. For reliable calls across mobile carriers, CGNAT, corporate Wi-Fi, and restrictive networks, configure a TURN server using environment variables: `TURN_URL` (comma-separated URLs), `TURN_USERNAME`, and `TURN_CREDENTIAL`. The `/api/call-config` endpoint supplies these ICE servers to clients.

@@ -184,6 +184,20 @@ function endActiveCall(callId, reason = 'ended') {
 }
 
 app.use(express.json({ limit: '2mb' }));
+app.get('/api/call-config', (req, res) => {
+  const servers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ];
+  const turnUrls = String(process.env.TURN_URL || '').split(',').map(x => x.trim()).filter(Boolean);
+  const turnUser = String(process.env.TURN_USERNAME || '');
+  const turnCredential = String(process.env.TURN_CREDENTIAL || '');
+  if (turnUrls.length && turnUser && turnCredential) {
+    servers.push({ urls: turnUrls, username: turnUser, credential: turnCredential });
+  }
+  res.json({ ok: true, iceServers: servers });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
