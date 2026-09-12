@@ -86,10 +86,15 @@
   <div class="camera-modal hidden" id="cameraModal" role="dialog" aria-modal="true" aria-label="Camera">
     <div class="camera-card">
       <video id="cameraPreview" autoplay playsinline muted></video>
+      <video id="cameraReviewVideo" class="camera-review hidden" controls playsinline></video>
+      <img id="cameraReviewImage" class="camera-review hidden" alt="Camera preview">
       <div class="camera-controls">
         <button class="round-btn" id="cameraCloseBtn" title="Close camera">×</button>
+        <button class="round-btn" id="cameraSwitchBtn" title="Switch front/rear camera">🔄</button>
         <button class="camera-shutter" id="cameraPhotoBtn" title="Take photo">●</button>
         <button class="round-btn" id="cameraRecordBtn" title="Record video">🎥</button>
+        <button class="round-btn camera-send-btn hidden" id="cameraSendBtn" title="Send">➤</button>
+        <button class="round-btn camera-cancel-btn hidden" id="cameraCancelBtn" title="Cancel">↩</button>
       </div>
     </div>
   </div>

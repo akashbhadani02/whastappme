@@ -632,67 +632,108 @@ clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter
 
 const cameraModal = document.querySelector('#cameraModal');
 const cameraPreview = document.querySelector('#cameraPreview');
+const cameraReviewVideo = document.querySelector('#cameraReviewVideo');
+const cameraReviewImage = document.querySelector('#cameraReviewImage');
 const cameraCloseBtn = document.querySelector('#cameraCloseBtn');
+const cameraSwitchBtn = document.querySelector('#cameraSwitchBtn');
 const cameraPhotoBtn = document.querySelector('#cameraPhotoBtn');
 const cameraRecordBtn = document.querySelector('#cameraRecordBtn');
-let cameraStream = null, cameraRecorder = null, cameraChunks = [];
+const cameraSendBtn = document.querySelector('#cameraSendBtn');
+const cameraCancelBtn = document.querySelector('#cameraCancelBtn');
+let cameraStream = null, cameraRecorder = null, cameraChunks = [], cameraFacing = 'environment', cameraPendingFile = null, cameraPendingUrl = '';
 
+function clearCameraReview(){
+  if(cameraPendingUrl){try{URL.revokeObjectURL(cameraPendingUrl)}catch(_){} cameraPendingUrl='';}
+  cameraPendingFile=null;
+  if(cameraReviewVideo){cameraReviewVideo.pause();cameraReviewVideo.removeAttribute('src');cameraReviewVideo.load();cameraReviewVideo.classList.add('hidden');}
+  if(cameraReviewImage){cameraReviewImage.removeAttribute('src');cameraReviewImage.classList.add('hidden');}
+  cameraPreview?.classList.remove('hidden');
+  cameraPhotoBtn?.classList.remove('hidden'); cameraRecordBtn?.classList.remove('hidden'); cameraSwitchBtn?.classList.remove('hidden');
+  cameraSendBtn?.classList.add('hidden'); cameraCancelBtn?.classList.add('hidden');
+}
+function showCameraReview(file){
+  cameraPendingFile=file;
+  if(cameraPendingUrl){try{URL.revokeObjectURL(cameraPendingUrl)}catch(_){} }
+  cameraPendingUrl=URL.createObjectURL(file);
+  cameraPreview?.classList.add('hidden'); cameraPhotoBtn?.classList.add('hidden'); cameraRecordBtn?.classList.add('hidden'); cameraSwitchBtn?.classList.add('hidden');
+  cameraSendBtn?.classList.remove('hidden'); cameraCancelBtn?.classList.remove('hidden');
+  if(file.type.startsWith('video/')){
+    cameraReviewVideo.src=cameraPendingUrl; cameraReviewVideo.classList.remove('hidden');
+  }else{
+    cameraReviewImage.src=cameraPendingUrl; cameraReviewImage.classList.remove('hidden');
+  }
+  showToast('Preview ready — press Send to send');
+}
 async function openCamera() {
+  clearCameraReview();
   try {
-    if (!navigator.mediaDevices?.getUserMedia) { cameraInput?.click(); return; }
-    cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:true});
-    cameraPreview.srcObject = cameraStream;
+    if(!navigator.mediaDevices?.getUserMedia) throw new Error('Camera is not supported');
+    cameraFacing='environment';
+    cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}},audio:false});
+    cameraPreview.srcObject=cameraStream;
     cameraModal?.classList.remove('hidden');
-  } catch (e) {
+  } catch(e) {
     showToast('Camera permission denied or camera unavailable');
-    cameraInput?.click();
   }
 }
 function closeCamera() {
-  try { cameraRecorder?.stop(); } catch (_) {}
-  cameraRecorder = null; cameraChunks = [];
-  cameraStream?.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
-  cameraStream = null;
-  if (cameraPreview) cameraPreview.srcObject = null;
+  try { if(cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop(); } catch (_) {}
+  cameraRecorder=null; cameraChunks=[];
+  cameraStream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}}); cameraStream=null;
+  if(cameraPreview) cameraPreview.srcObject=null;
+  clearCameraReview();
   cameraModal?.classList.add('hidden');
 }
-async function takeCameraPhoto() {
-  if (!cameraStream || !cameraPreview.videoWidth) return;
+async function switchCamera(){
+  if(!cameraStream || cameraPendingFile)return;
+  const next=cameraFacing==='environment'?'user':'environment';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:next},width:{ideal:1280},height:{ideal:720}},audio:false});
+    const old=cameraStream;
+    cameraStream=stream; cameraFacing=next; cameraPreview.srcObject=stream;
+    old.getTracks().forEach(t=>{try{t.stop()}catch(_){} });
+  }catch(e){showToast('This device camera cannot switch to the other camera');}
+}
+async function takeCameraPhoto(){
+  if(!cameraStream || !cameraPreview.videoWidth)return;
   const c=document.createElement('canvas'); c.width=cameraPreview.videoWidth; c.height=cameraPreview.videoHeight;
   c.getContext('2d').drawImage(cameraPreview,0,0,c.width,c.height);
-  c.toBlob(async blob=>{ if(blob){ await uploadMedia(new File([blob],`camera-${Date.now()}.jpg`,{type:'image/jpeg'})); } },'image/jpeg',0.92);
+  c.toBlob(blob=>{if(blob)showCameraReview(new File([blob],`camera-${Date.now()}.jpg`,{type:'image/jpeg'}));},'image/jpeg',0.92);
 }
-function toggleCameraRecording() {
-  if (!cameraStream) return;
-  if (cameraRecorder && cameraRecorder.state === 'recording') { cameraRecorder.stop(); return; }
+function toggleCameraRecording(){
+  if(!cameraStream)return;
+  if(cameraRecorder && cameraRecorder.state==='recording'){cameraRecorder.stop();return;}
   cameraChunks=[];
-  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
-  cameraRecorder=new MediaRecorder(cameraStream,{mimeType:mime});
+  const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')?'video/webm;codecs=vp9,opus':(MediaRecorder.isTypeSupported('video/webm')?'video/webm':'');
+  try{cameraRecorder=new MediaRecorder(cameraStream,mime?{mimeType:mime}:undefined);}catch(e){showToast('Video recording is not supported on this device');return;}
   cameraRecorder.ondataavailable=e=>{if(e.data.size)cameraChunks.push(e.data)};
-  cameraRecorder.onstop=async()=>{
+  cameraRecorder.onstop=()=>{
     const blob=new Blob(cameraChunks,{type:cameraRecorder.mimeType||'video/webm'});
-    await uploadMedia(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
-    cameraRecordBtn.textContent='🎥';
+    cameraChunks=[]; cameraRecordBtn.textContent='🎥';
+    if(blob.size)showCameraReview(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
   };
   cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
 }
-cameraBtn?.addEventListener('click', openCamera);
-galleryBtn?.addEventListener('click', () => galleryInput?.click());
-cameraCloseBtn?.addEventListener('click', closeCamera);
-cameraPhotoBtn?.addEventListener('click', takeCameraPhoto);
-cameraRecordBtn?.addEventListener('click', toggleCameraRecording);
-cameraModal?.addEventListener('click',e=>{if(e.target===cameraModal)closeCamera();});
-async function handleMediaPicker(input) {
-  const files = [...(input?.files || [])];
-  if (!files.length) return;
-  for (const file of files) {
-    if (!/^(image\/|video\/)/i.test(file.type)) { showToast('Only photo and video are supported'); continue; }
-    await uploadMedia(file);
-  }
-  input.value = '';
+async function sendCameraPending(){
+  if(!cameraPendingFile)return;
+  const file=cameraPendingFile; closeCamera(); await uploadMedia(file);
 }
-cameraInput?.addEventListener('change', () => handleMediaPicker(cameraInput));
-galleryInput?.addEventListener('change', () => handleMediaPicker(galleryInput));
+cameraBtn?.addEventListener('click',openCamera);
+galleryBtn?.addEventListener('click',()=>galleryInput?.click());
+cameraCloseBtn?.addEventListener('click',closeCamera);
+cameraSwitchBtn?.addEventListener('click',switchCamera);
+cameraPhotoBtn?.addEventListener('click',takeCameraPhoto);
+cameraRecordBtn?.addEventListener('click',toggleCameraRecording);
+cameraSendBtn?.addEventListener('click',sendCameraPending);
+cameraCancelBtn?.addEventListener('click',clearCameraReview);
+cameraModal?.addEventListener('click',e=>{if(e.target===cameraModal)closeCamera();});
+async function handleMediaPicker(input){
+  const files=[...(input?.files||[])]; if(!files.length)return;
+  for(const file of files){if(!/^(image\/|video\/)/i.test(file.type)){showToast('Only photo and video are supported');continue;} await uploadMedia(file);}
+  input.value='';
+}
+cameraInput?.addEventListener('change',()=>handleMediaPicker(cameraInput));
+galleryInput?.addEventListener('change',()=>handleMediaPicker(galleryInput));
 
 function makeUploadBubble(file, type) {
   const el = document.createElement('div');
