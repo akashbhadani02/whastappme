@@ -1645,41 +1645,48 @@ io.on('connection', async (socket) => {
     });
   });
 
-  socket.on('call-leave', (data) => {
-    const callId = String(data?.callId || socket.callId || ''), call = activeCalls.get(callId);
-    if (!call || !call.participants.has(socket.id)) return;
-    const name = String(data?.name || '').slice(0, 60);
-    // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.to(callRoom(call.groupId)).emit('call-ended', {
-      callId, reason: 'ended', endedBy: socket.id, name
-    });
+  // End the entire group call. A single participant pressing Cut/End or a
+  // member declining the incoming call terminates the same call for everyone.
+  const terminateCall = (callId, reason, actorSocketId, actorName) => {
+    const call = activeCalls.get(String(callId || ''));
+    if (!call) return false;
+    const room = callRoom(call.groupId);
+    const payload = {
+      callId: call.callId,
+      reason,
+      endedBy: reason === 'ended' ? actorSocketId : undefined,
+      declinedBy: reason === 'declined' ? actorSocketId : undefined,
+      name: String(actorName || '').slice(0, 60)
+    };
+    // Notify every participant explicitly, not only the currently active room,
+    // so no connected participant can remain stuck in the call UI.
     for (const participantId of call.participants) {
       const participantSocket = io.sockets.sockets.get(participantId);
       if (participantSocket) {
-        participantSocket.leave(callRoom(call.groupId));
+        participantSocket.emit('call-ended', payload);
+        participantSocket.leave(room);
         participantSocket.callId = '';
         participantSocket.callType = '';
       }
     }
-    activeCalls.delete(callId);
+    activeCalls.delete(call.callId);
+    return true;
+  };
+
+  socket.on('call-leave', (data) => {
+    const callId = String(data?.callId || socket.callId || '');
+    const call = activeCalls.get(callId);
+    if (!call || !call.participants.has(socket.id)) return;
+    // Cut/End by ANY participant ends the call for ALL participants.
+    terminateCall(callId, 'ended', socket.id, data?.name);
   });
 
   socket.on('call-reject', (data) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
     if (!call || !socket.authorizedGroups?.has(call.groupId)) return;
-    const name = String(data?.name || '').slice(0, 60);
-    // If ANY group member declines, terminate the whole group call for everyone.
-    io.to(callRoom(call.groupId)).emit('call-ended', {
-      callId, reason: 'declined', declinedBy: socket.id, name
-    });
-    for (const participantId of call.participants) {
-      const participantSocket = io.sockets.sockets.get(participantId);
-      if (participantSocket) {
-        participantSocket.callId = '';
-        participantSocket.callType = '';
-      }
-    }
-    activeCalls.delete(callId);
+    // Declining by ANY invited member also ends the active call for everyone
+    // who has already joined it.
+    terminateCall(callId, 'declined', socket.id, data?.name);
   });
 
   socket.on('disconnect', (reason) => {
