@@ -649,19 +649,22 @@ function makeUploadBubble(file, type) {
   placeholder.className = 'upload-placeholder';
   placeholder.innerHTML = `<div class="upload-icon">${type === 'video' ? '🎥' : '📷'}</div><div class="upload-name"></div>`;
   placeholder.querySelector('.upload-name').textContent = file.name;
+  const status = document.createElement('div'); status.className='upload-status'; status.textContent='Preparing upload…';
+  wrap.appendChild(status);
   const ring = document.createElement('div'); ring.className = 'upload-ring';
   ring.innerHTML = '<svg viewBox="0 0 72 72" aria-hidden="true"><circle class="upload-track" cx="36" cy="36" r="31"></circle><circle class="upload-progress" cx="36" cy="36" r="31"></circle></svg><span class="upload-percent">0%</span>';
   wrap.appendChild(placeholder); wrap.appendChild(ring);
   content.appendChild(wrap); el.appendChild(content);
   const meta=document.createElement('div'); meta.className='meta'; meta.textContent=now(); el.appendChild(meta);
   messageArea.appendChild(el); scrollToBottom();
-  return { el, ring, percent: ring.querySelector('.upload-percent'), progress: ring.querySelector('.upload-progress') };
+  return { el, ring, percent: ring.querySelector('.upload-percent'), progress: ring.querySelector('.upload-progress'), status };
 }
 
 function setUploadProgress(ui, percent, text) {
   if (!ui) return;
   const value = Math.max(0, Math.min(100, percent));
   ui.percent.textContent = text || `${Math.round(value)}%`;
+  if (ui.status && !text) ui.status.textContent = value >= 100 ? 'Sending…' : `Uploading… ${Math.round(value)}%`;
   const circumference = 2 * Math.PI * 31;
   ui.progress.style.strokeDasharray = `${circumference}`;
   ui.progress.style.strokeDashoffset = `${circumference * (1 - value / 100)}`;
@@ -703,6 +706,7 @@ async function uploadMedia(file) {
       setUploadProgress(ui, sent / file.size * 100);
     }
     let finish, result;
+    if (ui.status) ui.status.textContent = 'Sending… finalizing video';
     for (let attempt=0; attempt<3; attempt++) {
       finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }), cache:'no-store' });
       result = await finish.json().catch(() => ({}));
@@ -711,12 +715,14 @@ async function uploadMedia(file) {
     }
     if (!result.ok) throw new Error(result.error || 'Media upload could not finish');
     setUploadProgress(ui, 100, '✓');
+    if (ui.status) ui.status.textContent = 'Sent ✓';
     ui.el.classList.add('upload-done');
-    setTimeout(() => ui.el.remove(), 450);
+    setTimeout(() => ui.el.remove(), 1400);
     renderMessage(result.message, 'outgoing');
     updatePreview(type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : type === 'audio' ? '🎤 Voice message' : '📎 Document');
   } catch (error) {
     ui.el.classList.add('upload-error');
+    if (ui.status) ui.status.textContent = 'Upload failed — tap attach and try again';
     setUploadProgress(ui, 0, '↻');
     showToast(error.message || 'Media upload failed');
     setTimeout(() => ui.el.remove(), 2200);
