@@ -10,6 +10,15 @@
   <meta name="theme-color" content="#075e54">
 </head>
 <body>
+  <div class="group-gate" id="groupGate" aria-label="Select a group">
+    <div class="group-gate-card">
+      <div class="group-gate-icon">🔒</div>
+      <h2>Select a group</h2>
+      <p>Select your group first. The group will open only after the correct password is entered.</p>
+      <div id="groupGateList" class="group-gate-list"></div>
+      <div id="groupGateError" class="password-error"></div>
+    </div>
+  </div>
   <main class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-top">
@@ -72,7 +81,7 @@
 
       <div class="typing-bar" id="typingBar">typing…</div>
 
-      <footer class="composer hidden" id="composer">
+      <footer class="composer">
         <button class="round-btn" id="cameraBtn" title="Open camera" aria-label="Open camera">📷</button>
         <button class="round-btn gallery-btn" id="galleryBtn" title="Choose photo or video from gallery" aria-label="Choose photo or video from gallery">🖼️</button>
         <input type="file" id="cameraInput" accept="image/*,video/*" capture="environment" hidden>

@@ -17,6 +17,11 @@ if (!userId) {
   localStorage.setItem('wa_user_id', userId);
 }
 let name = localStorage.getItem('wa_name') || '';
+function ensureName(){
+  if(name) return;
+  while(!name){ name=(prompt('Please enter your name:')||'').trim(); }
+  localStorage.setItem('wa_name',name);
+}
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
@@ -24,11 +29,6 @@ let groupPasswordTarget = null;
 let verifiedGroupPasswords = new Map();
 let selectionMode = false;
 const selectedMessageIds = new Set();
-while (!name) {
-  name = (prompt('Please enter your name:') || '').trim();
-}
-localStorage.setItem('wa_name', name);
-
 document.title = 'WhatsApp';
 
 // UI protection: disable common browser context-menu/selection/drag shortcuts.
@@ -50,6 +50,9 @@ document.addEventListener('keydown', e => {
 }, true);
 
 const app = document.querySelector('.app-shell');
+const groupGate = document.querySelector('#groupGate');
+const groupGateList = document.querySelector('#groupGateList');
+const groupGateError = document.querySelector('#groupGateError');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
 const cameraInput = document.querySelector('#cameraInput');
@@ -57,7 +60,6 @@ const galleryInput = document.querySelector('#galleryInput');
 const sendBtn = document.querySelector('#sendBtn');
 const cameraBtn = document.querySelector('#cameraBtn');
 const galleryBtn = document.querySelector('#galleryBtn');
-const composer = document.querySelector('#composer');
 const clearChatBtn = document.querySelector('#clearChatBtn');
 const selectionActions = document.querySelector('#selectionActions');
 const selectionCount = document.querySelector('#selectionCount');
@@ -1027,7 +1029,6 @@ socket.on('group-deleted', data => {
   if (!data || !data.id) return;
   groups = groups.filter(g => g.id !== data.id);
   if (currentGroupId === data.id) {
-    composer?.classList.add('hidden');
     const fallback = groups.find(g => g.id === 'main') || groups[0];
     if (fallback) {
       currentGroupId = fallback.id;
@@ -1049,17 +1050,44 @@ socket.on('group-updated', data => {
   if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
 });
 
+function setGroupGateVisible(visible){
+  if(groupGate) groupGate.classList.toggle('hidden', !visible);
+  if(app) app.classList.toggle('group-locked', visible);
+}
+
+function renderGroupGate(){
+  if(!groupGateList) return;
+  groupGateList.innerHTML = '';
+  if(!groups.length){
+    groupGateList.innerHTML = '<div class="group-gate-empty">No groups available.</div>';
+    return;
+  }
+  groups.forEach(group => {
+    const button=document.createElement('button');
+    button.type='button'; button.className='group-gate-item';
+    const avatar=document.createElement('span'); avatar.className='group-gate-avatar'; avatar.textContent=firstCharacter(group.name);
+    const text=document.createElement('span'); text.className='group-gate-item-text';
+    text.innerHTML='<strong></strong><small>🔒 Password required</small>';
+    text.querySelector('strong').textContent=group.name || 'Group';
+    button.append(avatar,text);
+    button.addEventListener('click',()=>openGroup(group));
+    groupGateList.appendChild(button);
+  });
+}
+
 async function loadGroups() {
   try {
     const response = await fetch('/api/groups', { cache: 'no-store' });
     const data = await response.json();
     groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
+    setGroupGateVisible(true);
+    if(groupGateError) groupGateError.textContent='';
+    renderGroupGate();
     // Never restore an unlocked group automatically. Every time a group is opened
     // (including after leaving it or reopening it later), its password is required.
     const saved = groups.find(g => g.id === currentGroupId);
     const selected = saved || groups[0];
     currentGroupId = '';
-    composer?.classList.add('hidden');
     messageArea.innerHTML = '';
     messages.clear();
     deletedIds.clear();
@@ -1081,6 +1109,8 @@ async function loadGroups() {
   } catch (_) {
     groups = [];
     currentGroupId = '';
+    setGroupGateVisible(true);
+    renderGroupGate();
     renderGroupList();
     updateGroupNameUI();
   }
@@ -1134,9 +1164,9 @@ async function verifyAndOpenGroup() {
 
 async function joinGroup(groupId, openAfter=true) {
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
+  ensureName();
   currentGroupId = groupId || 'main';
   groupName = group.name || 'WhatsApp';
-  composer?.classList.remove('hidden');
   localStorage.setItem('wa_group_id', currentGroupId);
   localStorage.setItem('wa_group_name', groupName);
   messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
@@ -1148,7 +1178,8 @@ async function joinGroup(groupId, openAfter=true) {
     socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => resolve());
   });
   await syncMessages();
-  if (openAfter) openChat();
+  if (openAfter) openChat();  setGroupGateVisible(false);
+  if(groupGateError) groupGateError.textContent='';
 }
 
 loadGroups();
