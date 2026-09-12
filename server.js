@@ -1576,11 +1576,13 @@ io.on('connection', async (socket) => {
       startedByName: String(data?.name || '').slice(0, 60), createdAt: Date.now()
     };
     activeCalls.set(callId, call);
-    socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    io.to(callRoom(groupId)).emit('incoming-call', {
+    // Notify only members currently joined to this group's chat room.
+    // The caller joins the private call room after the invite is sent.
+    socket.to(`group:${groupId}`).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
+    socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
     if (typeof ack === 'function') ack({ ok: true, callId, type });
   });
 
