@@ -99,8 +99,9 @@ async function startRealtimeBridge() {
     const event = change.fullDocument;
     if (!event || !event.event) return;
     const payload = event.payload;
-    if (event.event === 'clear-chat') io.emit('clear-chat', payload || {});
-    else if (payload !== undefined) io.emit(event.event, payload);
+    const gid = normalizeGroupId(payload?.groupId);
+    if (event.event === 'clear-chat') io.to(`group:${gid}`).emit('clear-chat', payload || {});
+    else if (payload !== undefined) io.to(`group:${gid}`).emit(event.event, payload);
   });
   stream.on('error', (error) => {
     console.error('Realtime MongoDB bridge stopped:', error.message);
@@ -1185,11 +1186,12 @@ app.get('/api/messages', async (req, res) => {
 
 async function saveMessage(msg) {
   const collection = await getCollection();
+  msg = { ...msg, groupId: normalizeGroupId(msg.groupId) };
   if (!collection) return { ...msg, groupId: normalizeGroupId(msg.groupId), createdAt: msg.createdAt || new Date().toISOString() };
 
   const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
   const saved = { ...msg, createdAt };
-  await collection.updateOne({ id: msg.id }, { $setOnInsert: saved }, { upsert: true });
+  await collection.updateOne({ id: msg.id, groupId: msg.groupId }, { $setOnInsert: saved }, { upsert: true });
   return saved;
 }
 
@@ -1231,7 +1233,8 @@ async function sendPushToOtherUsers(msg) {
 
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
-  io.emit(event, saved);
+  const gid = normalizeGroupId(saved.groupId);
+  io.to(`group:${gid}`).emit(event, saved);
   if (event === 'media') {
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);
@@ -1546,7 +1549,7 @@ io.on('connection', async (socket) => {
       console.error('Failed to save read receipt:', error.message);
     }
     const readEvent = { id: data.id, userId: readerId, groupId: normalizeGroupId(socket.groupId) };
-    io.emit('message-read', readEvent);
+    io.to(`group:${normalizeGroupId(readEvent.groupId)}`).emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
@@ -1562,7 +1565,7 @@ io.on('connection', async (socket) => {
       console.error('Failed to save delivery receipt:', error.message);
     }
     const deliveredEvent = { id: data.id, userId: receiverId, groupId: normalizeGroupId(socket.groupId) };
-    io.emit('message-delivered', deliveredEvent);
+    io.to(`group:${normalizeGroupId(deliveredEvent.groupId)}`).emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
@@ -1580,7 +1583,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast so every instance is immediately consistent.
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
-      io.emit('clear-chat', clearEvent);
+      io.to(`group:${normalizeGroupId(clearEvent.groupId)}`).emit('clear-chat', clearEvent);
       publishRealtimeEvent('clear-chat', clearEvent);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
@@ -1605,7 +1608,7 @@ io.on('connection', async (socket) => {
     // Notify only password-authorized members of the group. Do NOT broadcast
     // to every connected socket: members of other groups must never receive
     // this incoming-call event.
-    io.to(memberRoom(groupId)).emit('incoming-call', {
+    io.to(`group:${groupId}`).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
@@ -1645,7 +1648,7 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.to(memberRoom(call.groupId)).emit('call-ended', {
+    io.to(`group:${normalizeGroupId(call.groupId)}`).emit('call-ended', {
       callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
