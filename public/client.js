@@ -1239,12 +1239,6 @@ document.querySelector('#newChatBtn').addEventListener('click', () => showToast(
 newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 async function requestAdminThen(action) {
-  // Once the admin password has been verified in this browser session,
-  // do not ask for it again every time the admin opens a page/action.
-  if (adminUnlocked) {
-    try { await action(); } catch (_) { showToast('Admin action failed'); }
-    return;
-  }
   requestPassword('Admin password', 'Enter the admin password to manage groups and passwords.', async () => {
     try { await action(); } catch (_) { showToast('Admin action failed'); }
   });
@@ -1313,13 +1307,7 @@ async function loadAdminCallRecordings(groupId = '') {
         }, { once:true });
         thumb.addEventListener('click', () => card.querySelector('.recording-play-overlay').click());
 
-        const openView = () => {
-          if (!adminUnlocked) {
-            requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,safeName,when));
-          } else {
-            showAdminMediaPopup(url,safeName,when);
-          }
-        };
+        const openView = () => requestPassword('Admin password','Enter the admin password to view this call recording.',()=>{ adminCallRecordingsModal.classList.add('hidden'); showAdminMediaPopup(url,safeName,when); });
         card.querySelector('.recording-play-overlay').addEventListener('click', openView);
         card.querySelector('.admin-view-recording-btn').addEventListener('click', openView);
         card.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
@@ -1335,8 +1323,7 @@ async function loadAdminCallRecordings(groupId = '') {
   } catch(e) { adminCallRecordingsList.innerHTML=''; adminCallRecordingsError.textContent=e.message||'Could not load recordings'; }
 }
 function showAdminMediaPopup(url,title,meta=''){
-  // Viewer is already inside the authenticated admin area; no extra password prompt.
-  if (!adminUnlocked) return requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,title,meta));
+  adminCallRecordingsModal?.classList.add('hidden');
   adminMediaViewTitle.textContent=title || 'Call recording';
   adminMediaViewMeta.textContent=meta || '';
   adminMediaViewBody.innerHTML='';
@@ -1345,23 +1332,14 @@ function showAdminMediaPopup(url,title,meta=''){
   video.src=url; video.setAttribute('controlsList','nodownload');
   video.addEventListener('contextmenu',e=>e.preventDefault());
   adminMediaViewBody.appendChild(video);
-
-  const back=document.createElement('button');
-  back.type='button';
-  back.className='mini-btn';
-  back.textContent='← Back to recordings';
-  back.style.marginTop='12px';
-  back.onclick=closeAdminMediaPopup;
-  adminMediaViewBody.appendChild(back);
-
   adminMediaViewModal.classList.remove('hidden');
 }
 
 function closeAdminMediaPopup(){
-  const media=adminMediaViewBody.querySelector('video,audio');
-  try { media?.pause(); } catch (_) {}
+  const wasOpen = !adminMediaViewModal.classList.contains('hidden');
   adminMediaViewBody.innerHTML='';
   adminMediaViewModal.classList.add('hidden');
+  if (wasOpen) adminCallRecordingsModal?.classList.remove('hidden');
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
