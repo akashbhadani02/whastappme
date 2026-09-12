@@ -1774,17 +1774,31 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    // Send the incoming-call invitation only to sockets authorized for this group.
-    // This is intentionally not io.emit() and not a generic group room, because a
-    // member may currently have another group's chat open.
+    // Notify every authorized member of this group. Members currently inside the
+    // group's Socket.IO room are handled first; authorized members who have another
+    // group open are also notified. Use a Set so nobody gets the invitation twice.
+    const notified = new Set([socket.id]);
+    const invite = {
+      callId, groupId, type, fromSocketId: socket.id,
+      fromUserId: call.startedByUserId, fromName: call.startedByName,
+      groupName: String(data?.groupName || '').slice(0, 100)
+    };
+    const room = io.sockets.adapter.rooms.get(callRoom(groupId));
+    if (room) {
+      for (const targetId of room) {
+        if (targetId === socket.id) continue;
+        const target = io.sockets.sockets.get(targetId);
+        if (target && normalizeGroupId(target.groupId) === groupId && target.authorizedGroups?.has(groupId)) {
+          target.emit('incoming-call', invite);
+          notified.add(targetId);
+        }
+      }
+    }
     for (const target of io.sockets.sockets.values()) {
-      if (target.id === socket.id) continue;
-      if (target.authorizedGroups?.has(groupId)) {
-        target.emit('incoming-call', {
-          callId, groupId, type, fromSocketId: socket.id,
-          fromUserId: call.startedByUserId, fromName: call.startedByName,
-          groupName: String(data?.groupName || '').slice(0, 100)
-        });
+      if (notified.has(target.id)) continue;
+      if (normalizeGroupId(target.groupId) === groupId && target.authorizedGroups?.has(groupId)) {
+        target.emit('incoming-call', invite);
+        notified.add(target.id);
       }
     }
     if (typeof ack === 'function') ack({ ok: true, callId, type });
@@ -1792,7 +1806,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (call && !socket.authorizedGroups?.has(call.groupId)) {
+    if (call && (normalizeGroupId(socket.groupId) !== normalizeGroupId(call.groupId) || !socket.authorizedGroups?.has(call.groupId))) {
       return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group call.' });
     }
     if (!call) {
