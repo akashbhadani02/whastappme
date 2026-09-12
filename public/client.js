@@ -52,8 +52,6 @@ const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
 const fileInput = document.querySelector('#fileInput');
-const galleryInput = document.querySelector('#galleryInput');
-const galleryBtn = document.querySelector('#galleryBtn');
 const sendBtn = document.querySelector('#sendBtn');
 const attachBtn = document.querySelector('#attachBtn');
 const emojiBtn = document.querySelector('#emojiBtn');
@@ -463,10 +461,8 @@ function renderMessage(msg, direction) {
     const sender = document.createElement('div'); sender.className='sender'; sender.textContent=msg.user; el.appendChild(sender);
   }
 
-  const content = document.createElement('div');
-  const isMediaMessage = msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'document';
-  if (isMediaMessage) {
-    el.classList.add('media-message');
+  const content = document.createElement('div'); content.className='message-content';
+  if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'document') {
     const wrap = document.createElement('div'); wrap.className='media-wrap';
     const mediaUrl = msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
     if (msg.type === 'image') {
@@ -480,6 +476,7 @@ function renderMessage(msg, direction) {
       const doc=document.createElement('div'); doc.className='document-bubble'; doc.innerHTML='<span class="doc-icon">📄</span><span class="doc-name"></span>'; doc.querySelector('.doc-name').textContent=msg.fileName || 'Document'; wrap.appendChild(doc);
     }
     content.appendChild(wrap);
+    if (msg.message) { const caption=document.createElement('div'); caption.className='message-text media-caption'; caption.textContent=msg.message; content.appendChild(caption); }
     // Voice/audio messages are playback-only: no download action is rendered.
     if (msg.type !== 'audio') {
       const actions=document.createElement('div'); actions.className='media-actions';
@@ -634,31 +631,6 @@ function clearChat(broadcast=true) {
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
-galleryBtn?.addEventListener('click', () => galleryInput?.click());
-galleryInput?.addEventListener('change', async e => {
-  const files = [...(e.target.files || [])];
-  if (!files.length) return;
-  for (const file of files) {
-    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const mediaMime = file.type || ({
-      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
-      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
-      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo'
-    })[ext] || '';
-    const normalized = file.type ? file : new File([file], file.name, {
-      type: mediaMime || 'application/octet-stream',
-      lastModified: file.lastModified
-    });
-    if (!/^image\//i.test(normalized.type) && !/^video\//i.test(normalized.type)) {
-      showToast(`Only photo/video can be shared from Gallery: ${file.name}`);
-      continue;
-    }
-    await uploadMedia(normalized);
-  }
-  e.target.value = '';
-});
-
 fileInput.addEventListener('change', async e => {
   const files=[...e.target.files];
   if (!files.length) return;
@@ -1130,16 +1102,7 @@ async function joinGroup(groupId, openAfter=true) {
     socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
   });
   await syncMessages();
-  // Always open a chat at its newest message, including after loading local
-  // history followed by the server history. Two animation frames ensure images,
-  // videos and other media that affect layout have had a chance to render.
-  if (openAfter) {
-    openChat();
-    requestAnimationFrame(() => {
-      scrollToBottom();
-      requestAnimationFrame(scrollToBottom);
-    });
-  }
+  if (openAfter) openChat();
 }
 
 loadGroups();
@@ -1195,7 +1158,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 
-function scrollToBottom(){ messageArea.scrollTop = messageArea.scrollHeight; }
+function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }
 function updatePreview(text){ listPreview.textContent=text; listTime.textContent=now(); }
 
 emojiPanel.innerHTML = emojis.map(e => `<button type="button" aria-label="${e}">${e}</button>`).join('');
