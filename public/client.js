@@ -1247,6 +1247,11 @@ async function requestAdminThen(action) {
 
 async function loadAdminCallRecordings(groupId = '') {
   const clean = (v,n=80) => String(v ?? '').replace(/[<>]/g,'').slice(0,n);
+  const formatDuration = ms => {
+    const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+    return h ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  };
   adminCallRecordingsError.textContent = '';
   adminCallRecordingsList.innerHTML = '<div class="admin-group-row">Loading recordings…</div>';
   try {
@@ -1254,33 +1259,69 @@ async function loadAdminCallRecordings(groupId = '') {
     const d = await r.json(); if (!d.ok) throw new Error(d.error || 'Unauthorized');
     const list = d.recordings || [];
     if (!list.length) { adminCallRecordingsList.innerHTML = '<div class="admin-group-row">No call recordings found.</div>'; return; }
+
     const byGroup = new Map();
     list.forEach(x => { const key = x.groupId || 'main'; if (!byGroup.has(key)) byGroup.set(key, {name:x.groupName || key, items:[]}); byGroup.get(key).items.push(x); });
     adminCallRecordingsList.innerHTML = '';
+
     byGroup.forEach(g => {
-      const head = document.createElement('div'); head.className='admin-group-row';
-      head.innerHTML = `<div class="admin-group-name">📁 ${clean(g.name,60)}</div><div class="password-error">${g.items.length} feed${g.items.length===1?'':'s'}</div>`;
-      adminCallRecordingsList.appendChild(head);
+      const section = document.createElement('section');
+      section.className = 'recording-group-section';
+      const head = document.createElement('div');
+      head.className = 'recording-group-head';
+      head.innerHTML = `<div><div class="admin-group-name">📁 ${clean(g.name,60)}</div><small>${g.items.length} recording${g.items.length===1?'':'s'}</small></div>`;
+      section.appendChild(head);
+
+      const grid = document.createElement('div');
+      grid.className = 'recording-video-grid';
+
       g.items.forEach(item => {
-        const row=document.createElement('div'); row.className='admin-group-row';
-        const when=item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
-        const size=item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
-        const url=`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
-        row.innerHTML=`<div class="admin-group-name">🎥 ${clean(item.feedName||'Participant',60)}<small style="display:block;opacity:.7">${clean(when,60)} · ${size}</small></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-view-recording-btn">▶ View</button><a class="mini-btn" href="${url}" download>⬇ Download</a><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
-        row.querySelector('.admin-view-recording-btn').addEventListener('click',()=>{
-          requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,item.feedName||'Call recording',when));
-        });
-        row.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
+        const card = document.createElement('article');
+        card.className = 'recording-video-card';
+        const when = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+        const size = item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
+        const duration = formatDuration(item.durationMs);
+        const url = `/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
+        const safeName = clean(item.feedName || 'Participant', 60);
+
+        card.innerHTML = `
+          <div class="recording-thumb-wrap">
+            <video class="recording-thumb" muted playsinline preload="metadata"></video>
+            <button type="button" class="recording-play-overlay" aria-label="View recording">▶</button>
+            ${duration !== '00:00' ? `<span class="recording-duration">${duration}</span>` : ''}
+          </div>
+          <div class="recording-video-info">
+            <div class="recording-video-title">🎥 ${safeName}</div>
+            <div class="recording-video-meta">${clean(when,80)}${size ? ` · ${size}` : ''}</div>
+            <div class="recording-video-actions">
+              <button type="button" class="mini-btn admin-view-recording-btn">▶ View</button>
+              <a class="mini-btn" href="${url}" download>⬇ Download</a>
+              <button type="button" class="mini-btn admin-delete-btn">Delete</button>
+            </div>
+          </div>`;
+
+        const thumb = card.querySelector('.recording-thumb');
+        thumb.src = url;
+        thumb.addEventListener('loadedmetadata', () => {
+          try { thumb.currentTime = 0.01; } catch (_) {}
+        }, { once:true });
+        thumb.addEventListener('click', () => card.querySelector('.recording-play-overlay').click());
+
+        const openView = () => requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,safeName,when));
+        card.querySelector('.recording-play-overlay').addEventListener('click', openView);
+        card.querySelector('.admin-view-recording-btn').addEventListener('click', openView);
+        card.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
           if(!confirm('Delete this call recording?')) return;
           const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
           const dd=await rr.json(); if(dd.ok) loadAdminCallRecordings(groupId); else showToast(dd.error||'Delete failed');
         });
-        adminCallRecordingsList.appendChild(row);
+        grid.appendChild(card);
       });
+      section.appendChild(grid);
+      adminCallRecordingsList.appendChild(section);
     });
   } catch(e) { adminCallRecordingsList.innerHTML=''; adminCallRecordingsError.textContent=e.message||'Could not load recordings'; }
 }
-
 function showAdminMediaPopup(url,title,meta=''){
   adminMediaViewTitle.textContent=title || 'Call recording';
   adminMediaViewMeta.textContent=meta || '';
