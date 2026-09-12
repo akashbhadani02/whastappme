@@ -20,6 +20,13 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Protect chat media from Android screenshots/screen recording.
+        // Screenshots of this activity are blocked by the OS (black/blank capture).
+        getWindow().setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        );
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             requestPermissions(new String[]{
                 Manifest.permission.CAMERA,

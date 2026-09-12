@@ -466,7 +466,7 @@ function renderMessage(msg, direction) {
     const wrap = document.createElement('div'); wrap.className='media-wrap';
     const mediaUrl = msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
     if (msg.type === 'image') {
-      const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; wrap.appendChild(img);
+      const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; img.draggable=false; img.addEventListener('contextmenu', e => e.preventDefault()); wrap.appendChild(img);
     } else if (msg.type === 'video') {
       const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.setAttribute('controlsList','nodownload'); video.disablePictureInPicture=true; video.addEventListener('contextmenu', e => e.preventDefault());
       const source=document.createElement('source'); source.src=mediaUrl; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
@@ -477,14 +477,7 @@ function renderMessage(msg, direction) {
     }
     content.appendChild(wrap);
     if (msg.message) { const caption=document.createElement('div'); caption.className='message-text media-caption'; caption.textContent=msg.message; content.appendChild(caption); }
-    // Voice/audio messages are playback-only: no download action is rendered.
-    if (msg.type !== 'audio') {
-      const actions=document.createElement('div'); actions.className='media-actions';
-      const download=document.createElement('button'); download.className='mini-btn'; download.textContent='⬇ Download';
-      download.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); requestPassword('Download protected file','Enter password to download this photo/video.', () => downloadMedia(msg), 'download'); });
-      actions.appendChild(download);
-      content.appendChild(actions);
-    }
+    // Media is view/playback only in chat. Do not render a Download button here.
   } else {
     const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);
   }

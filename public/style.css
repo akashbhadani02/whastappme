@@ -173,3 +173,10 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 /* Admin password prompt must always stay above every other popup. */
 #passwordModal{z-index:100000!important}
 #passwordModal .modal-card{position:relative;z-index:100001}
+
+/* Protected chat media: no drag, selection, or casual context-menu saving.
+   Native Android builds also use FLAG_SECURE (see MainActivity.java). */
+.message img,.message video,.message audio{
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+}
+.message img{ -webkit-user-drag:none; user-drag:none; }
