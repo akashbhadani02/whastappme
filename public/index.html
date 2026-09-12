@@ -75,7 +75,11 @@
       <footer class="composer">
         <button class="round-btn" id="emojiBtn" title="Emoji">☺</button>
         <button class="round-btn" id="attachBtn" title="Attach">＋</button>
+        <button class="round-btn gallery-btn" id="photoGalleryBtn" title="Choose photo from gallery" aria-label="Choose photo from gallery">🖼️</button>
+        <button class="round-btn gallery-btn" id="videoGalleryBtn" title="Choose video from gallery" aria-label="Choose video from gallery">🎥</button>
         <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" multiple hidden>
+        <input type="file" id="photoGalleryInput" accept="image/*" multiple hidden>
+        <input type="file" id="videoGalleryInput" accept="video/*" multiple hidden>
         <textarea id="textarea" rows="1" maxlength="5000" placeholder="Type a message"></textarea>
         <button class="round-btn mic-btn" id="micBtn" title="Voice message">🎤</button><button class="send-btn" id="sendBtn" title="Send">➤</button>
       </footer>

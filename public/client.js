@@ -55,6 +55,10 @@ const textarea = document.querySelector('#textarea');
 const fileInput = document.querySelector('#fileInput');
 const sendBtn = document.querySelector('#sendBtn');
 const attachBtn = document.querySelector('#attachBtn');
+const photoGalleryBtn = document.querySelector('#photoGalleryBtn');
+const videoGalleryBtn = document.querySelector('#videoGalleryBtn');
+const photoGalleryInput = document.querySelector('#photoGalleryInput');
+const videoGalleryInput = document.querySelector('#videoGalleryInput');
 const emojiBtn = document.querySelector('#emojiBtn');
 const emojiPanel = document.querySelector('#emojiPanel');
 const clearChatBtn = document.querySelector('#clearChatBtn');
@@ -631,6 +635,16 @@ function clearChat(broadcast=true) {
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
+photoGalleryBtn?.addEventListener('click', () => photoGalleryInput?.click());
+videoGalleryBtn?.addEventListener('click', () => videoGalleryInput?.click());
+async function handleGalleryFiles(input) {
+  const files = [...(input?.files || [])];
+  if (!files.length) return;
+  for (const file of files) await uploadMedia(file);
+  input.value = '';
+}
+photoGalleryInput?.addEventListener('change', () => handleGalleryFiles(photoGalleryInput));
+videoGalleryInput?.addEventListener('change', () => handleGalleryFiles(videoGalleryInput));
 fileInput.addEventListener('change', async e => {
   const files=[...e.target.files]; if (!files.length) return;
   for (const file of files) await uploadMedia(file);
@@ -657,14 +671,14 @@ function makeUploadBubble(file, type) {
   content.appendChild(wrap); el.appendChild(content);
   const meta=document.createElement('div'); meta.className='meta'; meta.textContent=now(); el.appendChild(meta);
   messageArea.appendChild(el); scrollToBottom();
-  return { el, ring, percent: ring.querySelector('.upload-percent'), progress: ring.querySelector('.upload-progress'), status };
+  return { el, ring, percent: ring.querySelector('.upload-percent'), progress: ring.querySelector('.upload-progress'), status, type };
 }
 
 function setUploadProgress(ui, percent, text) {
   if (!ui) return;
   const value = Math.max(0, Math.min(100, percent));
   ui.percent.textContent = text || `${Math.round(value)}%`;
-  if (ui.status && !text) ui.status.textContent = value >= 100 ? '📤 Sending…' : `📤 Uploading video… ${Math.round(value)}%`;
+  if (ui.status && !text) ui.status.textContent = value >= 100 ? '📤 Sending…' : `📤 Uploading ${ui.type === 'video' ? 'video' : ui.type === 'image' ? 'photo' : 'file'}… ${Math.round(value)}%`;
   const circumference = 2 * Math.PI * 31;
   ui.progress.style.strokeDasharray = `${circumference}`;
   ui.progress.style.strokeDashoffset = `${circumference * (1 - value / 100)}`;
@@ -688,7 +702,7 @@ async function uploadMedia(file) {
   try {
     const uploadId = id();
     const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
-    if (ui.status) ui.status.textContent = '📤 Uploading video… 0%';
+    if (ui.status) ui.status.textContent = type === 'video' ? '📤 Uploading video… 0%' : type === 'image' ? '📤 Uploading photo… 0%' : '📤 Uploading… 0%';
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
     if (!started.ok) throw new Error(started.error || 'Media upload could not start');
@@ -707,7 +721,7 @@ async function uploadMedia(file) {
       setUploadProgress(ui, sent / file.size * 100);
     }
     let finish, result;
-    if (ui.status) ui.status.textContent = '⚙️ Upload complete — sending video…';
+    if (ui.status) ui.status.textContent = type === 'video' ? '⚙️ Upload complete — sending video…' : type === 'image' ? '⚙️ Upload complete — sending photo…' : '⚙️ Upload complete — sending…';
     for (let attempt=0; attempt<3; attempt++) {
       finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }), cache:'no-store' });
       result = await finish.json().catch(() => ({}));
@@ -716,7 +730,7 @@ async function uploadMedia(file) {
     }
     if (!result.ok) throw new Error(result.error || 'Media upload could not finish');
     setUploadProgress(ui, 100, '✓');
-    if (ui.status) ui.status.textContent = '✅ Video sent';
+    if (ui.status) ui.status.textContent = type === 'video' ? '✅ Video sent' : type === 'image' ? '✅ Photo sent' : '✅ Sent';
     ui.el.classList.add('upload-done');
     setTimeout(() => ui.el.remove(), 2200);
     renderMessage(result.message, 'outgoing');

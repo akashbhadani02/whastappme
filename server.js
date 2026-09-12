@@ -1650,7 +1650,7 @@ io.on('connection', async (socket) => {
     if (!call || !call.participants.has(socket.id)) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.to(`group:${call.groupId}`).emit('call-ended', {
+    io.to(callRoom(call.groupId)).emit('call-ended', {
       callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
