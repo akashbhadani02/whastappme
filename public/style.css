@@ -173,3 +173,14 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 /* Admin password prompt must always stay above every other popup. */
 #passwordModal{z-index:100000!important}
 #passwordModal .modal-card{position:relative;z-index:100001}
+
+/* Keep photo/video bubbles and their timestamp/actions separated. The timestamp
+   must never float over media or its download controls. */
+.message.media-message .meta{float:none;display:flex;align-items:center;justify-content:flex-end;clear:both;width:100%;box-sizing:border-box;margin:5px 0 0;min-height:15px;position:relative;z-index:2;}
+.message.media-message .media-wrap{display:block;position:relative;clear:both;}
+.message.media-message .media-actions{display:flex;clear:both;position:relative;z-index:3;width:100%;box-sizing:border-box;margin-top:6px;}
+.message.media-message .media-wrap img,.message.media-message .media-wrap video{position:relative;z-index:1;display:block;}
+@media(max-width:760px){
+  .message.media-message .meta{float:none;clear:both;width:100%;margin-top:5px;}
+  .message.media-message .media-actions{clear:both;width:100%;margin-top:6px;}
+}
