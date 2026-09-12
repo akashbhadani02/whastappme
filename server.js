@@ -1782,7 +1782,8 @@ io.on('connection', async (socket) => {
       if (target.authorizedGroups?.has(groupId)) {
         target.emit('incoming-call', {
           callId, groupId, type, fromSocketId: socket.id,
-          fromUserId: call.startedByUserId, fromName: call.startedByName
+          fromUserId: call.startedByUserId, fromName: call.startedByName,
+          groupName: String(data?.groupName || '').slice(0, 100)
         });
       }
     }
