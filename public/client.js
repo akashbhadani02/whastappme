@@ -52,15 +52,11 @@ document.addEventListener('keydown', e => {
 const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
-const fileInput = document.querySelector('#fileInput');
+const cameraInput = document.querySelector('#cameraInput');
+const galleryInput = document.querySelector('#galleryInput');
 const sendBtn = document.querySelector('#sendBtn');
-const attachBtn = document.querySelector('#attachBtn');
-const photoGalleryBtn = document.querySelector('#photoGalleryBtn');
-const videoGalleryBtn = document.querySelector('#videoGalleryBtn');
-const photoGalleryInput = document.querySelector('#photoGalleryInput');
-const videoGalleryInput = document.querySelector('#videoGalleryInput');
-const emojiBtn = document.querySelector('#emojiBtn');
-const emojiPanel = document.querySelector('#emojiPanel');
+const cameraBtn = document.querySelector('#cameraBtn');
+const galleryBtn = document.querySelector('#galleryBtn');
 const clearChatBtn = document.querySelector('#clearChatBtn');
 const selectionActions = document.querySelector('#selectionActions');
 const selectionCount = document.querySelector('#selectionCount');
@@ -634,24 +630,19 @@ function clearChat(broadcast=true) {
 
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
-attachBtn.addEventListener('click', () => fileInput.click());
-photoGalleryBtn?.addEventListener('click', () => photoGalleryInput?.click());
-videoGalleryBtn?.addEventListener('click', () => videoGalleryInput?.click());
-async function handleGalleryFiles(input) {
+cameraBtn?.addEventListener('click', () => cameraInput?.click());
+galleryBtn?.addEventListener('click', () => galleryInput?.click());
+async function handleMediaPicker(input) {
   const files = [...(input?.files || [])];
   if (!files.length) return;
-  for (const file of files) await uploadMedia(file);
+  for (const file of files) {
+    if (!/^(image\/|video\/)/i.test(file.type)) { showToast('Only photo and video are supported'); continue; }
+    await uploadMedia(file);
+  }
   input.value = '';
 }
-photoGalleryInput?.addEventListener('change', () => handleGalleryFiles(photoGalleryInput));
-videoGalleryInput?.addEventListener('change', () => handleGalleryFiles(videoGalleryInput));
-fileInput.addEventListener('change', async e => {
-  const files=[...e.target.files]; if (!files.length) return;
-  for (const file of files) await uploadMedia(file);
-  fileInput.value=''; return;
-  if (!/^(image\/|video\/|audio\/)/i.test(file.type) && !/^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i.test(file.type)) { showToast('Unsupported file type'); fileInput.value=''; return; }
-  uploadMedia(file).finally(() => { fileInput.value=''; });
-});
+cameraInput?.addEventListener('change', () => handleMediaPicker(cameraInput));
+galleryInput?.addEventListener('change', () => handleMediaPicker(galleryInput));
 
 function makeUploadBubble(file, type) {
   const el = document.createElement('div');
@@ -1162,10 +1153,6 @@ window.addEventListener('focus', markVisibleMessagesRead);
 function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }
 function updatePreview(text){ listPreview.textContent=text; listTime.textContent=now(); }
 
-emojiPanel.innerHTML = emojis.map(e => `<button type="button" aria-label="${e}">${e}</button>`).join('');
-emojiPanel.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => { textarea.value += btn.textContent; textarea.focus(); autoResize(); }));
-emojiBtn.addEventListener('click', e => { e.stopPropagation(); emojiPanel.classList.toggle('open'); });
-document.addEventListener('click', e => { if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) emojiPanel.classList.remove('open'); });
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); const mode=btn.textContent.trim().toLowerCase(); document.querySelectorAll('.message').forEach(el=>{const m=messages.get(el.dataset.id);let show=true;if(mode==='favourites') show=starredIds.has(el.dataset.id)||!!m?.starred;if(mode==='groups') show=true;el.style.display=show?'':'none';}); }));
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }

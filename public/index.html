@@ -73,17 +73,13 @@
       <div class="typing-bar" id="typingBar">typing…</div>
 
       <footer class="composer">
-        <button class="round-btn" id="emojiBtn" title="Emoji">☺</button>
-        <button class="round-btn" id="attachBtn" title="Attach">＋</button>
-        <button class="round-btn gallery-btn" id="photoGalleryBtn" title="Choose photo from gallery" aria-label="Choose photo from gallery">🖼️</button>
-        <button class="round-btn gallery-btn" id="videoGalleryBtn" title="Choose video from gallery" aria-label="Choose video from gallery">🎥</button>
-        <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" multiple hidden>
-        <input type="file" id="photoGalleryInput" accept="image/*" multiple hidden>
-        <input type="file" id="videoGalleryInput" accept="video/*" multiple hidden>
+        <button class="round-btn" id="cameraBtn" title="Open camera" aria-label="Open camera">📷</button>
+        <button class="round-btn gallery-btn" id="galleryBtn" title="Choose photo or video from gallery" aria-label="Choose photo or video from gallery">🖼️</button>
+        <input type="file" id="cameraInput" accept="image/*,video/*" capture="environment" hidden>
+        <input type="file" id="galleryInput" accept="image/*,video/*" multiple hidden>
         <textarea id="textarea" rows="1" maxlength="5000" placeholder="Type a message"></textarea>
         <button class="round-btn mic-btn" id="micBtn" title="Voice message">🎤</button><button class="send-btn" id="sendBtn" title="Send">➤</button>
       </footer>
-      <div class="emoji-panel" id="emojiPanel"></div>
     </section>
   </main>
 
