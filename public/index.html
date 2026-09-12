@@ -83,6 +83,17 @@
     </section>
   </main>
 
+  <div class="camera-modal hidden" id="cameraModal" role="dialog" aria-modal="true" aria-label="Camera">
+    <div class="camera-card">
+      <video id="cameraPreview" autoplay playsinline muted></video>
+      <div class="camera-controls">
+        <button class="round-btn" id="cameraCloseBtn" title="Close camera">×</button>
+        <button class="camera-shutter" id="cameraPhotoBtn" title="Take photo">●</button>
+        <button class="round-btn" id="cameraRecordBtn" title="Record video">🎥</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal hidden" id="nameModal" role="dialog" aria-modal="true" aria-labelledby="nameTitle">
     <div class="modal-card">
       <button class="modal-close" id="nameClose" aria-label="Close">×</button>

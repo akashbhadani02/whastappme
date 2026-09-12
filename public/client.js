@@ -630,8 +630,58 @@ function clearChat(broadcast=true) {
 
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
-cameraBtn?.addEventListener('click', () => cameraInput?.click());
+const cameraModal = document.querySelector('#cameraModal');
+const cameraPreview = document.querySelector('#cameraPreview');
+const cameraCloseBtn = document.querySelector('#cameraCloseBtn');
+const cameraPhotoBtn = document.querySelector('#cameraPhotoBtn');
+const cameraRecordBtn = document.querySelector('#cameraRecordBtn');
+let cameraStream = null, cameraRecorder = null, cameraChunks = [];
+
+async function openCamera() {
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) { cameraInput?.click(); return; }
+    cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:true});
+    cameraPreview.srcObject = cameraStream;
+    cameraModal?.classList.remove('hidden');
+  } catch (e) {
+    showToast('Camera permission denied or camera unavailable');
+    cameraInput?.click();
+  }
+}
+function closeCamera() {
+  try { cameraRecorder?.stop(); } catch (_) {}
+  cameraRecorder = null; cameraChunks = [];
+  cameraStream?.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
+  cameraStream = null;
+  if (cameraPreview) cameraPreview.srcObject = null;
+  cameraModal?.classList.add('hidden');
+}
+async function takeCameraPhoto() {
+  if (!cameraStream || !cameraPreview.videoWidth) return;
+  const c=document.createElement('canvas'); c.width=cameraPreview.videoWidth; c.height=cameraPreview.videoHeight;
+  c.getContext('2d').drawImage(cameraPreview,0,0,c.width,c.height);
+  c.toBlob(async blob=>{ if(blob){ await uploadMedia(new File([blob],`camera-${Date.now()}.jpg`,{type:'image/jpeg'})); } },'image/jpeg',0.92);
+}
+function toggleCameraRecording() {
+  if (!cameraStream) return;
+  if (cameraRecorder && cameraRecorder.state === 'recording') { cameraRecorder.stop(); return; }
+  cameraChunks=[];
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
+  cameraRecorder=new MediaRecorder(cameraStream,{mimeType:mime});
+  cameraRecorder.ondataavailable=e=>{if(e.data.size)cameraChunks.push(e.data)};
+  cameraRecorder.onstop=async()=>{
+    const blob=new Blob(cameraChunks,{type:cameraRecorder.mimeType||'video/webm'});
+    await uploadMedia(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
+    cameraRecordBtn.textContent='🎥';
+  };
+  cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
+}
+cameraBtn?.addEventListener('click', openCamera);
 galleryBtn?.addEventListener('click', () => galleryInput?.click());
+cameraCloseBtn?.addEventListener('click', closeCamera);
+cameraPhotoBtn?.addEventListener('click', takeCameraPhoto);
+cameraRecordBtn?.addEventListener('click', toggleCameraRecording);
+cameraModal?.addEventListener('click',e=>{if(e.target===cameraModal)closeCamera();});
 async function handleMediaPicker(input) {
   const files = [...(input?.files || [])];
   if (!files.length) return;
