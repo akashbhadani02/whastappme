@@ -27,6 +27,7 @@ const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const MAX_MEDIA_CHUNK = 768 * 1024;
+const MAX_MEDIA_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB application-level limit
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const DEFAULT_GROUP_ID = 'main';
@@ -1044,7 +1045,7 @@ app.post('/api/messages', async (req, res) => {
 app.post('/api/media/start', async (req, res) => {
   try {
     const { uploadId, name, mime, type, size, groupId, userId } = req.body || {};
-    if (!uploadId || !name || !mime || !type) return res.status(400).json({ ok:false, error:'Invalid upload' });
+    if (!uploadId || !name || !mime || !type || !Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > MAX_MEDIA_FILE_SIZE) return res.status(400).json({ ok:false, error:'Invalid or unsupported upload size' });
     const db = await getDb();
     if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable. Configure MONGODB_URI.' });
     const uploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
@@ -1081,6 +1082,7 @@ app.post('/api/media/chunk', express.raw({ type: 'application/octet-stream', lim
     if (!session) return res.status(404).json({ ok:false, error:'Upload not found' });
     const chunksBucket = await getMediaChunksBucket();
     const existing = await chunksBucket.find({ 'metadata.uploadId': uploadId, 'metadata.index': index }).toArray();
+    const previousSize = existing.reduce((sum, f) => sum + Number(f.length || 0), 0);
     await Promise.all(existing.map(f => chunksBucket.delete(f._id).catch(() => {})));
     const stream = chunksBucket.openUploadStream(`${uploadId}-${index}`, {
       contentType: 'application/octet-stream',
@@ -1091,7 +1093,7 @@ app.post('/api/media/chunk', express.raw({ type: 'application/octet-stream', lim
       stream.once('error', reject);
       stream.end(req.body);
     });
-    await uploads.updateOne({ uploadId }, { $inc: { received: req.body.length }, $max: { chunks: index + 1 } });
+    await uploads.updateOne({ uploadId }, { $inc: { received: req.body.length - previousSize }, $max: { chunks: index + 1 } });
     res.json({ ok:true, index });
   } catch (error) {
     console.error('REST media chunk failed:', error.message);

@@ -631,11 +631,28 @@ clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', async e => {
-  const files=[...e.target.files]; if (!files.length) return;
-  for (const file of files) await uploadMedia(file);
-  fileInput.value=''; return;
-  if (!/^(image\/|video\/|audio\/)/i.test(file.type) && !/^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i.test(file.type)) { showToast('Unsupported file type'); fileInput.value=''; return; }
-  uploadMedia(file).finally(() => { fileInput.value=''; });
+  const files=[...e.target.files];
+  if (!files.length) return;
+  const allowed = /^(image\/|video\/|audio\/)/i;
+  const docs = /^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i;
+  for (const file of files) {
+    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
+    // Some mobile browsers return an empty MIME type. Use the extension as a safe fallback.
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mediaMime = file.type || ({
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
+      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo', mp3:'audio/mpeg', m4a:'audio/mp4',
+      wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg'
+    })[ext] || '';
+    const normalized = file.type ? file : new File([file], file.name, { type: mediaMime || 'application/octet-stream', lastModified: file.lastModified });
+    if (!allowed.test(normalized.type) && !docs.test(normalized.type) && !mediaMime) {
+      showToast(`Unsupported file type: ${file.name}`);
+      continue;
+    }
+    await uploadMedia(normalized);
+  }
+  e.target.value='';
 });
 
 function makeUploadBubble(file, type) {
@@ -679,11 +696,12 @@ async function waitForSocket(timeout=20000) {
 }
 
 async function uploadMedia(file) {
-  const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document';
+  const mime = String(file.type || 'application/octet-stream').toLowerCase();
+  const type = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document';
   const ui = makeUploadBubble(file, type);
   try {
     const uploadId = id();
-    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
     if (!started.ok) throw new Error(started.error || 'Media upload could not start');
