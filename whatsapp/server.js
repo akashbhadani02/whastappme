@@ -603,9 +603,9 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     if (existing) await collection.replaceOne({ _id:existing._id }, msg);
     else await collection.insertOne(msg);
     if (recycleId) await recycle.deleteOne({ _id:recycleId });
-    else await collection.updateOne({ id:msg.id, groupId:msg.groupId }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
+    else await collection.updateOne({ id:msg.id }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
     const event = { message: msg, groupId: msg.groupId };
-    io.to(`group:${normalizeGroupId(msg.groupId)}`).emit('restore-message', event);
+    io.emit('restore-message', event);
     await publishRealtimeEvent('restore-message', event);
     res.json({ ok:true, message:msg });
   } catch (error) {
@@ -1417,7 +1417,7 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        await collection.updateOne({ id: data.id, groupId: normalizeGroupId(socket.groupId) }, { $addToSet: { deliveredTo: receiverId } });
+        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);

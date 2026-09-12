@@ -35,6 +35,7 @@ const DEFAULT_GROUP_ID = 'main';
 const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
 // WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
 const activeCalls = new Map();
+function groupRoom(groupId) { return `group:${normalizeGroupId(groupId)}`; }
 function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
 function removeSocketFromCalls(socket) {
   for (const [callId, call] of activeCalls) {
@@ -98,8 +99,7 @@ async function startRealtimeBridge() {
     const event = change.fullDocument;
     if (!event || !event.event) return;
     const payload = event.payload;
-    if (payload && payload.groupId) io.to(`group:${normalizeGroupId(payload.groupId)}`).emit(event.event, payload);
-    else if (event.event === 'clear-chat') io.emit('clear-chat', payload || {});
+    if (event.event === 'clear-chat') io.emit('clear-chat', payload || {});
     else if (payload !== undefined) io.emit(event.event, payload);
   });
   stream.on('error', (error) => {
@@ -180,13 +180,12 @@ app.post('/api/push/subscribe', async (req, res) => {
   try {
     const sub = req.body && req.body.subscription;
     const userId = req.body && String(req.body.userId || '');
-    const groupId = normalizeGroupId(req.body?.groupId);
     if (!sub || !sub.endpoint || !userId) return res.status(400).json({ ok: false });
     const db = await getDb();
     if (!db) return res.status(503).json({ ok: false });
     await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).updateOne(
       { endpoint: sub.endpoint },
-      { $set: { userId, groupId, subscription: sub, updatedAt: new Date() } },
+      { $set: { userId, subscription: sub, updatedAt: new Date() } },
       { upsert: true }
     );
     res.json({ ok: true });
@@ -699,9 +698,9 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     if (existing) await collection.replaceOne({ _id:existing._id }, msg);
     else await collection.insertOne(msg);
     if (recycleId) await recycle.deleteOne({ _id:recycleId });
-    else await collection.updateOne({ id:msg.id, groupId:msg.groupId }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
+    else await collection.updateOne({ id:msg.id }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
     const event = { message: msg, groupId: msg.groupId };
-    io.to(`group:${normalizeGroupId(msg.groupId)}`).emit('restore-message', event);
+    io.emit('restore-message', event);
     await publishRealtimeEvent('restore-message', event);
     res.json({ ok:true, message:msg });
   } catch (error) {
@@ -1190,8 +1189,7 @@ async function saveMessage(msg) {
 
   const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
   const saved = { ...msg, createdAt };
-  const groupId = normalizeGroupId(msg.groupId);
-  await collection.updateOne({ id: msg.id, groupId }, { $setOnInsert: saved }, { upsert: true });
+  await collection.updateOne({ id: msg.id }, { $setOnInsert: saved }, { upsert: true });
   return saved;
 }
 
@@ -1203,10 +1201,9 @@ async function sendPushToOtherUsers(msg) {
     const senderUserId = String(msg.userId || '').trim();
     // A message must never notify the device/user that sent it. Match the
     // exact userId saved with the browser's push subscription.
-    const groupId = normalizeGroupId(msg.groupId);
     const query = senderUserId
-      ? { groupId, userId: { $ne: senderUserId } }
-      : { groupId, userId: { $exists: true } };
+      ? { userId: { $ne: senderUserId } }
+      : { userId: { $exists: true } };
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find(query).toArray();
     if (!docs.length) return;
     // Keep notification content generic and let the service worker decide
@@ -1234,7 +1231,8 @@ async function sendPushToOtherUsers(msg) {
 
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
-  io.to(`group:${normalizeGroupId(saved.groupId)}`).emit(event, saved);
+  const gid = normalizeGroupId(saved.groupId);
+  io.to(groupRoom(gid)).emit(event, saved);
   if (event === 'media') {
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);
@@ -1249,6 +1247,8 @@ io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
 
+  socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
+
   socket.on('register-user', (data) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
@@ -1261,12 +1261,31 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok });
   });
 
+  socket.on('authorize-group', async (data, ack) => {
+    const groupId = normalizeGroupId(data?.groupId);
+    const password = String(data?.password || '');
+    try {
+      let ok = false;
+      const collection = await getGroupSettingsCollection();
+      if (!collection) {
+        const group = fallbackGroups.get(groupId);
+        ok = !!group && password === String(group.password || '');
+      } else {
+        const group = await collection.findOne({ _id: groupId });
+        ok = !!group && password === String(group.password || '');
+      }
+      if (ok) { socket.authorizedGroups.add(groupId); socket.join(groupRoom(groupId)); }
+      if (typeof ack === 'function') ack({ ok });
+    } catch (_) { if (typeof ack === 'function') ack({ ok:false }); }
+  });
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
-    const previousGroupId = socket.groupId;
-    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
+    if (!socket.authorizedGroups.has(groupId)) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Group is not authorized.' });
+    }
     socket.groupId = groupId;
-    socket.join(`group:${groupId}`);
+    socket.join(groupRoom(groupId));
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1278,6 +1297,7 @@ io.on('connection', async (socket) => {
   });
 
   socket.groupId = DEFAULT_GROUP_ID;
+  socket.join(groupRoom(DEFAULT_GROUP_ID));
   try {
     const history = await loadMessages('', DEFAULT_GROUP_ID);
     socket.emit('history', history);
@@ -1433,7 +1453,7 @@ io.on('connection', async (socket) => {
       const updated = result?.value || result;
       if (!updated) { if (typeof ack === 'function') ack({ok:false}); return; }
       const event = { message: updated, groupId };
-      io.to(`group:${groupId}`).emit('message-updated', event);
+      io.to(groupRoom(groupId)).emit('message-updated', event);
       publishRealtimeEvent('message-updated', event);
       if (typeof ack === 'function') ack({ok:true, message:updated});
     } catch (error) {
@@ -1458,7 +1478,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
-      io.to(`group:${groupId}`).emit('delete-message', deleteEvent);
+      io.to(groupRoom(groupId)).emit('delete-message', deleteEvent);
       publishRealtimeEvent('delete-message', deleteEvent);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
@@ -1492,7 +1512,7 @@ io.on('connection', async (socket) => {
       }
 
       const event = { ids, groupId };
-      io.to(`group:${groupId}`).emit('delete-messages', event);
+      io.to(groupRoom(groupId)).emit('delete-messages', event);
       publishRealtimeEvent('delete-messages', event);
       if (typeof ack === 'function') ack({ ok: true, count: ids.length });
     } catch (error) {
@@ -1503,7 +1523,7 @@ io.on('connection', async (socket) => {
 
   socket.on('typing', (data) => {
     if (!data || !socket.groupId || normalizeGroupId(data.groupId) !== normalizeGroupId(socket.groupId)) return;
-    io.to(`group:${normalizeGroupId(socket.groupId)}`).emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
+    io.to(groupRoom(socket.groupId)).emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
   });
 
   socket.on('message-read', async (data) => {
@@ -1513,7 +1533,7 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (collection) {
         await collection.updateOne(
-          { id: data.id },
+          { id: data.id, $or: [{ groupId: normalizeGroupId(socket.groupId) }, ...(normalizeGroupId(socket.groupId) === DEFAULT_GROUP_ID ? [{ groupId: { $exists:false } }] : [])] },
           { $addToSet: { readBy: readerId } }
         );
       }
@@ -1521,7 +1541,7 @@ io.on('connection', async (socket) => {
       console.error('Failed to save read receipt:', error.message);
     }
     const readEvent = { id: data.id, userId: readerId, groupId: normalizeGroupId(socket.groupId) };
-    io.to(`group:${readEvent.groupId}`).emit('message-read', readEvent);
+    io.to(groupRoom(readEvent.groupId)).emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
@@ -1531,13 +1551,14 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        await collection.updateOne({ id: data.id, groupId: normalizeGroupId(socket.groupId) }, { $addToSet: { deliveredTo: receiverId } });
+        const gid = normalizeGroupId(socket.groupId);
+        await collection.updateOne({ id: data.id, $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists:false } }] : [])] }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
     const deliveredEvent = { id: data.id, userId: receiverId, groupId: normalizeGroupId(socket.groupId) };
-    io.to(`group:${deliveredEvent.groupId}`).emit('message-delivered', deliveredEvent);
+    io.to(groupRoom(deliveredEvent.groupId)).emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
@@ -1555,7 +1576,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast so every instance is immediately consistent.
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
-      io.to(`group:${clearEvent.groupId}`).emit('clear-chat', clearEvent);
+      io.to(groupRoom(clearEvent.groupId)).emit('clear-chat', clearEvent);
       publishRealtimeEvent('clear-chat', clearEvent);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
@@ -1576,24 +1597,21 @@ io.on('connection', async (socket) => {
       startedByName: String(data?.name || '').slice(0, 60), createdAt: Date.now()
     };
     activeCalls.set(callId, call);
-    // Notify only members currently joined to this group's chat room.
-    // The caller joins the private call room after the invite is sent.
-    socket.to(`group:${groupId}`).emit('incoming-call', {
+    socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
+    io.to(groupRoom(groupId)).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
-    socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
     if (typeof ack === 'function') ack({ ok: true, callId, type });
   });
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    const requestedGroupId = normalizeGroupId(data?.groupId || socket.groupId);
     if (!call) {
       return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
     }
-    if (requestedGroupId !== call.groupId || normalizeGroupId(socket.groupId) !== call.groupId) {
-      return typeof ack === 'function' && ack({ ok: false, error: 'This call belongs to another group.' });
+    if (!socket.authorizedGroups.has(call.groupId)) {
+      return typeof ack === 'function' && ack({ ok:false, error:'You are not authorized for this group.' });
     }
     socket.join(callRoom(call.groupId)); socket.callId = callId; socket.callType = call.type;
     const peers = [...call.participants].filter(id => id !== socket.id);
@@ -1620,8 +1638,8 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.to(callRoom(call.groupId)).emit('call-ended', {
-      callId, reason: 'ended', endedBy: socket.id, name
+    io.to(groupRoom(call.groupId)).emit('call-ended', {
+      callId, groupId: call.groupId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
       const participantSocket = io.sockets.sockets.get(participantId);
@@ -1639,7 +1657,7 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY group member declines, terminate the whole group call for everyone.
-    io.to(callRoom(call.groupId)).emit('call-ended', {
+    io.to(groupRoom(call.groupId)).emit('call-ended', {
       callId, reason: 'declined', declinedBy: socket.id, name
     });
     for (const participantId of call.participants) {
