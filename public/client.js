@@ -636,12 +636,15 @@ const cameraReviewVideo = document.querySelector('#cameraReviewVideo');
 const cameraReviewImage = document.querySelector('#cameraReviewImage');
 const cameraCloseBtn = document.querySelector('#cameraCloseBtn');
 const cameraSwitchBtn = document.querySelector('#cameraSwitchBtn');
+const cameraRecordTimer = document.querySelector('#cameraRecordTimer');
 const cameraPhotoBtn = document.querySelector('#cameraPhotoBtn');
 const cameraRecordBtn = document.querySelector('#cameraRecordBtn');
 const cameraSendBtn = document.querySelector('#cameraSendBtn');
 const cameraCancelBtn = document.querySelector('#cameraCancelBtn');
-let cameraStream = null, cameraRecorder = null, cameraChunks = [], cameraFacing = 'environment', cameraPendingFile = null, cameraPendingUrl = '';
+let cameraStream = null, cameraRecorder = null, cameraChunks = [], cameraFacing = 'environment', cameraPendingFile = null, cameraPendingUrl = '', cameraRecordStartedAt = 0, cameraRecordTimerId = null;
 
+function stopCameraRecordTimer(){ if(cameraRecordTimerId){clearInterval(cameraRecordTimerId);cameraRecordTimerId=null;} cameraRecordStartedAt=0; cameraRecordTimer?.classList.add('hidden'); if(cameraRecordTimer)cameraRecordTimer.textContent='● 00:00'; }
+function startCameraRecordTimer(){ stopCameraRecordTimer(); cameraRecordStartedAt=Date.now(); cameraRecordTimer?.classList.remove('hidden'); const tick=()=>{const sec=Math.floor((Date.now()-cameraRecordStartedAt)/1000); const m=String(Math.floor(sec/60)).padStart(2,'0'); const s=String(sec%60).padStart(2,'0'); if(cameraRecordTimer)cameraRecordTimer.textContent=`● ${m}:${s}`;}; tick(); cameraRecordTimerId=setInterval(tick,250); }
 function clearCameraReview(){
   if(cameraPendingUrl){try{URL.revokeObjectURL(cameraPendingUrl)}catch(_){} cameraPendingUrl='';}
   cameraPendingFile=null;
@@ -678,7 +681,7 @@ async function openCamera() {
 }
 function closeCamera() {
   try { if(cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop(); } catch (_) {}
-  cameraRecorder=null; cameraChunks=[];
+  cameraRecorder=null; cameraChunks=[]; stopCameraRecordTimer();
   cameraStream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}}); cameraStream=null;
   if(cameraPreview) cameraPreview.srcObject=null;
   clearCameraReview();
@@ -708,11 +711,12 @@ function toggleCameraRecording(){
   try{cameraRecorder=new MediaRecorder(cameraStream,mime?{mimeType:mime}:undefined);}catch(e){showToast('Video recording is not supported on this device');return;}
   cameraRecorder.ondataavailable=e=>{if(e.data.size)cameraChunks.push(e.data)};
   cameraRecorder.onstop=()=>{
+    stopCameraRecordTimer();
     const blob=new Blob(cameraChunks,{type:cameraRecorder.mimeType||'video/webm'});
     cameraChunks=[]; cameraRecordBtn.textContent='🎥';
     if(blob.size)showCameraReview(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
   };
-  cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
+  cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; startCameraRecordTimer(); showToast('Recording video… tap again to stop');
 }
 async function sendCameraPending(){
   if(!cameraPendingFile)return;
