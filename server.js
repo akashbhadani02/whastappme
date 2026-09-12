@@ -26,6 +26,9 @@ const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
+const CALL_RECORDINGS_DIR = path.join(__dirname, 'call-recordings');
+const fs = require('fs');
+const fsp = fs.promises;
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -381,10 +384,16 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     await new Promise((resolve, reject) => {
       upload.once('finish', resolve); upload.once('error', reject); upload.end(req.body);
     });
+    // Also keep a normal server-side copy, organized into a folder per group.
+    const safeGroup = String(groupId || 'main').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 100) || 'main';
+    const groupDir = path.join(CALL_RECORDINGS_DIR, safeGroup);
+    await fsp.mkdir(groupDir, { recursive: true });
+    const localPath = path.join(groupDir, filename);
+    await fsp.writeFile(localPath, req.body);
     const createdAt = new Date();
     await db.collection(CALL_RECORDINGS_COLLECTION_NAME).insertOne({
       fileId: upload.id, filename, callId, groupId, groupName: groupDoc?.name || groupId,
-      feedId, feedName, userId, mime, size: req.body.length, createdAt
+      feedId, feedName, userId, mime, size: req.body.length, localPath, createdAt
     });
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-recording-alert', {
@@ -398,6 +407,49 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     console.error('Call recording upload failed:', error.message);
     res.status(500).json({ ok: false, error: 'Recording upload failed.' });
   }
+});
+
+// Download all stored call recordings as a ZIP, organized by group folder.
+app.get('/api/admin/call-recordings/download-all', async (req, res) => {
+  const password = String(req.query?.password || '');
+  if (password !== ADMIN_PASSWORD && password !== DOWNLOAD_PASSWORD) return res.status(403).end();
+  const requestedGroup = req.query?.groupId ? normalizeGroupId(req.query.groupId) : '';
+  try {
+    const db = await getDb();
+    if (!db) return res.status(503).end();
+    const query = requestedGroup ? { groupId: requestedGroup } : {};
+    const items = await db.collection(CALL_RECORDINGS_COLLECTION_NAME).find(query).sort({ createdAt: 1 }).toArray();
+    const root = path.resolve(CALL_RECORDINGS_DIR);
+    const files = [];
+    for (const item of items) {
+      const safeGroup = String(item.groupId || 'main').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 100) || 'main';
+      const safeFile = String(item.filename || 'recording.webm').replace(/[^a-zA-Z0-9._-]+/g, '_');
+      const filePath = path.join(root, safeGroup, safeFile);
+      try { const st = await fsp.stat(filePath); if (st.isFile()) files.push({ item, filePath, name: `${String(item.groupName || item.groupId || 'main').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0,80) || 'main'}/${safeFile}` }); } catch (_) {}
+    }
+    if (!files.length) return res.status(404).send('No call recordings found.');
+    const zipName = requestedGroup ? `call-recordings-${requestedGroup}.zip` : 'call-recordings-all-groups.zip';
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=\"${zipName}\"`);
+    const crcTable = new Uint32Array(256);
+    for (let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); crcTable[n]=c>>>0; }
+    const crcUpdate=(crc,buf)=>{ let c=(crc^0xFFFFFFFF)>>>0; for(const b of buf)c=crcTable[(c^b)&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0; };
+    const u16=n=>Buffer.from([n&255,(n>>>8)&255]);
+    const u32=n=>Buffer.from([n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255]);
+    const dos=d=>{const x=new Date(d||Date.now());return [((x.getHours()<<11)|(x.getMinutes()<<5)|Math.floor(x.getSeconds()/2)),(((x.getFullYear()-1980)<<9)|((x.getMonth()+1)<<5)|x.getDate())];};
+    const entries=[]; let offset=0;
+    for(const f of files){
+      const nb=Buffer.from(f.name); const [dt,dd]=dos(f.item.createdAt); const localOffset=offset;
+      const local=Buffer.concat([Buffer.from([0x50,0x4b,0x03,0x04]),u16(20),u16(0x08),u16(0),u16(dt),u16(dd),u32(0),u32(0),u32(0),u16(nb.length),u16(0),nb]);
+      res.write(local); offset+=local.length; let crc=0,size=0;
+      for await(const chunk of fs.createReadStream(f.filePath)){ crc=crcUpdate(crc,chunk); size+=chunk.length; if(!res.write(chunk)) await new Promise(r=>res.once('drain',r)); offset+=chunk.length; }
+      const desc=Buffer.concat([Buffer.from([0x50,0x4b,0x07,0x08]),u32(crc),u32(size),u32(size)]); res.write(desc); offset+=desc.length;
+      entries.push({nb,crc,size,offset:localOffset,dt,dd});
+    }
+    const centralStart=offset;
+    for(const e of entries){ const c=Buffer.concat([Buffer.from([0x50,0x4b,0x01,0x02]),u16(20),u16(20),u16(0x08),u16(0),u16(e.dt),u16(e.dd),u32(e.crc),u32(e.size),u32(e.size),u16(e.nb.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(e.offset),e.nb]); res.write(c); offset+=c.length; }
+    res.end(Buffer.concat([Buffer.from([0x50,0x4b,0x05,0x06]),u16(0),u16(0),u16(entries.length),u16(entries.length),u32(offset-centralStart),u32(centralStart),u16(0)]));
+  } catch(error){ console.error('Call recordings export failed:',error.message); if(!res.headersSent) res.status(500).end(); else res.destroy(error); }
 });
 
 app.post('/api/admin/call-recordings', async (req, res) => {
