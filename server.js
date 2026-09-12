@@ -699,9 +699,9 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     if (existing) await collection.replaceOne({ _id:existing._id }, msg);
     else await collection.insertOne(msg);
     if (recycleId) await recycle.deleteOne({ _id:recycleId });
-    else await collection.updateOne({ id:msg.id }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
+    else await collection.updateOne({ id:msg.id, groupId:msg.groupId }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
     const event = { message: msg, groupId: msg.groupId };
-    io.emit('restore-message', event);
+    io.to(`group:${normalizeGroupId(msg.groupId)}`).emit('restore-message', event);
     await publishRealtimeEvent('restore-message', event);
     res.json({ ok:true, message:msg });
   } catch (error) {
@@ -1531,7 +1531,7 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
+        await collection.updateOne({ id: data.id, groupId: normalizeGroupId(socket.groupId) }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
@@ -1577,7 +1577,7 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    io.emit('incoming-call', {
+    io.to(callRoom(groupId)).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
@@ -1586,8 +1586,12 @@ io.on('connection', async (socket) => {
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
+    const requestedGroupId = normalizeGroupId(data?.groupId || socket.groupId);
     if (!call) {
       return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
+    }
+    if (requestedGroupId !== call.groupId || normalizeGroupId(socket.groupId) !== call.groupId) {
+      return typeof ack === 'function' && ack({ ok: false, error: 'This call belongs to another group.' });
     }
     socket.join(callRoom(call.groupId)); socket.callId = callId; socket.callType = call.type;
     const peers = [...call.participants].filter(id => id !== socket.id);
@@ -1614,7 +1618,7 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.emit('call-ended', {
+    io.to(callRoom(call.groupId)).emit('call-ended', {
       callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
