@@ -463,21 +463,46 @@ function renderMessage(msg, direction) {
 
   const content = document.createElement('div'); content.className='message-content';
   if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'document') {
-    const wrap = document.createElement('div'); wrap.className='media-wrap';
+    const wrap = document.createElement('div'); wrap.className='media-wrap media-card';
     const mediaUrl = msg.mediaId ? `/api/media/${encodeURIComponent(msg.mediaId)}` : msg.data;
+    const isDownloadableMedia = msg.type === 'image' || msg.type === 'video';
+    const protectedDownload = () => requestPassword(
+      'Download media',
+      'Enter the download password to save this photo/video.',
+      () => downloadMedia(msg),
+      'download'
+    );
     if (msg.type === 'image') {
-      const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; img.draggable=false; img.addEventListener('contextmenu', e => e.preventDefault()); wrap.appendChild(img);
+      const img=document.createElement('img'); img.src=mediaUrl; img.alt='Photo'; img.loading='lazy'; img.draggable=false;
+      img.addEventListener('contextmenu', e => e.preventDefault());
+      img.addEventListener('dragstart', e => e.preventDefault());
+      wrap.appendChild(img);
     } else if (msg.type === 'video') {
-      const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.setAttribute('controlsList','nodownload'); video.disablePictureInPicture=true; video.addEventListener('contextmenu', e => e.preventDefault());
+      const video=document.createElement('video'); video.controls=true; video.preload='metadata'; video.playsInline=true;
+      video.setAttribute('controlsList','nodownload noplaybackrate'); video.disablePictureInPicture=true;
+      video.addEventListener('contextmenu', e => e.preventDefault());
+      video.addEventListener('dragstart', e => e.preventDefault());
       const source=document.createElement('source'); source.src=mediaUrl; source.type=msg.mime || 'video/mp4'; video.appendChild(source); wrap.appendChild(video);
     } else if (msg.type === 'audio') {
       const audio=document.createElement('audio'); audio.controls=true; audio.preload='metadata'; audio.setAttribute('controlsList','nodownload'); audio.setAttribute('disableRemotePlayback',''); audio.addEventListener('contextmenu', e => e.preventDefault()); audio.src=mediaUrl; wrap.appendChild(audio);
     } else {
       const doc=document.createElement('div'); doc.className='document-bubble'; doc.innerHTML='<span class="doc-icon">📄</span><span class="doc-name"></span>'; doc.querySelector('.doc-name').textContent=msg.fileName || 'Document'; wrap.appendChild(doc);
     }
+    if (isDownloadableMedia) {
+      // Both a visible button and a double-click on the media card use the same password gate.
+      wrap.addEventListener('dblclick', e => {
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        protectedDownload();
+      });
+      const actions=document.createElement('div'); actions.className='media-actions';
+      const downloadBtn=document.createElement('button'); downloadBtn.type='button'; downloadBtn.className='mini-btn media-download-btn'; downloadBtn.textContent='⬇ Download';
+      downloadBtn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); protectedDownload(); });
+      actions.appendChild(downloadBtn);
+      wrap.appendChild(actions);
+    }
     content.appendChild(wrap);
     if (msg.message) { const caption=document.createElement('div'); caption.className='message-text media-caption'; caption.textContent=msg.message; content.appendChild(caption); }
-    // Media is view/playback only in chat. Do not render a Download button here.
   } else {
     const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);
   }
