@@ -637,6 +637,9 @@ const cameraPreview = document.querySelector('#cameraPreview');
 const cameraCloseBtn = document.querySelector('#cameraCloseBtn');
 const cameraPhotoBtn = document.querySelector('#cameraPhotoBtn');
 const cameraRecordBtn = document.querySelector('#cameraRecordBtn');
+const cameraSwapBtn = document.querySelector('#cameraSwapBtn');
+const cameraRecordingTimer = document.querySelector('#cameraRecordingTimer');
+let cameraFacingMode = 'environment', cameraRecordingStartedAt = 0, cameraRecordingTimerId = null;
 const cameraPreviewModal = document.querySelector('#cameraPreviewModal');
 const cameraPreviewStage = document.querySelector('#cameraPreviewStage');
 const cameraPreviewCancelBtn = document.querySelector('#cameraPreviewCancelBtn');
@@ -645,6 +648,24 @@ const cameraPreviewSendBtn = document.querySelector('#cameraPreviewSendBtn');
 let cameraStream = null, cameraRecorder = null, cameraChunks = [];
 let pendingCameraFile = null, pendingCameraUrl = '';
 
+function stopCameraRecordingTimer(){
+  if(cameraRecordingTimerId){ clearInterval(cameraRecordingTimerId); cameraRecordingTimerId=null; }
+  cameraRecordingStartedAt=0;
+  cameraRecordingTimer?.classList.add('hidden');
+}
+function updateCameraRecordingTimer(){
+  if(!cameraRecordingTimer || !cameraRecordingStartedAt) return;
+  const sec=Math.floor((Date.now()-cameraRecordingStartedAt)/1000);
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+  cameraRecordingTimer.textContent=`🔴 ${h?String(h).padStart(2,'0')+':':''}${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function startCameraRecordingTimer(){
+  stopCameraRecordingTimer();
+  cameraRecordingStartedAt=Date.now();
+  cameraRecordingTimer?.classList.remove('hidden');
+  updateCameraRecordingTimer();
+  cameraRecordingTimerId=setInterval(updateCameraRecordingTimer,250);
+}
 function stopCameraStream(){
   cameraStream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}});
   cameraStream=null;
@@ -688,7 +709,8 @@ async function sendCameraReview(){
 async function openCamera() {
   try {
     if (!navigator.mediaDevices?.getUserMedia) { cameraInput?.click(); return; }
-    cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:true});
+    cameraFacingMode='environment';
+    cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacingMode},width:{ideal:1280},height:{ideal:720}},audio:true});
     cameraPreview.srcObject = cameraStream;
     cameraModal?.classList.remove('hidden');
   } catch (e) {
@@ -696,7 +718,28 @@ async function openCamera() {
     cameraInput?.click();
   }
 }
+async function swapCamera() {
+  if(!cameraStream) return;
+  const track=cameraStream.getVideoTracks()[0];
+  if(!track) return;
+  const next=cameraFacingMode==='environment'?'user':'environment';
+  try {
+    await track.applyConstraints({facingMode: {exact: next}});
+    cameraFacingMode=next;
+  } catch (_) {
+    try {
+      const newStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:next},width:{ideal:1280},height:{ideal:720}},audio:false});
+      const newTrack=newStream.getVideoTracks()[0];
+      if(newTrack){
+        const oldTrack=cameraStream.getVideoTracks()[0];
+        cameraStream.removeTrack(oldTrack); cameraStream.addTrack(newTrack);
+        oldTrack?.stop(); cameraPreview.srcObject=cameraStream; cameraFacingMode=next;
+      }
+    } catch(e){ showToast('Could not swap camera'); return; }
+  }
+}
 function closeCamera() {
+  stopCameraRecordingTimer();
   try { if(cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop(); } catch (_) {}
   cameraRecorder = null; cameraChunks = [];
   stopCameraStream();
@@ -716,19 +759,21 @@ function toggleCameraRecording() {
   cameraRecorder=new MediaRecorder(cameraStream,{mimeType:mime});
   cameraRecorder.ondataavailable=e=>{if(e.data.size)cameraChunks.push(e.data)};
   cameraRecorder.onstop=()=>{
+    stopCameraRecordingTimer();
     const blob=new Blob(cameraChunks,{type:cameraRecorder?.mimeType||'video/webm'});
     cameraChunks=[];
     cameraRecorder=null;
     if(blob.size) openCameraReview(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
     if(cameraRecordBtn) cameraRecordBtn.textContent='🎥';
   };
-  cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
+  cameraRecorder.start(1000); startCameraRecordingTimer(); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
 }
 cameraBtn?.addEventListener('click', openCamera);
 galleryBtn?.addEventListener('click', () => galleryInput?.click());
 cameraCloseBtn?.addEventListener('click', closeCamera);
 cameraPhotoBtn?.addEventListener('click', takeCameraPhoto);
 cameraRecordBtn?.addEventListener('click', toggleCameraRecording);
+cameraSwapBtn?.addEventListener('click', swapCamera);
 cameraPreviewCancelBtn?.addEventListener('click', closeCameraReview);
 cameraPreviewRetakeBtn?.addEventListener('click', ()=>{ closeCameraReview(); openCamera(); });
 cameraPreviewSendBtn?.addEventListener('click', sendCameraReview);
@@ -1843,15 +1888,13 @@ updateAdvancedTools();
   function formatRecordingTime(ms){const total=Math.max(0,Math.floor(ms/1000));const h=Math.floor(total/3600);const m=Math.floor((total%3600)/60);const s=total%60;return `${h?String(h).padStart(2,'0')+':':''}${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
   function startRecordingTimer(){
     clearInterval(recordingTimerInterval); recordingTimerStartedAt=Date.now();
-    callRecordingTimer?.classList.remove('hidden');
-    callRecordingTimer?.classList.add('recording-active');
-    const tick=()=>{if(callRecordingTimer)callRecordingTimer.textContent=`🔴 REC ${formatRecordingTime(Date.now()-recordingTimerStartedAt)}`};
+    if(callRecordingTimer){ callRecordingTimer.classList.remove('hidden'); callRecordingTimer.classList.add('recording-active'); callRecordingTimer.style.display='inline-flex'; }
+    const tick=()=>{if(callRecordingTimer){ callRecordingTimer.textContent=`🔴 REC ${formatRecordingTime(Date.now()-recordingTimerStartedAt)}`; callRecordingTimer.style.display='inline-flex'; }};
     tick(); recordingTimerInterval=setInterval(tick,1000);
   }
   function stopRecordingTimer(){
     clearInterval(recordingTimerInterval); recordingTimerInterval=null; recordingTimerStartedAt=0;
-    callRecordingTimer?.classList.remove('recording-active');
-    callRecordingTimer?.classList.add('hidden');
+    if(callRecordingTimer){ callRecordingTimer.classList.remove('recording-active'); callRecordingTimer.classList.remove('hidden'); callRecordingTimer.textContent='🔴 REC 00:00'; callRecordingTimer.style.display='inline-flex'; }
   }
   function stopFeedRecordings(){
     recorders.forEach(entry=>{try{const r=entry?.rec||entry;if(r.state!=='inactive')r.stop()}catch(_){} });
@@ -1872,9 +1915,9 @@ updateAdvancedTools();
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia({audio:true,video:type==='video'?{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}}:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startRecordingTimer(); startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startRecordingTimer(); startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=type==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const gid=String(d.groupId);const g=groups.find(x=>String(x.id)===gid)||{id:gid,name:d.groupName||'Group'};pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startRecordingTimer(); startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startRecordingTimer(); startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=activeCallType==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
   function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);

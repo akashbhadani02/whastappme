@@ -87,6 +87,8 @@
     <div class="camera-card">
       <video id="cameraPreview" autoplay playsinline muted></video>
       <div class="camera-controls">
+        <span class="camera-recording-timer hidden" id="cameraRecordingTimer">🔴 00:00</span>
+        <button class="round-btn" id="cameraSwapBtn" title="Swap camera" aria-label="Swap camera">🔄</button>
         <button class="round-btn" id="cameraCloseBtn" title="Close camera">×</button>
         <button class="camera-shutter" id="cameraPhotoBtn" title="Take photo">●</button>
         <button class="round-btn" id="cameraRecordBtn" title="Record video">🎥</button>
@@ -217,9 +219,9 @@
   <div class="chat-tools" id="chatTools"><button id="lockChatBtn">🔐 Lock</button><button id="archiveChatBtn">📥 Archive</button><button id="muteChatBtn">🔕 Mute</button><button id="unreadChatBtn">🔵 Unread</button><button id="themeBtn">🌙 Theme</button></div>
   <div class="call-modal hidden" id="callModal" aria-label="Group call">
   <div class="call-card">
-    <header class="call-header"><div><strong id="callTitle">Group call</strong><span id="callStatus">Connecting…</span></div><span class="call-recording-timer hidden" id="callRecordingTimer">🔴 00:00</span><button class="call-close" id="callCloseBtn" title="Close call">×</button></header>
+    <header class="call-header"><div><strong id="callTitle">Group call</strong><span id="callStatus">Connecting…</span></div><span class="call-recording-timer" id="callRecordingTimer">🔴 REC 00:00</span><button class="call-close" id="callCloseBtn" title="Close call">×</button></header>
     <div class="call-stage audio-stage" id="callStage"></div>
-    <div class="call-controls"><button class="call-control" id="callMuteBtn" title="Mute microphone">🎙️</button><button class="call-control video-control" id="callCameraBtn" title="Turn camera off">📷</button><button class="call-control video-control" id="callSwapCameraBtn" title="Switch camera" aria-label="Switch camera">🔄</button><button class="call-control end-call" id="callEndBtn" title="End call">📵</button></div>
+    <div class="call-controls"><button class="call-control" id="callMuteBtn" title="Mute microphone">🎙️</button><button class="call-control video-control" id="callCameraBtn" title="Turn camera off">📷</button><button class="call-control video-control swap-camera-control" id="callSwapCameraBtn" title="Swap camera" aria-label="Swap camera">🔄</button><button class="call-control end-call" id="callEndBtn" title="End call">📵</button></div>
     <video id="localCallVideo" class="local-call-video" autoplay playsinline muted></video>
   </div>
 </div>
