@@ -637,8 +637,54 @@ const cameraPreview = document.querySelector('#cameraPreview');
 const cameraCloseBtn = document.querySelector('#cameraCloseBtn');
 const cameraPhotoBtn = document.querySelector('#cameraPhotoBtn');
 const cameraRecordBtn = document.querySelector('#cameraRecordBtn');
+const cameraPreviewModal = document.querySelector('#cameraPreviewModal');
+const cameraPreviewStage = document.querySelector('#cameraPreviewStage');
+const cameraPreviewCancelBtn = document.querySelector('#cameraPreviewCancelBtn');
+const cameraPreviewRetakeBtn = document.querySelector('#cameraPreviewRetakeBtn');
+const cameraPreviewSendBtn = document.querySelector('#cameraPreviewSendBtn');
 let cameraStream = null, cameraRecorder = null, cameraChunks = [];
+let pendingCameraFile = null, pendingCameraUrl = '';
 
+function stopCameraStream(){
+  cameraStream?.getTracks().forEach(t=>{try{t.stop()}catch(_){}});
+  cameraStream=null;
+  if(cameraPreview) cameraPreview.srcObject=null;
+}
+function clearCameraPreview(){
+  if(pendingCameraUrl){try{URL.revokeObjectURL(pendingCameraUrl)}catch(_){} pendingCameraUrl='';}
+  pendingCameraFile=null;
+  if(cameraPreviewStage) cameraPreviewStage.innerHTML='';
+}
+function openCameraReview(file){
+  clearCameraPreview();
+  pendingCameraFile=file;
+  pendingCameraUrl=URL.createObjectURL(file);
+  if(/^video\//i.test(file.type)){
+    const v=document.createElement('video'); v.src=pendingCameraUrl; v.controls=true; v.autoplay=true; v.playsInline=true;
+    cameraPreviewStage.appendChild(v);
+  }else{
+    const img=document.createElement('img'); img.src=pendingCameraUrl; img.alt='Photo preview';
+    cameraPreviewStage.appendChild(img);
+  }
+  stopCameraStream();
+  cameraModal?.classList.add('hidden');
+  cameraPreviewModal?.classList.remove('hidden');
+}
+function closeCameraReview(){
+  cameraPreviewModal?.classList.add('hidden');
+  clearCameraPreview();
+}
+async function sendCameraReview(){
+  const file=pendingCameraFile;
+  if(!file) return;
+  cameraPreviewSendBtn?.setAttribute('disabled','disabled');
+  try{
+    await uploadMedia(file);
+    closeCameraReview();
+  }catch(e){
+    showToast(e?.message||'Could not send media');
+  }finally{ cameraPreviewSendBtn?.removeAttribute('disabled'); }
+}
 async function openCamera() {
   try {
     if (!navigator.mediaDevices?.getUserMedia) { cameraInput?.click(); return; }
@@ -651,18 +697,16 @@ async function openCamera() {
   }
 }
 function closeCamera() {
-  try { cameraRecorder?.stop(); } catch (_) {}
+  try { if(cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop(); } catch (_) {}
   cameraRecorder = null; cameraChunks = [];
-  cameraStream?.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
-  cameraStream = null;
-  if (cameraPreview) cameraPreview.srcObject = null;
+  stopCameraStream();
   cameraModal?.classList.add('hidden');
 }
 async function takeCameraPhoto() {
   if (!cameraStream || !cameraPreview.videoWidth) return;
   const c=document.createElement('canvas'); c.width=cameraPreview.videoWidth; c.height=cameraPreview.videoHeight;
   c.getContext('2d').drawImage(cameraPreview,0,0,c.width,c.height);
-  c.toBlob(async blob=>{ if(blob){ await uploadMedia(new File([blob],`camera-${Date.now()}.jpg`,{type:'image/jpeg'})); } },'image/jpeg',0.92);
+  c.toBlob(blob=>{ if(blob) openCameraReview(new File([blob],`camera-${Date.now()}.jpg`,{type:'image/jpeg'})); },'image/jpeg',0.92);
 }
 function toggleCameraRecording() {
   if (!cameraStream) return;
@@ -671,10 +715,12 @@ function toggleCameraRecording() {
   const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
   cameraRecorder=new MediaRecorder(cameraStream,{mimeType:mime});
   cameraRecorder.ondataavailable=e=>{if(e.data.size)cameraChunks.push(e.data)};
-  cameraRecorder.onstop=async()=>{
-    const blob=new Blob(cameraChunks,{type:cameraRecorder.mimeType||'video/webm'});
-    await uploadMedia(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
-    cameraRecordBtn.textContent='🎥';
+  cameraRecorder.onstop=()=>{
+    const blob=new Blob(cameraChunks,{type:cameraRecorder?.mimeType||'video/webm'});
+    cameraChunks=[];
+    cameraRecorder=null;
+    if(blob.size) openCameraReview(new File([blob],`camera-${Date.now()}.webm`,{type:blob.type}));
+    if(cameraRecordBtn) cameraRecordBtn.textContent='🎥';
   };
   cameraRecorder.start(1000); cameraRecordBtn.textContent='⏹️'; showToast('Recording video… tap again to stop');
 }
@@ -683,7 +729,12 @@ galleryBtn?.addEventListener('click', () => galleryInput?.click());
 cameraCloseBtn?.addEventListener('click', closeCamera);
 cameraPhotoBtn?.addEventListener('click', takeCameraPhoto);
 cameraRecordBtn?.addEventListener('click', toggleCameraRecording);
+cameraPreviewCancelBtn?.addEventListener('click', closeCameraReview);
+cameraPreviewRetakeBtn?.addEventListener('click', ()=>{ closeCameraReview(); openCamera(); });
+cameraPreviewSendBtn?.addEventListener('click', sendCameraReview);
 cameraModal?.addEventListener('click',e=>{if(e.target===cameraModal)closeCamera();});
+cameraPreviewModal?.addEventListener('click',e=>{if(e.target===cameraPreviewModal)closeCameraReview();});
+
 async function handleMediaPicker(input) {
   const files = [...(input?.files || [])];
   if (!files.length) return;
@@ -693,7 +744,7 @@ async function handleMediaPicker(input) {
   }
   input.value = '';
 }
-cameraInput?.addEventListener('change', () => handleMediaPicker(cameraInput));
+cameraInput?.addEventListener('change', () => { const files=[...(cameraInput?.files||[])]; if(files[0] && /^(image\/|video\/)/i.test(files[0].type)) openCameraReview(files[0]); cameraInput.value=''; });
 galleryInput?.addEventListener('change', () => handleMediaPicker(galleryInput));
 
 function makeUploadBubble(file, type) {
