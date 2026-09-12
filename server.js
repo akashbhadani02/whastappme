@@ -98,8 +98,12 @@ async function startRealtimeBridge() {
     const event = change.fullDocument;
     if (!event || !event.event) return;
     const payload = event.payload;
-    if (event.event === 'clear-chat') io.emit('clear-chat', payload || {});
-    else if (payload !== undefined) io.emit(event.event, payload);
+    if (payload === undefined) return;
+    const gid = normalizeGroupId(payload?.groupId);
+    // Realtime events are always scoped to their originating group. Never
+    // broadcast a group message/event to every connected socket.
+    if (gid) io.to(`group:${gid}`).emit(event.event, payload);
+
   });
   stream.on('error', (error) => {
     console.error('Realtime MongoDB bridge stopped:', error.message);
@@ -1230,7 +1234,8 @@ async function sendPushToOtherUsers(msg) {
 
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
-  io.emit(event, saved);
+  const gid = normalizeGroupId(saved.groupId);
+  io.to(`group:${gid}`).emit(event, saved);
   if (event === 'media') {
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);
@@ -1257,8 +1262,28 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok });
   });
 
+  socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
+    const suppliedPassword = String(data?.password || '');
+    // Joining a group socket room is also the server-side authorization step.
+    // A client must prove the group's password before it can receive/send data.
+    if (groupId !== DEFAULT_GROUP_ID) {
+      let valid = false;
+      try {
+        const collection = await getGroupSettingsCollection();
+        if (collection) {
+          const group = await collection.findOne({ _id: groupId });
+          valid = !!group && suppliedPassword === String(group.password || '');
+        } else {
+          const group = fallbackGroups.get(groupId);
+          valid = !!group && suppliedPassword === String(group.password || '');
+        }
+      } catch (_) {}
+      if (!valid) return typeof ack === 'function' && ack({ ok: false, error: 'Group authorization required.' });
+      socket.authorizedGroups.add(groupId);
+    }
     const previousGroupId = socket.groupId;
     if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
     socket.groupId = groupId;
@@ -1503,21 +1528,22 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('message-read', async (data) => {
-    if (!data || !data.id || !data.userId) return;
+    if (!data || !data.id || !data.userId || !socket.groupId) return;
+    const gid = normalizeGroupId(socket.groupId);
     const readerId = String(data.userId);
     try {
       const collection = await getCollection();
       if (collection) {
         await collection.updateOne(
-          { id: data.id },
+          { id: data.id, groupId: gid },
           { $addToSet: { readBy: readerId } }
         );
       }
     } catch (error) {
       console.error('Failed to save read receipt:', error.message);
     }
-    const readEvent = { id: data.id, userId: readerId, groupId: normalizeGroupId(socket.groupId) };
-    io.emit('message-read', readEvent);
+    const readEvent = { id: data.id, userId: readerId, groupId: gid };
+    io.to(`group:${gid}`).emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
@@ -1527,13 +1553,13 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
+        await collection.updateOne({ id: data.id, groupId: gid }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
-    const deliveredEvent = { id: data.id, userId: receiverId, groupId: normalizeGroupId(socket.groupId) };
-    io.emit('message-delivered', deliveredEvent);
+    const deliveredEvent = { id: data.id, userId: receiverId, groupId: gid };
+    io.to(`group:${gid}`).emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
@@ -1551,7 +1577,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast so every instance is immediately consistent.
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
-      io.emit('clear-chat', clearEvent);
+      io.to(`group:${clearEvent.groupId}`).emit('clear-chat', clearEvent);
       publishRealtimeEvent('clear-chat', clearEvent);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
@@ -1562,6 +1588,9 @@ io.on('connection', async (socket) => {
   // ---- WebRTC group audio/video call signaling ----
   socket.on('call-start', async (data, ack) => {
     const groupId = normalizeGroupId(socket.groupId || data?.groupId);
+    if (!socket.authorizedGroups?.has(groupId)) {
+      return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group.' });
+    }
     const type = data?.type === 'audio' ? 'audio' : 'video';
     const callId = String(data?.callId || crypto.randomUUID()).slice(0, 100);
     const existing = [...activeCalls.values()].find(c => c.groupId === groupId);
@@ -1573,15 +1602,26 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    io.emit('incoming-call', {
-      callId, groupId, type, fromSocketId: socket.id,
-      fromUserId: call.startedByUserId, fromName: call.startedByName
-    });
+    // Send the incoming-call invitation only to sockets authorized for this group.
+    // This is intentionally not io.emit() and not a generic group room, because a
+    // member may currently have another group's chat open.
+    for (const target of io.sockets.sockets.values()) {
+      if (target.id === socket.id) continue;
+      if (target.authorizedGroups?.has(groupId)) {
+        target.emit('incoming-call', {
+          callId, groupId, type, fromSocketId: socket.id,
+          fromUserId: call.startedByUserId, fromName: call.startedByName
+        });
+      }
+    }
     if (typeof ack === 'function') ack({ ok: true, callId, type });
   });
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
+    if (call && !socket.authorizedGroups?.has(call.groupId)) {
+      return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group call.' });
+    }
     if (!call) {
       return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
     }
@@ -1607,10 +1647,10 @@ io.on('connection', async (socket) => {
 
   socket.on('call-leave', (data) => {
     const callId = String(data?.callId || socket.callId || ''), call = activeCalls.get(callId);
-    if (!call) return;
+    if (!call || !call.participants.has(socket.id)) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.emit('call-ended', {
+    io.to(`group:${call.groupId}`).emit('call-ended', {
       callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
@@ -1626,7 +1666,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-reject', (data) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (!call) return;
+    if (!call || !socket.authorizedGroups?.has(call.groupId)) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY group member declines, terminate the whole group call for everyone.
     io.to(callRoom(call.groupId)).emit('call-ended', {
