@@ -5,6 +5,7 @@ const { Server } = require('socket.io');
 const { MongoClient, GridFSBucket, ObjectId } = require('mongodb');
 const webpush = require('web-push');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 const app = express();
 const httpServer = createServer(app);
@@ -411,6 +412,152 @@ app.post('/api/admin/call-recordings', async (req, res) => {
     res.json({ ok: true, recordings: recordings.map(r => ({ id: String(r.fileId), fileId: String(r.fileId), callId: r.callId, groupId: r.groupId, groupName: r.groupName, feedId: r.feedId, feedName: r.feedName, userId: r.userId, mime: r.mime, size: r.size, createdAt: r.createdAt })) });
   } catch (error) { res.status(500).json({ ok: false, error: 'Could not load recordings.' }); }
 });
+
+
+// Download all call recordings as one ZIP archive.
+app.get('/api/admin/call-recordings/download-all', async (req, res) => {
+  try {
+    const password = String(req.query?.password || '');
+    if (password !== ADMIN_PASSWORD && password !== DOWNLOAD_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+
+    const db = await getDb();
+    const bucket = await getMediaBucket();
+    if (!db || !bucket) return res.status(503).json({ ok: false, error: 'MongoDB is required for call recordings.' });
+
+    const groupId = req.query?.groupId ? normalizeGroupId(req.query.groupId) : null;
+    const query = groupId ? { groupId } : {};
+    const recordings = await db.collection(CALL_RECORDINGS_COLLECTION_NAME)
+      .find(query).sort({ createdAt: 1 }).limit(500).toArray();
+
+    if (!recordings.length) return res.status(404).json({ ok: false, error: 'No call recordings found.' });
+
+    // Build a standards-compliant ZIP using Node's built-in zlib (no extra package required).
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    const usedNames = new Set();
+
+    const safePart = (value, fallback) => {
+      const cleaned = String(value || fallback)
+        .replace(/[<>:"/\\|?*\\x00-\\x1F]/g, '_')
+        .replace(/\\s+/g, ' ')
+        .trim()
+        .slice(0, 100);
+      return cleaned || fallback;
+    };
+
+    const uniqueName = (base) => {
+      let name = base, n = 2;
+      while (usedNames.has(name)) {
+        const dot = base.lastIndexOf('.');
+        name = dot > 0 ? `${base.slice(0, dot)} (${n})${base.slice(dot)}` : `${base} (${n})`;
+        n++;
+      }
+      usedNames.add(name);
+      return name;
+    };
+
+    for (let index = 0; index < recordings.length; index++) {
+      const meta = recordings[index];
+      let data;
+      try {
+        data = await new Promise((resolve, reject) => {
+          const parts = [];
+          const stream = bucket.openDownloadStream(meta.fileId);
+          stream.on('data', part => parts.push(part));
+          stream.once('error', reject);
+          stream.once('end', () => resolve(Buffer.concat(parts)));
+        });
+      } catch (error) {
+        console.error('Skipping missing call recording:', String(meta.fileId), error.message);
+        continue;
+      }
+
+      const ext = (String(meta.filename || '').match(/\\.([A-Za-z0-9]{1,8})$/)?.[1])
+        || (String(meta.mime || '').includes('webm') ? 'webm' : 'bin');
+      const groupName = safePart(meta.groupName || meta.groupId || 'Group', 'Group');
+      const feedName = safePart(meta.feedName || 'Participant', 'Participant');
+      const stamp = meta.createdAt ? new Date(meta.createdAt).toISOString().replace(/[:.]/g, '-') : String(index + 1);
+      const filename = uniqueName(`${groupName}/${feedName}-${stamp}.${ext}`);
+
+      const compressed = zlib.deflateRawSync(data);
+      const crc = crc32(data);
+      const nameBuf = Buffer.from(filename, 'utf8');
+
+      // Local file header.
+      const local = Buffer.alloc(30 + nameBuf.length);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0, 6);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt16LE(0, 10);
+      local.writeUInt16LE(0, 12);
+      local.writeUInt32LE(crc, 14);
+      local.writeUInt32LE(compressed.length, 18);
+      local.writeUInt32LE(data.length, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      local.writeUInt16LE(0, 28);
+      nameBuf.copy(local, 30);
+      chunks.push(local, compressed);
+
+      // Central directory entry.
+      const cd = Buffer.alloc(46 + nameBuf.length);
+      cd.writeUInt32LE(0x02014b50, 0);
+      cd.writeUInt16LE(20, 4);
+      cd.writeUInt16LE(20, 6);
+      cd.writeUInt16LE(0, 8);
+      cd.writeUInt16LE(8, 10);
+      cd.writeUInt16LE(0, 12);
+      cd.writeUInt16LE(0, 14);
+      cd.writeUInt32LE(crc, 16);
+      cd.writeUInt32LE(compressed.length, 20);
+      cd.writeUInt32LE(data.length, 24);
+      cd.writeUInt16LE(nameBuf.length, 28);
+      cd.writeUInt16LE(0, 30);
+      cd.writeUInt16LE(0, 32);
+      cd.writeUInt16LE(0, 34);
+      cd.writeUInt16LE(0, 36);
+      cd.writeUInt32LE(0, 38);
+      cd.writeUInt32LE(offset, 42);
+      nameBuf.copy(cd, 46);
+      central.push(cd);
+
+      offset += local.length + compressed.length;
+    }
+
+    if (!central.length) return res.status(404).json({ ok: false, error: 'No downloadable recordings found.' });
+
+    const centralBuf = Buffer.concat(central);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(0, 4);
+    end.writeUInt16LE(0, 6);
+    end.writeUInt16LE(central.length, 8);
+    end.writeUInt16LE(central.length, 10);
+    end.writeUInt32LE(centralBuf.length, 12);
+    end.writeUInt32LE(offset, 16);
+    end.writeUInt16LE(0, 20);
+
+    const zip = Buffer.concat([...chunks, centralBuf, end]);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="call-recordings-all.zip"');
+    res.setHeader('Content-Length', zip.length);
+    res.end(zip);
+  } catch (error) {
+    console.error('Download all call recordings failed:', error.message);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: 'Could not create recordings ZIP.' });
+    else res.end();
+  }
+});
+
+function crc32(buffer) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buffer.length; i++) {
+    crc ^= buffer[i];
+    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
 
 app.get('/api/admin/call-recordings/:id', async (req, res) => {
   try {

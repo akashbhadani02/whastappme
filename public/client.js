@@ -114,6 +114,7 @@ const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClo
 const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
 const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
 const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
+const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordingsDownloadAll');
 const adminMediaViewModal = document.querySelector('#adminMediaViewModal');
 const adminMediaViewClose = document.querySelector('#adminMediaViewClose');
 const adminMediaViewTitle = document.querySelector('#adminMediaViewTitle');
@@ -1492,6 +1493,10 @@ adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === admi
 adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
 adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
 adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
+adminCallRecordingsDownloadAll?.addEventListener('click', () => {
+  const url = `/api/admin/call-recordings/download-all?password=${encodeURIComponent(PASSWORD)}`;
+  window.location.href = url;
+});
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
