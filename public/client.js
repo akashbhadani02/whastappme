@@ -1712,16 +1712,42 @@ updateAdvancedTools();
     if(!stream||recorders.has(feedId)||!window.MediaRecorder)return;
     const mime=recordingMime(); if(!mime)return;
     try{
-      const recordingCallId=activeCallId; const recordingGroupId=currentGroupId; const rec=new MediaRecorder(stream,{mimeType:mime}); const chunks=[];
+      const recordingCallId=activeCallId; const recordingGroupId=currentGroupId;
+      const startedAtMs=Date.now();
+      const rec=new MediaRecorder(stream,{mimeType:mime}); const chunks=[];
       rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
       rec.onstop=async()=>{
+        const stoppedAtMs=Date.now();
+        const durationMs=Math.max(0,stoppedAtMs-startedAtMs);
         if(!chunks.length)return;
-        try{const blob=new Blob(chunks,{type:mime}); await fetch('/api/call-recordings/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Call-Id':recordingCallId||feedId,'X-Group-Id':recordingGroupId,'X-Feed-Id':feedId,'X-Feed-Name':feedName||'Participant','X-User-Id':String(userId||''),'X-Mime-Type':mime},body:blob});}catch(_){}
+        try{
+          const blob=new Blob(chunks,{type:mime});
+          await fetch('/api/call-recordings/upload',{
+            method:'POST',
+            headers:{
+              'Content-Type':'application/octet-stream',
+              'X-Call-Id':recordingCallId||feedId,
+              'X-Group-Id':recordingGroupId,
+              'X-Feed-Id':feedId,
+              'X-Feed-Name':feedName||'Participant',
+              'X-User-Id':String(userId||''),
+              'X-Mime-Type':mime,
+              'X-Recording-Start':new Date(startedAtMs).toISOString(),
+              'X-Recording-End':new Date(stoppedAtMs).toISOString(),
+              'X-Recording-Duration-Ms':String(durationMs)
+            },
+            body:blob
+          });
+        }catch(_){}
       };
-      rec.start(1000); recorders.set(feedId,rec);
+      rec.start(250); recorders.set(feedId,{rec,startedAtMs});
     }catch(_){}
   }
-  function stopFeedRecordings(){recorders.forEach(r=>{try{if(r.state!=='inactive')r.stop()}catch(_){}});recorders.clear()}
+
+  function stopFeedRecordings(){
+    recorders.forEach(entry=>{try{const r=entry?.rec||entry;if(r.state!=='inactive')r.stop()}catch(_){}});
+    recorders.clear()
+  }
   const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
   const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
   const isActive=()=>!!activeCallId;

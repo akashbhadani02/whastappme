@@ -372,12 +372,30 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     const feedName = String(req.headers['x-feed-name'] || 'Participant').slice(0, 80);
     const mime = String(req.headers['x-mime-type'] || 'video/webm').slice(0, 120);
     const userId = String(req.headers['x-user-id'] || '').slice(0, 120);
+    const recordingStartHeader = String(req.headers['x-recording-start'] || '');
+    const recordingEndHeader = String(req.headers['x-recording-end'] || '');
+    const requestedDurationMs = Number(req.headers['x-recording-duration-ms'] || 0);
+    const recordingStart = new Date(recordingStartHeader);
+    const recordingEnd = new Date(recordingEndHeader);
+    const validStart = Number.isNaN(recordingStart.getTime()) ? new Date() : recordingStart;
+    const validEnd = Number.isNaN(recordingEnd.getTime()) ? new Date() : recordingEnd;
+    const durationMs = Math.max(0, Number.isFinite(requestedDurationMs) && requestedDurationMs > 0
+      ? requestedDurationMs : validEnd.getTime() - validStart.getTime());
     if (!callId || !feedId || !Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ ok: false, error: 'Invalid recording.' });
     const groupDoc = await (await getGroupSettingsCollection())?.findOne({ _id: groupId });
-    const filename = `call-${groupId}-${callId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.webm`;
+    const pad = n => String(n).padStart(2,'0');
+    const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const sec = totalSeconds % 60;
+    const datePart = `${validStart.getFullYear()}-${pad(validStart.getMonth()+1)}-${pad(validStart.getDate())}`;
+    const timePart = `${pad(validStart.getHours())}-${pad(validStart.getMinutes())}-${pad(validStart.getSeconds())}`;
+    const durationPart = `${pad(h)}h${pad(m)}m${pad(sec)}s`;
+    const safeFeed = feedName.replace(/[^a-zA-Z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'Participant';
+    const filename = `${datePart}_${timePart}_${durationPart}_${safeFeed}.webm`;
     const upload = bucket.openUploadStream(filename, {
       contentType: mime,
-      metadata: { kind: 'call-recording', callId, groupId, groupName: groupDoc?.name || groupId, feedId, feedName, userId, createdAt: new Date() }
+      metadata: { kind: 'call-recording', callId, groupId, groupName: groupDoc?.name || groupId, feedId, feedName, userId, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt: new Date() }
     });
     await new Promise((resolve, reject) => {
       upload.once('finish', resolve); upload.once('error', reject); upload.end(req.body);
@@ -385,7 +403,7 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
     const createdAt = new Date();
     await db.collection(CALL_RECORDINGS_COLLECTION_NAME).insertOne({
       fileId: upload.id, filename, callId, groupId, groupName: groupDoc?.name || groupId,
-      feedId, feedName, userId, mime, size: req.body.length, createdAt
+      feedId, feedName, userId, mime, size: req.body.length, recordingStart: validStart, recordingEnd: validEnd, durationMs, createdAt
     });
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-recording-alert', {
