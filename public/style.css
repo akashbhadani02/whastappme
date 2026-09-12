@@ -173,30 +173,3 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 /* Admin password prompt must always stay above every other popup. */
 #passwordModal{z-index:100000!important}
 #passwordModal .modal-card{position:relative;z-index:100001}
-
-/* Protected chat media: no drag, selection, or casual context-menu saving.
-   Native Android builds also use FLAG_SECURE (see MainActivity.java). */
-.message img,.message video,.message audio{
-  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
-}
-.message img{ -webkit-user-drag:none; user-drag:none; }
-
-
-/* Final media-card layout: size the card to the media aspect ratio and keep
-   caption/time outside the media so nothing overlaps or gets pushed behind it. */
-.message{display:flex;flex-direction:column;align-items:stretch;}
-.message-content{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;}
-.media-card{width:min(360px,100%);max-width:100%;position:relative;overflow:visible;}
-.media-card>img,.media-card>video{display:block;width:100%;height:auto;max-width:100%;max-height:65vh;object-fit:contain;border-radius:8px;background:#dfe5e8;}
-.media-card>video{aspect-ratio:auto;}
-.media-card .media-actions{position:static;display:flex;width:100%;margin:7px 0 0;clear:both;}
-.media-card .media-download-btn{display:block;width:100%;min-height:42px;border:1px solid #cfd5d8;background:#fff;border-radius:12px;padding:9px 14px;font-size:14px;font-weight:600;box-sizing:border-box;cursor:pointer;}
-.media-card .media-download-btn:active{transform:scale(.99);}
-.message .meta{float:none;align-self:flex-end;margin:4px 0 0 10px;flex:0 0 auto;}
-.message .media-caption{width:100%;box-sizing:border-box;margin-top:6px;}
-@media(max-width:760px){
-  .media-card{width:min(76vw,300px);}
-  .media-card>img,.media-card>video{max-height:55vh;}
-  .media-card .media-download-btn{min-height:44px;font-size:14px;}
-}
-@media(max-width:420px){.media-card{width:min(82vw,300px);}}
