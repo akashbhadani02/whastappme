@@ -52,6 +52,8 @@ const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
 const fileInput = document.querySelector('#fileInput');
+const galleryInput = document.querySelector('#galleryInput');
+const galleryBtn = document.querySelector('#galleryBtn');
 const sendBtn = document.querySelector('#sendBtn');
 const attachBtn = document.querySelector('#attachBtn');
 const emojiBtn = document.querySelector('#emojiBtn');
@@ -630,6 +632,31 @@ function clearChat(broadcast=true) {
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
 attachBtn.addEventListener('click', () => fileInput.click());
+galleryBtn?.addEventListener('click', () => galleryInput?.click());
+galleryInput?.addEventListener('change', async e => {
+  const files = [...(e.target.files || [])];
+  if (!files.length) return;
+  for (const file of files) {
+    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mediaMime = file.type || ({
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
+      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo'
+    })[ext] || '';
+    const normalized = file.type ? file : new File([file], file.name, {
+      type: mediaMime || 'application/octet-stream',
+      lastModified: file.lastModified
+    });
+    if (!/^image\//i.test(normalized.type) && !/^video\//i.test(normalized.type)) {
+      showToast(`Only photo/video can be shared from Gallery: ${file.name}`);
+      continue;
+    }
+    await uploadMedia(normalized);
+  }
+  e.target.value = '';
+});
+
 fileInput.addEventListener('change', async e => {
   const files=[...e.target.files];
   if (!files.length) return;
@@ -1101,7 +1128,16 @@ async function joinGroup(groupId, openAfter=true) {
     socket.emit('join-group', { groupId: currentGroupId }, () => resolve());
   });
   await syncMessages();
-  if (openAfter) openChat();
+  // Always open a chat at its newest message, including after loading local
+  // history followed by the server history. Two animation frames ensure images,
+  // videos and other media that affect layout have had a chance to render.
+  if (openAfter) {
+    openChat();
+    requestAnimationFrame(() => {
+      scrollToBottom();
+      requestAnimationFrame(scrollToBottom);
+    });
+  }
 }
 
 loadGroups();
@@ -1157,7 +1193,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 
-function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }
+function scrollToBottom(){ messageArea.scrollTop = messageArea.scrollHeight; }
 function updatePreview(text){ listPreview.textContent=text; listTime.textContent=now(); }
 
 emojiPanel.innerHTML = emojis.map(e => `<button type="button" aria-label="${e}">${e}</button>`).join('');
@@ -1687,7 +1723,7 @@ updateAdvancedTools();
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('exit'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('call ended'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
   async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
