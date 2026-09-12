@@ -20,7 +20,6 @@ let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
 let groups = [];
-const authorizedGroupIds = new Set(['main']);
 let groupPasswordTarget = null;
 let selectionMode = false;
 const selectedMessageIds = new Set();
@@ -1060,13 +1059,11 @@ async function verifyAndOpenGroup() {
     const response = await fetch('/api/groups/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: group.id, password }) });
     const data = await response.json();
     if (!data.ok) { groupPasswordError.textContent = 'Wrong group password'; groupPasswordInput.select(); return; }
-    if (socket.connected) {
-      const auth = await new Promise(resolve => socket.emit('authorize-group', { groupId: group.id, password }, resolve));
-      if (!auth?.ok) { groupPasswordError.textContent = 'Could not authorize this group'; return; }
-      authorizedGroupIds.add(String(group.id));
-    }
     groupPasswordModal.classList.add('hidden');
     groupPasswordTarget = null;
+    if (socket.connected) {
+      await new Promise(resolve => socket.emit('authorize-group', { groupId: group.id, password }, () => resolve()));
+    }
     await joinGroup(group.id, true);
   } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
 }
@@ -1673,7 +1670,7 @@ updateAdvancedTools();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
   async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
-  function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming||!authorizedGroupIds.has(String(d.groupId)))return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
+  function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
   async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
   function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}

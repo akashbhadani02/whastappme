@@ -35,8 +35,8 @@ const DEFAULT_GROUP_ID = 'main';
 const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
 // WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
 const activeCalls = new Map();
-function groupRoom(groupId) { return `group:${normalizeGroupId(groupId)}`; }
 function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
+function memberRoom(groupId) { return `group-member:${normalizeGroupId(groupId)}`; }
 function removeSocketFromCalls(socket) {
   for (const [callId, call] of activeCalls) {
     if (!call.participants.has(socket.id)) continue;
@@ -1231,8 +1231,7 @@ async function sendPushToOtherUsers(msg) {
 
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
-  const gid = normalizeGroupId(saved.groupId);
-  io.to(groupRoom(gid)).emit(event, saved);
+  io.emit(event, saved);
   if (event === 'media') {
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);
@@ -1247,7 +1246,7 @@ io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
 
-  socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
+  socket.memberGroups = new Set();
 
   socket.on('register-user', (data) => {
     socket.userId = data && data.userId ? String(data.userId) : '';
@@ -1261,31 +1260,12 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok });
   });
 
-  socket.on('authorize-group', async (data, ack) => {
-    const groupId = normalizeGroupId(data?.groupId);
-    const password = String(data?.password || '');
-    try {
-      let ok = false;
-      const collection = await getGroupSettingsCollection();
-      if (!collection) {
-        const group = fallbackGroups.get(groupId);
-        ok = !!group && password === String(group.password || '');
-      } else {
-        const group = await collection.findOne({ _id: groupId });
-        ok = !!group && password === String(group.password || '');
-      }
-      if (ok) { socket.authorizedGroups.add(groupId); socket.join(groupRoom(groupId)); }
-      if (typeof ack === 'function') ack({ ok });
-    } catch (_) { if (typeof ack === 'function') ack({ ok:false }); }
-  });
-
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
-    if (!socket.authorizedGroups.has(groupId)) {
-      return typeof ack === 'function' && ack({ ok:false, error:'Group is not authorized.' });
-    }
+    const previousGroupId = socket.groupId;
+    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
     socket.groupId = groupId;
-    socket.join(groupRoom(groupId));
+    socket.join(`group:${groupId}`);
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1296,8 +1276,33 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // A password-verified user becomes a member of that group's private
+  // realtime member room. This is intentionally separate from the currently
+  // opened chat room, so a member can receive a call for Group A while
+  // viewing Group B, without Group B receiving Group A's call.
+  socket.on('authorize-group', async (data, ack) => {
+    const groupId = normalizeGroupId(data?.groupId);
+    const password = String(data?.password || '');
+    try {
+      const collection = await getGroupSettingsCollection();
+      let valid = false;
+      if (!collection) {
+        const group = fallbackGroups.get(groupId);
+        valid = !!group && password === String(group.password || '');
+      } else {
+        const group = await collection.findOne({ _id: groupId });
+        valid = !!group && password === String(group.password || '');
+      }
+      if (!valid) return typeof ack === 'function' && ack({ ok: false });
+      socket.memberGroups.add(groupId);
+      socket.join(memberRoom(groupId));
+      if (typeof ack === 'function') ack({ ok: true, groupId });
+    } catch (_) {
+      if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
   socket.groupId = DEFAULT_GROUP_ID;
-  socket.join(groupRoom(DEFAULT_GROUP_ID));
   try {
     const history = await loadMessages('', DEFAULT_GROUP_ID);
     socket.emit('history', history);
@@ -1453,7 +1458,7 @@ io.on('connection', async (socket) => {
       const updated = result?.value || result;
       if (!updated) { if (typeof ack === 'function') ack({ok:false}); return; }
       const event = { message: updated, groupId };
-      io.to(groupRoom(groupId)).emit('message-updated', event);
+      io.emit('message-updated', event);
       publishRealtimeEvent('message-updated', event);
       if (typeof ack === 'function') ack({ok:true, message:updated});
     } catch (error) {
@@ -1478,7 +1483,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
-      io.to(groupRoom(groupId)).emit('delete-message', deleteEvent);
+      io.emit('delete-message', deleteEvent);
       publishRealtimeEvent('delete-message', deleteEvent);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
@@ -1512,7 +1517,7 @@ io.on('connection', async (socket) => {
       }
 
       const event = { ids, groupId };
-      io.to(groupRoom(groupId)).emit('delete-messages', event);
+      io.emit('delete-messages', event);
       publishRealtimeEvent('delete-messages', event);
       if (typeof ack === 'function') ack({ ok: true, count: ids.length });
     } catch (error) {
@@ -1523,7 +1528,7 @@ io.on('connection', async (socket) => {
 
   socket.on('typing', (data) => {
     if (!data || !socket.groupId || normalizeGroupId(data.groupId) !== normalizeGroupId(socket.groupId)) return;
-    io.to(groupRoom(socket.groupId)).emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
+    io.emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
   });
 
   socket.on('message-read', async (data) => {
@@ -1533,7 +1538,7 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (collection) {
         await collection.updateOne(
-          { id: data.id, $or: [{ groupId: normalizeGroupId(socket.groupId) }, ...(normalizeGroupId(socket.groupId) === DEFAULT_GROUP_ID ? [{ groupId: { $exists:false } }] : [])] },
+          { id: data.id },
           { $addToSet: { readBy: readerId } }
         );
       }
@@ -1541,7 +1546,7 @@ io.on('connection', async (socket) => {
       console.error('Failed to save read receipt:', error.message);
     }
     const readEvent = { id: data.id, userId: readerId, groupId: normalizeGroupId(socket.groupId) };
-    io.to(groupRoom(readEvent.groupId)).emit('message-read', readEvent);
+    io.emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
@@ -1551,14 +1556,13 @@ io.on('connection', async (socket) => {
     try {
       const collection = await getCollection();
       if (collection) {
-        const gid = normalizeGroupId(socket.groupId);
-        await collection.updateOne({ id: data.id, $or: [{ groupId: gid }, ...(gid === DEFAULT_GROUP_ID ? [{ groupId: { $exists:false } }] : [])] }, { $addToSet: { deliveredTo: receiverId } });
+        await collection.updateOne({ id: data.id }, { $addToSet: { deliveredTo: receiverId } });
       }
     } catch (error) {
       console.error('Failed to save delivery receipt:', error.message);
     }
     const deliveredEvent = { id: data.id, userId: receiverId, groupId: normalizeGroupId(socket.groupId) };
-    io.to(groupRoom(deliveredEvent.groupId)).emit('message-delivered', deliveredEvent);
+    io.emit('message-delivered', deliveredEvent);
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
@@ -1576,7 +1580,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast so every instance is immediately consistent.
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
-      io.to(groupRoom(clearEvent.groupId)).emit('clear-chat', clearEvent);
+      io.emit('clear-chat', clearEvent);
       publishRealtimeEvent('clear-chat', clearEvent);
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
@@ -1598,7 +1602,10 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    io.to(groupRoom(groupId)).emit('incoming-call', {
+    // Notify only password-authorized members of the group. Do NOT broadcast
+    // to every connected socket: members of other groups must never receive
+    // this incoming-call event.
+    io.to(memberRoom(groupId)).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
@@ -1610,8 +1617,8 @@ io.on('connection', async (socket) => {
     if (!call) {
       return typeof ack === 'function' && ack({ ok: false, error: 'Call is no longer active.' });
     }
-    if (!socket.authorizedGroups.has(call.groupId)) {
-      return typeof ack === 'function' && ack({ ok:false, error:'You are not authorized for this group.' });
+    if (!socket.memberGroups?.has(call.groupId)) {
+      return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group call.' });
     }
     socket.join(callRoom(call.groupId)); socket.callId = callId; socket.callType = call.type;
     const peers = [...call.participants].filter(id => id !== socket.id);
@@ -1638,8 +1645,8 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.to(groupRoom(call.groupId)).emit('call-ended', {
-      callId, groupId: call.groupId, reason: 'ended', endedBy: socket.id, name
+    io.to(memberRoom(call.groupId)).emit('call-ended', {
+      callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
       const participantSocket = io.sockets.sockets.get(participantId);
@@ -1657,7 +1664,7 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY group member declines, terminate the whole group call for everyone.
-    io.to(groupRoom(call.groupId)).emit('call-ended', {
+    io.to(callRoom(call.groupId)).emit('call-ended', {
       callId, reason: 'declined', declinedBy: socket.id, name
     });
     for (const participantId of call.participants) {
