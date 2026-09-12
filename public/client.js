@@ -203,6 +203,9 @@ function loadLocalMessageHistory() {
     if (!Array.isArray(list)) return;
     list.sort((a,b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
     list.forEach(msg => renderMessage(msg, msg.userId === userId ? 'outgoing' : 'incoming'));
+    // Always open a mobile/desktop chat at the newest message so users do not
+    // have to scroll through the whole history to reach the latest message.
+    requestAnimationFrame(() => scrollToBottom());
   } catch (_) {}
 }
 
@@ -1309,7 +1312,7 @@ function updatePreview(text){ listPreview.textContent=text; listTime.textContent
 
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); const mode=btn.textContent.trim().toLowerCase(); document.querySelectorAll('.message').forEach(el=>{const m=messages.get(el.dataset.id);let show=true;if(mode==='favourites') show=starredIds.has(el.dataset.id)||!!m?.starred;if(mode==='groups') show=true;el.style.display=show?'':'none';}); }));
-function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(markVisibleMessagesRead, 50); }
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(() => { scrollToBottom(); markVisibleMessagesRead(); }, 50); }
 function closeChat(){
   chatOpen=false;
   app.classList.remove('chat-open');
