@@ -1573,7 +1573,9 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    io.emit('incoming-call', {
+    // Notify only members of the group where the call was started.
+    // Never broadcast incoming calls to users in other groups.
+    io.to(`group:${groupId}`).emit('incoming-call', {
       callId, groupId, type, fromSocketId: socket.id,
       fromUserId: call.startedByUserId, fromName: call.startedByName
     });
@@ -1610,7 +1612,7 @@ io.on('connection', async (socket) => {
     if (!call) return;
     const name = String(data?.name || '').slice(0, 60);
     // If ANY participant presses End/Close, terminate the whole group call for everyone.
-    io.emit('call-ended', {
+    io.to(callRoom(call.groupId)).emit('call-ended', {
       callId, reason: 'ended', endedBy: socket.id, name
     });
     for (const participantId of call.participants) {
