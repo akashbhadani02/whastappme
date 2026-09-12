@@ -181,6 +181,7 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
 .call-modal.audio-call .video-control{display:none}.call-modal.audio-call .call-stage{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.call-modal.audio-call .call-tile video{display:none}
 @media(max-width:760px){.call-modal{padding:0}.call-card{width:100vw;height:100dvh;border-radius:0}.call-stage{grid-template-columns:repeat(auto-fit,minmax(145px,1fr));padding:8px;gap:7px}.call-tile{min-height:150px}.call-tile video{min-height:150px}.local-call-video{right:12px;bottom:88px;width:120px;height:90px}.call-controls{height:70px;min-height:70px}.incoming-call{top:65px;right:10px;width:calc(100vw - 20px)}#audioCallBtn,#videoCallBtn{width:37px;height:37px;font-size:19px}}
 
+.call-recording-timer{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:999px;background:#3a1115;color:#fff;font-weight:700;font-size:13px;line-height:1;letter-spacing:.3px;box-shadow:0 0 0 1px #ff4d5f55}.call-recording-timer.hidden{display:none}
 .call-modal.call-fullscreen{padding:0}.call-modal.call-fullscreen .call-card{width:100vw;height:100vh;border-radius:0;max-width:none;max-height:none}.call-modal:fullscreen{padding:0}.call-modal:fullscreen .call-card{width:100vw;height:100vh;border-radius:0;max-width:none;max-height:none}
 
 /* Admin live media popup */
