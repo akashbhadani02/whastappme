@@ -1774,17 +1774,19 @@ io.on('connection', async (socket) => {
     };
     activeCalls.set(callId, call);
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
-    // Send the incoming-call invitation only to sockets authorized for this group.
-    // This is intentionally not io.emit() and not a generic group room, because a
-    // member may currently have another group's chat open.
+    // IMPORTANT: ring only users who are CURRENTLY inside this same group.
+    // A user may be authorized for multiple groups, but being authorized is not
+    // enough: if A is viewing group A and B is viewing group B, B must NOT receive
+    // A's group-A call notification.
     for (const target of io.sockets.sockets.values()) {
       if (target.id === socket.id) continue;
-      if (target.authorizedGroups?.has(groupId)) {
-        target.emit('incoming-call', {
-          callId, groupId, type, fromSocketId: socket.id,
-          fromUserId: call.startedByUserId, fromName: call.startedByName
-        });
-      }
+      const targetGroupId = normalizeGroupId(target.groupId);
+      if (targetGroupId !== groupId) continue;
+      if (!target.authorizedGroups?.has(groupId)) continue;
+      target.emit('incoming-call', {
+        callId, groupId, type, fromSocketId: socket.id,
+        fromUserId: call.startedByUserId, fromName: call.startedByName
+      });
     }
     if (typeof ack === 'function') ack({ ok: true, callId, type });
   });

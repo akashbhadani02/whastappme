@@ -1706,7 +1706,6 @@ updateAdvancedTools();
   const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
   let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false,cameraFacing='user',swappingCamera=false;
   const peers=new Map();
-  const pendingPeerOffers=new Set();
   const recorders=new Map();
   let recordingNoticeShown=false;
   const recordingMime=()=>['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','audio/webm;codecs=opus','video/webm'].find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
@@ -1758,46 +1757,16 @@ updateAdvancedTools();
   function showModal(){callTitle.textContent=groupName||'Group call';callAvatar.textContent=(groupName||'W').trim().charAt(0).toUpperCase();callModal.classList.remove('hidden');callModal.classList.toggle('video-call',activeCallType==='video');callModal.classList.toggle('audio-call',activeCallType==='audio')}
   function tile(id,nm,stream){let el=document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`);if(!el){el=document.createElement('div');el.className='call-tile';el.dataset.peer=id;const v=document.createElement('video');v.autoplay=true;v.playsInline=true;const lab=document.createElement('span');lab.className='tile-name';lab.textContent=safeText(nm||'Participant',60);el.append(v,lab);callStage.appendChild(el)}const v=el.querySelector('video');if(v&&stream)v.srcObject=stream}
   function removePeer(id){const x=peers.get(id);if(x){try{x.pc.close()}catch(_){}}peers.delete(id);document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`)?.remove();updateStatus()}
-  function createPeer(id,nm,offer){
-    let x=peers.get(id); if(x){ if(offer && x.pc.signalingState==='stable' && !pendingPeerOffers.has(id)) makeOffer(id,x.pc); return x.pc; }
-    const pc=new RTCPeerConnection(RTC_CONFIG);
-    x={pc,name:safeText(nm||'Participant',60),iceQueue:[]}; peers.set(id,x);
-    if(localStream) localStream.getTracks().forEach(t=>{try{pc.addTrack(t,localStream)}catch(_){}});
+  function createPeer(id,nm,offer){let x=peers.get(id);if(x)return x.pc;const pc=new RTCPeerConnection(RTC_CONFIG);x={pc,name:safeText(nm||'Participant',60)};peers.set(id,x);if(localStream)localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
     pc.onicecandidate=e=>{if(e.candidate)socket.emit('call-signal',{callId:activeCallId,to:id,kind:'ice',data:e.candidate})};
-    pc.ontrack=e=>{
-      const st=e.streams?.[0]||new MediaStream([e.track]);
-      tile(id,x.name,st);
-      // Keep the remote video visible; recording is based on the local composite recorder below.
-    };
-    pc.onconnectionstatechange=()=>{
-      if(pc.connectionState==='connected'){ updateStatus(); }
-      else if(['failed','closed'].includes(pc.connectionState)){ removePeer(id); }
-    };
-    pc.oniceconnectionstatechange=()=>{
-      if(pc.iceConnectionState==='failed'){
-        try{pc.restartIce();}catch(_){}
-        if(pc.signalingState==='stable') makeOffer(id,pc,true);
-      }
-    };
-    updateStatus();
-    if(offer) makeOffer(id,pc);
-    return pc;
-  }
-  async function makeOffer(id,pc,restart=false){
-    if(!pc || pendingPeerOffers.has(id)) return;
-    if(pc.signalingState!=='stable') return;
-    pendingPeerOffers.add(id);
-    try{
-      const o=await pc.createOffer(restart?{iceRestart:true}:undefined);
-      await pc.setLocalDescription(o);
-      socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription});
-    }catch(e){ try{pc.close()}catch(_){} }
-    finally{pendingPeerOffers.delete(id);}
-  }
+    pc.ontrack=e=>{const st=e.streams?.[0]||new MediaStream([e.track]); tile(id,x.name,st); startFeedRecording('peer-'+id,x.name,st);};
+    pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
+    if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
+    updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia({audio:true,video:type==='video'?{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}}:false})}
   async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const gid=String(d.groupId);if(gid!=='main'&&!verifiedGroupPasswords.has(gid))return;const g=groups.find(x=>String(x.id)===gid);if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(peer=>createPeer(typeof peer==='string'?peer:peer.socketId, typeof peer==='string'?'Participant':(peer.name||'Participant'), false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
   function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
@@ -1856,25 +1825,8 @@ updateAdvancedTools();
     finally{swappingCamera=false;}
   });
   socket.on('incoming-call',d=>incoming(d));
-  socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name||'Participant',true)});
-  socket.on('call-signal',async d=>{
-    if(!isActive()||d?.callId!==activeCallId||!d.from)return;
-    let x=peers.get(d.from);
-    if(d.kind==='offer'){
-      const pc=createPeer(d.from,'Participant',false);
-      try{
-        if(pc.signalingState==='have-local-offer') await pc.setLocalDescription({type:'rollback'});
-        await pc.setRemoteDescription(new RTCSessionDescription(d.data));
-        const a=await pc.createAnswer(); await pc.setLocalDescription(a);
-        socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription});
-        if(x?.iceQueue?.length){for(const c of x.iceQueue){try{await pc.addIceCandidate(c)}catch(_){}}x.iceQueue=[];}
-      }catch(e){try{pc.close()}catch(_){}removePeer(d.from);showToast('Call connection failed; retrying…');setTimeout(()=>{if(isActive())createPeer(d.from,'Participant',true)},700)}
-    }else if(d.kind==='answer'){
-      if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data));if(x.iceQueue?.length){for(const c of x.iceQueue){try{await x.pc.addIceCandidate(c)}catch(_){}}x.iceQueue=[];}}catch(_){ }
-    }else if(d.kind==='ice'){
-      if(x){const c=new RTCIceCandidate(d.data);if(x.pc.remoteDescription?.type)try{await x.pc.addIceCandidate(c)}catch(_){}else x.iceQueue.push(c)}
-    }
-  });
+  socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name,true)});
+  socket.on('call-signal',async d=>{if(!isActive()||d?.callId!==activeCallId||!d.from)return;let x=peers.get(d.from);if(d.kind==='offer'){const pc=createPeer(d.from,'Participant',false);try{await pc.setRemoteDescription(new RTCSessionDescription(d.data));const a=await pc.createAnswer();await pc.setLocalDescription(a);socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription})}catch(_){showToast('Call connection failed')}}else if(d.kind==='answer'){if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data))}catch(_){}}else if(d.kind==='ice'){if(x)try{await x.pc.addIceCandidate(new RTCIceCandidate(d.data))}catch(_){} }});
   socket.on('call-peer-left',d=>{if(d?.callId===activeCallId)removePeer(d.socketId)});
   socket.on('call-rejected',d=>{if(d?.callId===activeCallId&&d.socketId!==socket.id)showToast(`${d.name||'Someone'} declined the call`)});
   socket.on('call-ended',d=>{
