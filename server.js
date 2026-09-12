@@ -360,7 +360,7 @@ app.get('/api/group', async (req, res) => {
 });
 
 
-// ---- Group call recordings (browser-side per-feed recordings stored in MongoDB GridFS) ----
+// ---- Group call recordings (one composite recording per participant/call stored in MongoDB GridFS) ----
 app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-stream', limit: '100mb' }), async (req, res) => {
   try {
     const db = await getDb();

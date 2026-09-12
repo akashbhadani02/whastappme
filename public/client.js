@@ -1706,73 +1706,168 @@ updateAdvancedTools();
   const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
   let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false,cameraFacing='user',swappingCamera=false;
   const peers=new Map();
-  // One composite recorder per participant. The recorded video is a live canvas
-  // containing EVERY visible call feed (local + all remote feeds), not one file per feed.
-  let compositeRecorder=null, compositeChunks=[], compositeStartedAt=0, compositeCanvas=null, compositeCtx=null, compositeTimer=null, compositeAudioContext=null, compositeAudioDestination=null;
-  const remoteStreams=new Map();
-  const recordingMime=()=>['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+  // One recorder per participant/call. The recorder captures a composited canvas
+  // containing every video tile visible in the call, plus mixed participant audio.
+  let callRecorder=null;
+  let callRecordingStartedAt=0;
+  let callRecordingAnimation=0;
+  let callRecordingCanvas=null;
+  let callRecordingCtx=null;
+  let callRecordingAudioCtx=null;
+  let callRecordingAudioDest=null;
+  const callRecordingAudioSources=new Map();
+  let callRecordingMime='';
 
-  function feedEntries(){
-    const out=[];
-    if(localStream) out.push({id:'local-'+socket.id,name:name||'You',stream:localStream});
-    remoteStreams.forEach((stream,id)=>{ const x=peers.get(id); out.push({id,name:x?.name||'Participant',stream}); });
-    return out;
-  }
-  function drawComposite(){
-    if(!compositeCtx||!compositeCanvas)return;
-    const feeds=feedEntries();
-    const cols=Math.max(1,Math.ceil(Math.sqrt(Math.max(1,feeds.length))));
-    const rows=Math.max(1,Math.ceil(Math.max(1,feeds.length)/cols));
-    const w=640,h=360; compositeCanvas.width=cols*w; compositeCanvas.height=rows*h;
-    compositeCtx.fillStyle='#111'; compositeCtx.fillRect(0,0,compositeCanvas.width,compositeCanvas.height);
-    feeds.forEach((f,i)=>{
-      const x=(i%cols)*w,y=Math.floor(i/cols)*h;
-      const video=document.querySelector(`.call-tile[data-peer="${CSS.escape(f.id)}"] video`) || (f.id==='local-'+socket.id?localCallVideo:null);
-      const track=f.stream?.getVideoTracks?.()[0];
-      if(video && video.readyState>=2 && track?.enabled && video.videoWidth){
-        const vw=video.videoWidth,vh=video.videoHeight,scale=Math.max(w/vw,h/vh),dw=vw*scale,dh=vh*scale;
-        compositeCtx.save(); compositeCtx.beginPath(); compositeCtx.rect(x,y,w,h); compositeCtx.clip();
-        compositeCtx.drawImage(video,x+(w-dw)/2,y+(h-dh)/2,dw,dh); compositeCtx.restore();
-      } else {
-        compositeCtx.fillStyle='#263238'; compositeCtx.fillRect(x,y,w,h);
-        compositeCtx.fillStyle='#fff'; compositeCtx.font='bold 24px sans-serif'; compositeCtx.textAlign='center';
-        compositeCtx.fillText(f.name||'Participant',x+w/2,y+h/2);
-      }
-      compositeCtx.fillStyle='rgba(0,0,0,.55)'; compositeCtx.fillRect(x+10,y+h-42,Math.min(w-20,260),30);
-      compositeCtx.fillStyle='#fff'; compositeCtx.font='16px sans-serif'; compositeCtx.textAlign='left'; compositeCtx.fillText(f.name||'Participant',x+20,y+h-21);
+  const recordingMime=()=>[
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm'
+  ].find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+
+  function recordingVideos(){
+    const list=[];
+    if(localCallVideo?.srcObject && !(activeCallType==='video' && cameraOff)) list.push({video:localCallVideo,name:name||'You'});
+    callStage?.querySelectorAll('.call-tile video').forEach(v=>{
+      if(v.srcObject) list.push({video:v,name:v.parentElement?.querySelector('.tile-name')?.textContent||'Participant'});
     });
+    return list;
   }
-  function addAudioStream(stream){
-    if(!compositeAudioContext||!compositeAudioDestination||!stream)return;
-    try{ const tracks=stream.getAudioTracks?.(); if(tracks?.length){ const source=compositeAudioContext.createMediaStreamSource(new MediaStream(tracks)); source.connect(compositeAudioDestination); } }catch(_){}
+
+  function drawCallRecordingFrame(){
+    if(!callRecordingCtx||!callRecordingCanvas)return;
+    const ctx=callRecordingCtx, c=callRecordingCanvas;
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,c.width,c.height);
+
+    const videos=recordingVideos();
+    const count=Math.max(1,videos.length);
+    const cols=count===1?1:count<=4?2:3;
+    const rows=Math.ceil(count/cols);
+    const cellW=Math.floor(c.width/cols), cellH=Math.floor(c.height/rows);
+
+    videos.forEach((item,index)=>{
+      const v=item.video;
+      const col=index%cols, row=Math.floor(index/cols);
+      const x=col*cellW, y=row*cellH;
+      if(v.readyState>=2 && v.videoWidth && v.videoHeight){
+        const scale=Math.max(cellW/v.videoWidth,cellH/v.videoHeight);
+        const dw=v.videoWidth*scale, dh=v.videoHeight*scale;
+        const sx=x+(cellW-dw)/2, sy=y+(cellH-dh)/2;
+        try{ctx.drawImage(v,sx,sy,dw,dh)}catch(_){}
+      }else{
+        ctx.fillStyle='#111';
+        ctx.fillRect(x,y,cellW,cellH);
+      }
+      ctx.fillStyle='rgba(0,0,0,.55)';
+      ctx.fillRect(x,y+cellH-34,cellW,34);
+      ctx.fillStyle='#fff';
+      ctx.font='600 18px sans-serif';
+      ctx.fillText(String(item.name||'Participant').slice(0,40),x+12,y+cellH-11);
+    });
+
+    if(!videos.length){
+      ctx.fillStyle='#111';
+      ctx.fillRect(0,0,c.width,c.height);
+      ctx.fillStyle='#fff';
+      ctx.font='600 24px sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText('Waiting for participants…',c.width/2,c.height/2);
+      ctx.textAlign='start';
+    }
+    callRecordingAnimation=requestAnimationFrame(drawCallRecordingFrame);
   }
-  function startCompositeRecording(){
-    if(compositeRecorder||!window.MediaRecorder||!activeCallId)return;
-    const mime=recordingMime(); if(!mime)return;
+
+  function addRecordingAudioStream(stream,key){
+    if(!stream||!callRecordingAudioCtx||!callRecordingAudioDest||callRecordingAudioSources.has(key))return;
     try{
-      compositeCanvas=document.createElement('canvas'); compositeCanvas.width=640; compositeCanvas.height=360; compositeCtx=compositeCanvas.getContext('2d');
-      const videoStream=compositeCanvas.captureStream(20);
-      compositeAudioContext=new (window.AudioContext||window.webkitAudioContext)();
-      compositeAudioDestination=compositeAudioContext.createMediaStreamDestination();
-      addAudioStream(localStream); remoteStreams.forEach(addAudioStream);
-      const mixed=new MediaStream([...videoStream.getVideoTracks(),...compositeAudioDestination.stream.getAudioTracks()]);
-      compositeStartedAt=Date.now(); compositeChunks=[];
-      compositeRecorder=new MediaRecorder(mixed,{mimeType:mime});
-      compositeRecorder.ondataavailable=e=>{if(e.data?.size)compositeChunks.push(e.data)};
-      compositeRecorder.onstop=async()=>{
-        const stoppedAt=Date.now(), durationMs=Math.max(0,stoppedAt-compositeStartedAt);
-        const chunks=compositeChunks.splice(0); const blob=chunks.length?new Blob(chunks,{type:mime}):null;
-        try{ if(blob?.size){ await fetch('/api/call-recordings/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Call-Id':activeCallId,'X-Group-Id':currentGroupId,'X-Feed-Id':'composite-'+socket.id,'X-Feed-Name':name||'You','X-User-Id':String(userId||''),'X-Mime-Type':mime,'X-Recording-Start':new Date(compositeStartedAt).toISOString(),'X-Recording-End':new Date(stoppedAt).toISOString(),'X-Recording-Duration-Ms':String(durationMs)},body:blob}); } }catch(_){}
-        try{compositeAudioContext?.close()}catch(_){} compositeAudioContext=null; compositeAudioDestination=null; compositeCanvas=null; compositeCtx=null; compositeRecorder=null;
+      const audioTracks=stream.getAudioTracks();
+      if(!audioTracks.length)return;
+      const audioStream=new MediaStream(audioTracks);
+      const source=callRecordingAudioCtx.createMediaStreamSource(audioStream);
+      source.connect(callRecordingAudioDest);
+      callRecordingAudioSources.set(key,{source,audioStream});
+    }catch(_){}
+  }
+
+  function startCallRecording(){
+    if(callRecorder||!window.MediaRecorder)return;
+    callRecordingMime=recordingMime();
+    if(!callRecordingMime)return;
+    try{
+      callRecordingCanvas=document.createElement('canvas');
+      callRecordingCanvas.width=1280;
+      callRecordingCanvas.height=720;
+      callRecordingCtx=callRecordingCanvas.getContext('2d',{alpha:false});
+      if(!callRecordingCtx)return;
+
+      const canvasStream=callRecordingCanvas.captureStream(30);
+      let finalStream=canvasStream;
+
+      if(window.AudioContext||window.webkitAudioContext){
+        const AC=window.AudioContext||window.webkitAudioContext;
+        callRecordingAudioCtx=new AC();
+        callRecordingAudioDest=callRecordingAudioCtx.createMediaStreamDestination();
+        addRecordingAudioStream(localStream,'local');
+        peers.forEach((x,id)=>{
+          if(x?.stream)addRecordingAudioStream(x.stream,'peer-'+id);
+        });
+        callRecordingAudioCtx.resume?.().catch(()=>{});
+        callRecordingAudioDest.stream.getAudioTracks().forEach(t=>canvasStream.addTrack(t));
+      }
+
+      const chunks=[];
+      callRecordingStartedAt=Date.now();
+      callRecorder=new MediaRecorder(finalStream,{mimeType:callRecordingMime});
+      callRecorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
+      callRecorder.onstop=async()=>{
+        const stoppedAtMs=Date.now();
+        const durationMs=Math.max(0,stoppedAtMs-callRecordingStartedAt);
+        try{
+          const blob=new Blob(chunks,{type:callRecordingMime});
+          if(blob.size){
+            await fetch('/api/call-recordings/upload',{
+              method:'POST',
+              headers:{
+                'Content-Type':'application/octet-stream',
+                'X-Call-Id':activeCallId||('call-'+callRecordingStartedAt),
+                'X-Group-Id':currentGroupId,
+                'X-Feed-Id':'user-'+String(userId||socket.id),
+                'X-Feed-Name':name||'Participant',
+                'X-User-Id':String(userId||''),
+                'X-Mime-Type':callRecordingMime,
+                'X-Recording-Start':new Date(callRecordingStartedAt).toISOString(),
+                'X-Recording-End':new Date(stoppedAtMs).toISOString(),
+                'X-Recording-Duration-Ms':String(durationMs)
+              },
+              body:blob
+            });
+          }
+        }catch(_){}
       };
-      compositeRecorder.start(500);
-      compositeTimer=setInterval(drawComposite,50);
-    }catch(_){ compositeRecorder=null; }
+      callRecorder.start(1000);
+      drawCallRecordingFrame();
+      addRecordingAudioStream(localStream,'local');
+    }catch(_){
+      callRecorder=null;
+    }
   }
-  function stopCompositeRecording(){
-    if(compositeTimer){clearInterval(compositeTimer);compositeTimer=null;}
-    try{if(compositeRecorder&&compositeRecorder.state!=='inactive')compositeRecorder.stop();}catch(_){}
+
+  function stopCallRecording(){
+    if(callRecordingAnimation)cancelAnimationFrame(callRecordingAnimation);
+    callRecordingAnimation=0;
+    const r=callRecorder;
+    callRecorder=null;
+    try{if(r&&r.state!=='inactive')r.stop()}catch(_){}
+    callRecordingAudioSources.forEach(x=>{try{x.source.disconnect()}catch(_){}}); 
+    callRecordingAudioSources.clear();
+    try{callRecordingAudioCtx?.close()}catch(_){}
+    callRecordingAudioCtx=null;
+    callRecordingAudioDest=null;
+    callRecordingCanvas=null;
+    callRecordingCtx=null;
+    callRecordingStartedAt=0;
   }
+
   const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
   const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
   const isActive=()=>!!activeCallId;
@@ -1783,16 +1878,16 @@ updateAdvancedTools();
   function removePeer(id){const x=peers.get(id);if(x){try{x.pc.close()}catch(_){}}peers.delete(id);document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`)?.remove();updateStatus()}
   function createPeer(id,nm,offer){let x=peers.get(id);if(x)return x.pc;const pc=new RTCPeerConnection(RTC_CONFIG);x={pc,name:safeText(nm||'Participant',60)};peers.set(id,x);if(localStream)localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
     pc.onicecandidate=e=>{if(e.candidate)socket.emit('call-signal',{callId:activeCallId,to:id,kind:'ice',data:e.candidate})};
-    pc.ontrack=e=>{const st=e.streams?.[0]||new MediaStream([e.track]); remoteStreams.set(id,st); tile(id,x.name,st); if(e.track.kind==='audio') addAudioStream(st);};
+    pc.ontrack=e=>{const st=e.streams?.[0]||new MediaStream([e.track]); x.stream=st; tile(id,x.name,st); addRecordingAudioStream(st,'peer-'+id);};
     pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia({audio:true,video:type==='video'?{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}}:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startCompositeRecording(); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startCallRecording(); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const gid=String(d.groupId);if(gid!=='main'&&!verifiedGroupPasswords.has(gid))return;const g=groups.find(x=>String(x.id)===gid);if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startCompositeRecording(); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startCallRecording(); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
-  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopCompositeRecording(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}
+  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopCallRecording(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
   callMuteBtn?.addEventListener('click',()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);callMuteBtn.textContent=muted?'🔇':'🎙️'});
   callCameraBtn?.addEventListener('click',async()=>{
