@@ -448,7 +448,7 @@ function renderMessage(msg, direction) {
   messages.set(msg.id, msg);
 
   const el = document.createElement('div');
-  el.className = `message ${direction}`;
+  el.className = `message ${direction}${(msg.type === 'image' || msg.type === 'video') ? ' media-message' : ''}`;
   el.dataset.id = msg.id;
 
   el.addEventListener('click', (e) => {
@@ -629,49 +629,30 @@ function clearChat(broadcast=true) {
 
 clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
 
-attachBtn.addEventListener('click', () => {
-  // Do not use capture here: on phones this opens the normal gallery/file picker,
-  // where the user can select photos and videos already stored on the device.
-  fileInput.value = '';
-  fileInput.click();
-});
-
+attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', async e => {
-  const files = Array.from(e.target.files || []);
+  const files=[...e.target.files];
   if (!files.length) return;
-
+  const allowed = /^(image\/|video\/|audio\/)/i;
+  const docs = /^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i;
   for (const file of files) {
-    if (!file || file.size <= 0) {
-      showToast('Empty file cannot be uploaded');
-      continue;
-    }
-
-    // Gallery/file pickers on some Android browsers may report an empty MIME type.
-    // Resolve it from the extension so selected photos/videos still send normally.
+    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
+    // Some mobile browsers return an empty MIME type. Use the extension as a safe fallback.
     const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const extMime = {
-      jpg:'image/jpeg', jpeg:'image/jpeg', jpe:'image/jpeg', png:'image/png', gif:'image/gif',
-      webp:'image/webp', heic:'image/heic', heif:'image/heif', avif:'image/avif',
-      mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime', m4v:'video/x-m4v',
-      mkv:'video/x-matroska', avi:'video/x-msvideo'
-    }[ext] || '';
-    const mime = String(file.type || extMime).toLowerCase();
-
-    if (!mime.startsWith('image/') && !mime.startsWith('video/')) {
-      showToast(`Only photos and videos can be sent: ${file.name}`);
+    const mediaMime = file.type || ({
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
+      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo', mp3:'audio/mpeg', m4a:'audio/mp4',
+      wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg'
+    })[ext] || '';
+    const normalized = file.type ? file : new File([file], file.name, { type: mediaMime || 'application/octet-stream', lastModified: file.lastModified });
+    if (!allowed.test(normalized.type) && !docs.test(normalized.type) && !mediaMime) {
+      showToast(`Unsupported file type: ${file.name}`);
       continue;
     }
-
-    const normalized = file.type
-      ? file
-      : new File([file], file.name, { type: mime, lastModified: file.lastModified });
-
-    // Upload directly. No separate preview/view card is inserted before the
-    // upload finishes; the real message card is rendered only after success.
     await uploadMedia(normalized);
   }
-
-  e.target.value = '';
+  e.target.value='';
 });
 
 function makeUploadBubble(file, type) {
@@ -1669,10 +1650,10 @@ updateAdvancedTools();
   const audioCallBtn=document.getElementById('audioCallBtn'), videoCallBtn=document.getElementById('videoCallBtn');
   const callModal=document.getElementById('callModal'), callTitle=document.getElementById('callTitle'), callStatus=document.getElementById('callStatus');
   const callStage=document.getElementById('callStage'), callEmpty=document.getElementById('callEmpty'), callAvatar=document.getElementById('callAvatar'), callEmptyText=document.getElementById('callEmptyText');
-  const localCallVideo=document.getElementById('localCallVideo'), callSwapCameraBtn=document.getElementById('callSwapCameraBtn'), callMuteBtn=document.getElementById('callMuteBtn'), callCameraBtn=document.getElementById('callCameraBtn'), callEndBtn=document.getElementById('callEndBtn'), callCloseBtn=document.getElementById('callCloseBtn');
+  const localCallVideo=document.getElementById('localCallVideo'), callMuteBtn=document.getElementById('callMuteBtn'), callCameraBtn=document.getElementById('callCameraBtn'), callEndBtn=document.getElementById('callEndBtn'), callCloseBtn=document.getElementById('callCloseBtn');
   const incomingCall=document.getElementById('incomingCall'), incomingCallName=document.getElementById('incomingCallName'), incomingCallType=document.getElementById('incomingCallType'), incomingCallIcon=document.getElementById('incomingCallIcon');
   const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
-  let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false,cameraFacingMode='user';
+  let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false;
   const peers=new Map();
   const recorders=new Map();
   let recordingNoticeShown=false;
@@ -1705,7 +1686,7 @@ updateAdvancedTools();
     pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
-  async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:cameraFacingMode,width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
+  async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
   async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('exit'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
   async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
@@ -1714,7 +1695,6 @@ updateAdvancedTools();
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
   callMuteBtn?.addEventListener('click',()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);callMuteBtn.textContent=muted?'🔇':'🎙️'});
   callCameraBtn?.addEventListener('click',()=>{if(!localStream||activeCallType!=='video')return;cameraOff=!cameraOff;localStream.getVideoTracks().forEach(t=>t.enabled=!cameraOff);if(localCallVideo)localCallVideo.style.display=cameraOff?'none':'block';callCameraBtn.textContent=cameraOff?'🚫':'📷';callCameraBtn.title=cameraOff?'Turn camera on':'Turn camera off'});
-  callSwapCameraBtn?.addEventListener('click',async()=>{if(!localStream||activeCallType!=='video')return;const oldTrack=localStream.getVideoTracks()[0];if(!oldTrack)return;const nextFacing=cameraFacingMode==='user'?'environment':'user';try{const probe=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:nextFacing},width:{ideal:1280},height:{ideal:720}},audio:false});const newTrack=probe.getVideoTracks()[0];localStream.removeTrack(oldTrack);localStream.addTrack(newTrack);newTrack.enabled=!cameraOff;try{oldTrack.stop()}catch(_){};peers.forEach(x=>{const sender=x.pc.getSenders().find(s=>s.track&&s.track.kind==='video');if(sender)sender.replaceTrack(newTrack).catch(()=>{});});if(localCallVideo)localCallVideo.srcObject=localStream;cameraFacingMode=nextFacing;callSwapCameraBtn.title=cameraFacingMode==='user'?'Switch to rear camera':'Switch to front camera';showToast(cameraFacingMode==='user'?'Front camera':'Rear camera');}catch(e){showToast('Rear/front camera switch is not available on this device');}});
   socket.on('incoming-call',d=>incoming(d));
   socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name,true)});
   socket.on('call-signal',async d=>{if(!isActive()||d?.callId!==activeCallId||!d.from)return;let x=peers.get(d.from);if(d.kind==='offer'){const pc=createPeer(d.from,'Participant',false);try{await pc.setRemoteDescription(new RTCSessionDescription(d.data));const a=await pc.createAnswer();await pc.setLocalDescription(a);socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription})}catch(_){showToast('Call connection failed')}}else if(d.kind==='answer'){if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data))}catch(_){}}else if(d.kind==='ice'){if(x)try{await x.pc.addIceCandidate(new RTCIceCandidate(d.data))}catch(_){} }});
