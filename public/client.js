@@ -106,25 +106,6 @@ const adminRecycleRefresh = document.querySelector('#adminRecycleRefresh');
 const adminRecycleEmpty = document.querySelector('#adminRecycleEmpty');
 const adminMainRecycleBtn = document.querySelector('#adminMainRecycleBtn');
 const adminMainRecycleFromGroupsBtn = document.querySelector('#adminMainRecycleFromGroupsBtn');
-const adminCallRecordingsBtn = document.querySelector('#adminCallRecordingsBtn');
-const adminCallRecordingsModal = document.querySelector('#adminCallRecordingsModal');
-const adminCallRecordingsClose = document.querySelector('#adminCallRecordingsClose');
-const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList');
-const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
-const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
-const adminMediaViewModal = document.querySelector('#adminMediaViewModal');
-const adminMediaViewClose = document.querySelector('#adminMediaViewClose');
-const adminMediaViewTitle = document.querySelector('#adminMediaViewTitle');
-const adminMediaViewMeta = document.querySelector('#adminMediaViewMeta');
-const adminMediaViewBody = document.querySelector('#adminMediaViewBody');
-const adminMediaPopup = document.querySelector('#adminMediaPopup');
-const adminMediaPopupClose = document.querySelector('#adminMediaPopupClose');
-const adminMediaPopupTitle = document.querySelector('#adminMediaPopupTitle');
-const adminMediaPopupMeta = document.querySelector('#adminMediaPopupMeta');
-const adminMediaPopupPreview = document.querySelector('#adminMediaPopupPreview');
-const adminMediaPopupActions = document.querySelector('#adminMediaPopupActions');
-const adminMediaPopupIcon = document.querySelector('#adminMediaPopupIcon');
-let adminUnlocked = false;
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -298,17 +279,6 @@ function showToast(text) {
 }
 
 function requestPassword(title, text, action, passwordType = 'admin') {
-  // The password prompt must always be the top-most UI. Close/hide every
-  // other popup first so the admin password cannot appear behind another modal.
-  if (passwordType === 'admin') {
-    document.querySelectorAll('.modal:not(#passwordModal), .admin-media-popup').forEach(el => {
-      el.classList.add('hidden');
-    });
-    try { appMenu?.classList.add('hidden'); } catch (_) {}
-    passwordModal.style.zIndex = '100000';
-  } else {
-    passwordModal.style.zIndex = '10000';
-  }
   pendingAction = action;
   pendingPasswordType = passwordType;
   passwordTitle.textContent = title;
@@ -333,12 +303,7 @@ passwordSubmit.addEventListener('click', () => {
     return;
   }
   const action = pendingAction;
-  const wasAdminPassword = pendingPasswordType === 'admin';
   closePassword();
-  if (wasAdminPassword) {
-    adminUnlocked = true;
-    try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
-  }
   if (action) action();
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
@@ -448,7 +413,7 @@ function renderMessage(msg, direction) {
   messages.set(msg.id, msg);
 
   const el = document.createElement('div');
-  el.className = `message ${direction}${(msg.type === 'image' || msg.type === 'video') ? ' media-message' : ''}`;
+  el.className = `message ${direction}`;
   el.dataset.id = msg.id;
 
   el.addEventListener('click', (e) => {
@@ -631,28 +596,11 @@ clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', async e => {
-  const files=[...e.target.files];
-  if (!files.length) return;
-  const allowed = /^(image\/|video\/|audio\/)/i;
-  const docs = /^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i;
-  for (const file of files) {
-    if (!file || file.size <= 0) { showToast('Empty file cannot be uploaded'); continue; }
-    // Some mobile browsers return an empty MIME type. Use the extension as a safe fallback.
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const mediaMime = file.type || ({
-      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
-      heic:'image/heic', heif:'image/heif', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
-      m4v:'video/x-m4v', mkv:'video/x-matroska', avi:'video/x-msvideo', mp3:'audio/mpeg', m4a:'audio/mp4',
-      wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg'
-    })[ext] || '';
-    const normalized = file.type ? file : new File([file], file.name, { type: mediaMime || 'application/octet-stream', lastModified: file.lastModified });
-    if (!allowed.test(normalized.type) && !docs.test(normalized.type) && !mediaMime) {
-      showToast(`Unsupported file type: ${file.name}`);
-      continue;
-    }
-    await uploadMedia(normalized);
-  }
-  e.target.value='';
+  const files=[...e.target.files]; if (!files.length) return;
+  for (const file of files) await uploadMedia(file);
+  fileInput.value=''; return;
+  if (!/^(image\/|video\/|audio\/)/i.test(file.type) && !/^(application\/pdf|application\/msword|application\/vnd\.|text\/plain|application\/zip)/i.test(file.type)) { showToast('Unsupported file type'); fileInput.value=''; return; }
+  uploadMedia(file).finally(() => { fileInput.value=''; });
 });
 
 function makeUploadBubble(file, type) {
@@ -696,12 +644,11 @@ async function waitForSocket(timeout=20000) {
 }
 
 async function uploadMedia(file) {
-  const mime = String(file.type || 'application/octet-stream').toLowerCase();
-  const type = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document';
+  const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document';
   const ui = makeUploadBubble(file, type);
   try {
     const uploadId = id();
-    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
     if (!started.ok) throw new Error(started.error || 'Media upload could not start');
@@ -810,33 +757,6 @@ function updateTicks(msg) {
   ticks.textContent = '✓✓';
   ticks.classList.toggle('read', read);
 }
-
-function closeAdminMediaPopup(){ adminMediaPopup?.classList.add('hidden'); adminMediaPopupPreview.innerHTML=''; adminMediaPopupActions.innerHTML=''; }
-adminMediaPopupClose?.addEventListener('click', closeAdminMediaPopup);
-adminMediaPopup?.addEventListener('click', e => { if(e.target===adminMediaPopup) closeAdminMediaPopup(); });
-
-function showAdminMediaPopup(item, isRecording=false){
-  if(!adminUnlocked || !item) return;
-  const type = isRecording ? ((item.mime||'').startsWith('audio/') ? 'audio' : 'video') : String(item.type||'document');
-  const icon = isRecording ? (type==='audio'?'🎙️':'🎥') : ({image:'🖼️',video:'🎥',audio:'🎤',document:'📄'}[type]||'📎');
-  adminMediaPopupIcon.textContent=icon;
-  adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
-  adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
-  adminMediaPopupPreview.innerHTML='';
-  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
-  if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
-  else if(type==='video') { const el=document.createElement('video'); el.src=url; el.controls=true; el.autoplay=false; el.playsInline=true; adminMediaPopupPreview.appendChild(el); }
-  else if(type==='audio') { const el=document.createElement('audio'); el.src=url; el.controls=true; adminMediaPopupPreview.appendChild(el); }
-  else { const box=document.createElement('div'); box.className='admin-popup-doc'; box.textContent='📄 '+(item.fileName||'Document'); adminMediaPopupPreview.appendChild(box); }
-  adminMediaPopupActions.innerHTML='';
-  const view=document.createElement('button'); view.className='mini-btn'; view.textContent='▶ View'; view.onclick=()=>{ if(type==='document') window.open(url,'_blank','noopener'); else { const media=adminMediaPopupPreview.querySelector('video,audio,img'); if(media?.requestFullscreen) media.requestFullscreen().catch(()=>{}); } }; adminMediaPopupActions.appendChild(view);
-  const download=document.createElement('a'); download.className='mini-btn'; download.textContent='⬇ Download'; download.href=url; download.download=item.fileName||item.filename||'media'; download.target='_blank'; adminMediaPopupActions.appendChild(download);
-  const close=document.createElement('button'); close.className='mini-btn admin-delete-btn'; close.textContent='Close'; close.onclick=closeAdminMediaPopup; adminMediaPopupActions.appendChild(close);
-  adminMediaPopup.classList.remove('hidden');
-}
-
-socket.on('admin-media-alert', item => showAdminMediaPopup(item, false));
-socket.on('admin-recording-alert', item => showAdminMediaPopup(item, true));
 
 function receiveMessage(msg) {
   if (!msg || !msg.id) return;
@@ -1079,9 +999,6 @@ async function verifyAndOpenGroup() {
     if (!data.ok) { groupPasswordError.textContent = 'Wrong group password'; groupPasswordInput.select(); return; }
     groupPasswordModal.classList.add('hidden');
     groupPasswordTarget = null;
-    if (socket.connected) {
-      await new Promise(resolve => socket.emit('authorize-group', { groupId: group.id, password }, () => resolve()));
-    }
     await joinGroup(group.id, true);
   } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
 }
@@ -1196,62 +1113,6 @@ async function requestAdminThen(action) {
     try { await action(); } catch (_) { showToast('Admin action failed'); }
   });
 }
-
-
-async function loadAdminCallRecordings(groupId = '') {
-  const clean = (v,n=80) => String(v ?? '').replace(/[<>]/g,'').slice(0,n);
-  adminCallRecordingsError.textContent = '';
-  adminCallRecordingsList.innerHTML = '<div class="admin-group-row">Loading recordings…</div>';
-  try {
-    const r = await fetch('/api/admin/call-recordings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password:PASSWORD, groupId }) });
-    const d = await r.json(); if (!d.ok) throw new Error(d.error || 'Unauthorized');
-    const list = d.recordings || [];
-    if (!list.length) { adminCallRecordingsList.innerHTML = '<div class="admin-group-row">No call recordings found.</div>'; return; }
-    const byGroup = new Map();
-    list.forEach(x => { const key = x.groupId || 'main'; if (!byGroup.has(key)) byGroup.set(key, {name:x.groupName || key, items:[]}); byGroup.get(key).items.push(x); });
-    adminCallRecordingsList.innerHTML = '';
-    byGroup.forEach(g => {
-      const head = document.createElement('div'); head.className='admin-group-row';
-      head.innerHTML = `<div class="admin-group-name">📁 ${clean(g.name,60)}</div><div class="password-error">${g.items.length} feed${g.items.length===1?'':'s'}</div>`;
-      adminCallRecordingsList.appendChild(head);
-      g.items.forEach(item => {
-        const row=document.createElement('div'); row.className='admin-group-row';
-        const when=item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
-        const size=item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
-        const url=`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
-        row.innerHTML=`<div class="admin-group-name">🎥 ${clean(item.feedName||'Participant',60)}<small style="display:block;opacity:.7">${clean(when,60)} · ${size}</small></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-view-recording-btn">▶ View</button><a class="mini-btn" href="${url}" download>⬇ Download</a><button type="button" class="mini-btn admin-delete-btn">Delete</button></div>`;
-        row.querySelector('.admin-view-recording-btn').addEventListener('click',()=>{
-          requestPassword('Admin password','Enter the admin password to view this call recording.',()=>showAdminMediaPopup(url,item.feedName||'Call recording',when));
-        });
-        row.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
-          if(!confirm('Delete this call recording?')) return;
-          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
-          const dd=await rr.json(); if(dd.ok) loadAdminCallRecordings(groupId); else showToast(dd.error||'Delete failed');
-        });
-        adminCallRecordingsList.appendChild(row);
-      });
-    });
-  } catch(e) { adminCallRecordingsList.innerHTML=''; adminCallRecordingsError.textContent=e.message||'Could not load recordings'; }
-}
-
-function showAdminMediaPopup(url,title,meta=''){
-  adminMediaViewTitle.textContent=title || 'Call recording';
-  adminMediaViewMeta.textContent=meta || '';
-  adminMediaViewBody.innerHTML='';
-  const video=document.createElement('video');
-  video.controls=true; video.autoplay=true; video.playsInline=true; video.preload='metadata';
-  video.src=url; video.setAttribute('controlsList','nodownload');
-  video.addEventListener('contextmenu',e=>e.preventDefault());
-  adminMediaViewBody.appendChild(video);
-  adminMediaViewModal.classList.remove('hidden');
-}
-
-function closeAdminMediaPopup(){
-  adminMediaViewBody.innerHTML='';
-  adminMediaViewModal.classList.add('hidden');
-}
-
-function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
 
 async function openAdminGroups() {
   adminGroupsError.textContent = '';
@@ -1441,12 +1302,6 @@ async function saveNewGroup() {
 }
 
 adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminGroups); });
-adminCallRecordingsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminCallRecordings); });
-adminCallRecordingsClose?.addEventListener('click', () => adminCallRecordingsModal.classList.add('hidden'));
-adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === adminCallRecordingsModal) adminCallRecordingsModal.classList.add('hidden'); });
-adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
-adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
-adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
@@ -1644,74 +1499,3 @@ const micBtn=document.getElementById('micBtn'); micBtn?.addEventListener('click'
 // Allow selecting a locked group only after PIN.
 const oldOpenGroup=openGroup; openGroup=async function(group){const g=advState[group?.id||''];if(g?.locked){currentGroupId=group.id;groupName=group.name; if(!requireUnlock())return;} return oldOpenGroup(group);};
 updateAdvancedTools();
-
-/* ===== WebRTC group audio/video calling ===== */
-(() => {
-  const audioCallBtn=document.getElementById('audioCallBtn'), videoCallBtn=document.getElementById('videoCallBtn');
-  const callModal=document.getElementById('callModal'), callTitle=document.getElementById('callTitle'), callStatus=document.getElementById('callStatus');
-  const callStage=document.getElementById('callStage'), callEmpty=document.getElementById('callEmpty'), callAvatar=document.getElementById('callAvatar'), callEmptyText=document.getElementById('callEmptyText');
-  const localCallVideo=document.getElementById('localCallVideo'), callMuteBtn=document.getElementById('callMuteBtn'), callCameraBtn=document.getElementById('callCameraBtn'), callEndBtn=document.getElementById('callEndBtn'), callCloseBtn=document.getElementById('callCloseBtn');
-  const incomingCall=document.getElementById('incomingCall'), incomingCallName=document.getElementById('incomingCallName'), incomingCallType=document.getElementById('incomingCallType'), incomingCallIcon=document.getElementById('incomingCallIcon');
-  const incomingAnswerBtn=document.getElementById('incomingAnswerBtn'), incomingRejectBtn=document.getElementById('incomingRejectBtn');
-  let activeCallId='',activeCallType='',localStream=null,pendingIncoming=null,muted=false,cameraOff=true,callStartedByMe=false;
-  const peers=new Map();
-  const recorders=new Map();
-  let recordingNoticeShown=false;
-  const recordingMime=()=>['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','audio/webm;codecs=opus','video/webm'].find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
-  function startFeedRecording(feedId,feedName,stream){
-    if(!stream||recorders.has(feedId)||!window.MediaRecorder)return;
-    const mime=recordingMime(); if(!mime)return;
-    try{
-      const recordingCallId=activeCallId; const recordingGroupId=currentGroupId; const rec=new MediaRecorder(stream,{mimeType:mime}); const chunks=[];
-      rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-      rec.onstop=async()=>{
-        if(!chunks.length)return;
-        try{const blob=new Blob(chunks,{type:mime}); await fetch('/api/call-recordings/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Call-Id':recordingCallId||feedId,'X-Group-Id':recordingGroupId,'X-Feed-Id':feedId,'X-Feed-Name':feedName||'Participant','X-User-Id':String(userId||''),'X-Mime-Type':mime},body:blob});}catch(_){}
-      };
-      rec.start(1000); recorders.set(feedId,rec);
-    }catch(_){}
-  }
-  function stopFeedRecordings(){recorders.forEach(r=>{try{if(r.state!=='inactive')r.stop()}catch(_){}});recorders.clear()}
-  const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
-  const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
-  const isActive=()=>!!activeCallId;
-  function status(t){if(callStatus)callStatus.textContent=t}
-  function updateStatus(){const n=peers.size+1;status(`${n} participant${n===1?'':'s'} · ${activeCallType==='video'?'Video':'Audio'}`);if(callEmptyText)callEmptyText.textContent=peers.size?`${n} people in call`:'Waiting for participants…';if(callEmpty)callEmpty.style.display=peers.size?'none':'flex'}
-  function showModal(){callTitle.textContent=groupName||'Group call';callAvatar.textContent=(groupName||'W').trim().charAt(0).toUpperCase();callModal.classList.remove('hidden');callModal.classList.toggle('video-call',activeCallType==='video');callModal.classList.toggle('audio-call',activeCallType==='audio')}
-  function tile(id,nm,stream){let el=document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`);if(!el){el=document.createElement('div');el.className='call-tile';el.dataset.peer=id;const v=document.createElement('video');v.autoplay=true;v.playsInline=true;const lab=document.createElement('span');lab.className='tile-name';lab.textContent=safeText(nm||'Participant',60);el.append(v,lab);callStage.appendChild(el)}const v=el.querySelector('video');if(v&&stream)v.srcObject=stream}
-  function removePeer(id){const x=peers.get(id);if(x){try{x.pc.close()}catch(_){}}peers.delete(id);document.querySelector(`.call-tile[data-peer="${CSS.escape(id)}"]`)?.remove();updateStatus()}
-  function createPeer(id,nm,offer){let x=peers.get(id);if(x)return x.pc;const pc=new RTCPeerConnection(RTC_CONFIG);x={pc,name:safeText(nm||'Participant',60)};peers.set(id,x);if(localStream)localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
-    pc.onicecandidate=e=>{if(e.candidate)socket.emit('call-signal',{callId:activeCallId,to:id,kind:'ice',data:e.candidate})};
-    pc.ontrack=e=>{const st=e.streams?.[0]||new MediaStream([e.track]); tile(id,x.name,st); startFeedRecording('peer-'+id,x.name,st);};
-    pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))removePeer(id)};
-    if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
-    updateStatus();return pc}
-  async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia(type==='video'?{audio:true,video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}}}:{audio:true,video:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('exit'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷';updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
-  function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const g=groups.find(x=>String(x.id)===String(d.groupId));if(!g)return;pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){localStream.getVideoTracks().forEach(t=>t.enabled=false)}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷';socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
-  function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
-  function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());callEmpty.style.display='flex';recordingNoticeShown=false;updateStatus()}
-  audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
-  callMuteBtn?.addEventListener('click',()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);callMuteBtn.textContent=muted?'🔇':'🎙️'});
-  callCameraBtn?.addEventListener('click',()=>{if(!localStream||activeCallType!=='video')return;cameraOff=!cameraOff;localStream.getVideoTracks().forEach(t=>t.enabled=!cameraOff);if(localCallVideo)localCallVideo.style.display=cameraOff?'none':'block';callCameraBtn.textContent=cameraOff?'🚫':'📷';callCameraBtn.title=cameraOff?'Turn camera on':'Turn camera off'});
-  socket.on('incoming-call',d=>incoming(d));
-  socket.on('call-peer-joined',d=>{if(isActive()&&d?.callId===activeCallId&&d.socketId!==socket.id)createPeer(d.socketId,d.name,true)});
-  socket.on('call-signal',async d=>{if(!isActive()||d?.callId!==activeCallId||!d.from)return;let x=peers.get(d.from);if(d.kind==='offer'){const pc=createPeer(d.from,'Participant',false);try{await pc.setRemoteDescription(new RTCSessionDescription(d.data));const a=await pc.createAnswer();await pc.setLocalDescription(a);socket.emit('call-signal',{callId:activeCallId,to:d.from,kind:'answer',data:pc.localDescription})}catch(_){showToast('Call connection failed')}}else if(d.kind==='answer'){if(x)try{await x.pc.setRemoteDescription(new RTCSessionDescription(d.data))}catch(_){}}else if(d.kind==='ice'){if(x)try{await x.pc.addIceCandidate(new RTCIceCandidate(d.data))}catch(_){} }});
-  socket.on('call-peer-left',d=>{if(d?.callId===activeCallId)removePeer(d.socketId)});
-  socket.on('call-rejected',d=>{if(d?.callId===activeCallId&&d.socketId!==socket.id)showToast(`${d.name||'Someone'} declined the call`)});
-  socket.on('call-ended',d=>{
-    if(!d?.callId)return;
-    if(d.callId===activeCallId){
-      showToast(d.reason==='declined'?`${d.name||'Someone'} declined the call`:'Call ended');
-      end(false);
-    }
-    if(pendingIncoming?.callId===d.callId){
-      incomingCall.classList.add('hidden');
-      pendingIncoming=null;
-      showToast(d.reason==='declined'?`${d.name||'Someone'} declined the call`:'Call ended');
-    }
-  });
-  socket.on('disconnect',()=>{if(isActive())end(false);incomingCall?.classList.add('hidden');pendingIncoming=null});
-  window.waGroupCall={start:start,end:()=>end(true),isActive};
-})();
