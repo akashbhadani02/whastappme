@@ -1460,23 +1460,6 @@ io.on('connection', async (socket) => {
     if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
-
-    // If a call is already active in this group, immediately show the incoming
-    // call to this newly joined/reconnected authorized member. This prevents
-    // members from missing a call just because they opened the group a moment late.
-    const activeGroupCall = [...activeCalls.values()].find(c => c.groupId === groupId);
-    if (activeGroupCall && activeGroupCall.startedBy !== socket.id) {
-      activeGroupCall.invited.add(socket.id);
-      socket.emit('incoming-call', {
-        callId: activeGroupCall.callId,
-        groupId: activeGroupCall.groupId,
-        type: activeGroupCall.type,
-        fromSocketId: activeGroupCall.startedBy,
-        fromUserId: activeGroupCall.startedByUserId,
-        fromName: activeGroupCall.startedByName,
-        groupName: String(data?.groupName || '').slice(0, 100)
-      });
-    }
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1786,10 +1769,6 @@ io.on('connection', async (socket) => {
     if (existing) return typeof ack === 'function' && ack({ ok: false, error: 'A call is already active in this group.' });
     const call = {
       callId, groupId, type, participants: new Set([socket.id]),
-      // Every connected, authorized group member who was invited is tracked
-      // separately from WebRTC participants. This is important because a
-      // member can decline before joining the call.
-      invited: new Set([socket.id]),
       startedBy: socket.id, startedByUserId: String(socket.userId || data?.userId || ''),
       startedByName: String(data?.name || '').slice(0, 60), createdAt: Date.now()
     };
@@ -1811,7 +1790,6 @@ io.on('connection', async (socket) => {
         const target = io.sockets.sockets.get(targetId);
         if (target && target.authorizedGroups?.has(groupId)) {
           target.emit('incoming-call', invite);
-          call.invited.add(targetId);
           notified.add(targetId);
         }
       }
@@ -1820,7 +1798,6 @@ io.on('connection', async (socket) => {
       if (notified.has(target.id)) continue;
       if (target.authorizedGroups?.has(groupId)) {
         target.emit('incoming-call', invite);
-        call.invited.add(target.id);
         notified.add(target.id);
       }
     }
@@ -1868,18 +1845,15 @@ io.on('connection', async (socket) => {
       declinedBy: reason === 'declined' ? actorSocketId : undefined,
       name: String(actorName || '').slice(0, 60)
     };
-    // Notify EVERY invited member as well as every participant. A declining
-    // member has not joined `participants`, so notifying participants alone
-    // would leave other incoming-call popups open.
-    const recipients = new Set([...call.invited, ...call.participants]);
-    for (const memberId of recipients) {
-      const memberSocket = io.sockets.sockets.get(memberId);
-      if (!memberSocket) continue;
-      memberSocket.emit('call-ended', payload);
-      memberSocket.leave(room);
-      if (memberSocket.callId === call.callId) {
-        memberSocket.callId = '';
-        memberSocket.callType = '';
+    // Notify every participant explicitly, not only the currently active room,
+    // so no connected participant can remain stuck in the call UI.
+    for (const participantId of call.participants) {
+      const participantSocket = io.sockets.sockets.get(participantId);
+      if (participantSocket) {
+        participantSocket.emit('call-ended', payload);
+        participantSocket.leave(room);
+        participantSocket.callId = '';
+        participantSocket.callType = '';
       }
     }
     activeCalls.delete(call.callId);
