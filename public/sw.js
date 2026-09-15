@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v11-notification-fix';
+const CACHE = 'whatsapp-pwa-v12-group-notification';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -39,8 +39,10 @@ self.addEventListener('push', (event) => {
     if (await chatIsOpenAndVisible()) return;
 
     const messageId = data.messageId || '';
+    const groupName = String(data.groupName || data.title || 'WhatsApp').trim() || 'WhatsApp';
     const options = {
-      body: data.body || 'You have new message',
+      // Do not put the actual message text in the notification.
+      body: 'New message',
       icon: data.icon || '/icon.svg',
       badge: data.badge || '/icon.svg',
       tag: messageId ? `wa-${messageId}` : 'wa-message',
@@ -49,7 +51,7 @@ self.addEventListener('push', (event) => {
       vibrate: [150, 80, 150]
     };
 
-    await self.registration.showNotification(data.title || 'WhatsApp', options);
+    await self.registration.showNotification(groupName, options);
   })());
 });
 

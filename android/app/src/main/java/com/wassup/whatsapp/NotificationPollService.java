@@ -90,17 +90,17 @@ public class NotificationPollService extends Service {
                 if (created.compareTo(newest) > 0) newest = created;
                 if (id.isEmpty() || seen.contains(id)) continue;
                 seen.add(id);
-                if (!firstPoll) showMessageNotification(id);
+                if (!firstPoll) showMessageNotification(id, m.optString("groupName", "WhatsApp"));
             }
             if (!newest.isEmpty()) getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("lastSeenCreatedAt", newest).apply();
         } catch (Exception ignored) {}
     }
 
-    private void showMessageNotification(String id) {
+    private void showMessageNotification(String id, String groupName) {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
-                .setContentTitle("WhatsApp")
-                .setContentText("You have new message")
+                .setContentTitle(groupName == null || groupName.trim().isEmpty() ? "WhatsApp" : groupName.trim())
+                .setContentText("New message")
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

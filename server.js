@@ -1381,13 +1381,24 @@ async function sendPushToOtherUsers(msg) {
       : { userId: { $exists: true } };
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find(query).toArray();
     if (!docs.length) return;
-    // Keep notification content generic and let the service worker decide
-    // whether the chat is currently open. This matches the reference app:
-    // one push per message, no sender/message preview, and never notify the sender.
+    // Show only the group name in the notification. Never expose the actual
+    // message text, sender name, or message preview in the push payload.
+    let groupName = String(msg.groupName || '').trim();
+    if (!groupName) {
+      try {
+        const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne({
+          _id: normalizeGroupId(msg.groupId)
+        }, { projection: { name: 1 } });
+        groupName = String(group?.name || '').trim();
+      } catch (_) {}
+    }
+    if (!groupName) groupName = 'WhatsApp';
     const payload = JSON.stringify({
-      title: 'WhatsApp',
-      body: 'You have new message',
+      title: groupName,
+      body: 'New message',
       messageId: msg.id,
+      groupId: normalizeGroupId(msg.groupId),
+      groupName,
       url: '/#chat'
     });
     await Promise.all(docs.map(async (doc) => {
