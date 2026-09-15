@@ -237,3 +237,4 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
   .call-controls{gap:9px;padding-left:8px;padding-right:8px}
   .call-control{width:46px;height:46px;min-width:46px}
 }
+.primary-btn:disabled{opacity:.65;cursor:wait}

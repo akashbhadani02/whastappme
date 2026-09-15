@@ -1109,7 +1109,11 @@ async function syncMessages() {
 
 // Frequent reconciliation keeps all devices in the same group state, including
 // users connected to different Vercel instances.
-setInterval(syncMessages, 1000);
+setInterval(() => {
+  // Do not poll the messages API while no group has been unlocked.
+  // This removes unnecessary requests and the loading delay on startup.
+  if (currentGroupId) syncMessages();
+}, 1000);
 
 socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
@@ -1222,16 +1226,46 @@ async function verifyAndOpenGroup() {
   if (!group) return;
   const password = groupPasswordInput.value;
   if (!password) { groupPasswordError.textContent = 'Enter the group password'; return; }
-  groupPasswordError.textContent = 'Checking…';
+
+  // Prevent double-clicks and remove the feeling that the app is stuck.
+  groupPasswordSubmit.disabled = true;
+  const oldLabel = groupPasswordSubmit.textContent;
+  groupPasswordSubmit.textContent = 'Opening…';
+  groupPasswordError.textContent = '';
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
   try {
-    const response = await fetch('/api/groups/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: group.id, password }) });
-    const data = await response.json();
-    if (!data.ok) { groupPasswordError.textContent = 'Wrong group password'; groupPasswordInput.select(); return; }
+    const response = await fetch('/api/groups/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: group.id, password }),
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      groupPasswordError.textContent = response.status === 404 ? 'Group not found' : 'Wrong group password';
+      groupPasswordInput.select();
+      return;
+    }
+
     groupPasswordModal.classList.add('hidden');
     verifiedGroupPasswords.set(String(group.id), password);
     groupPasswordTarget = null;
+
+    // Open the UI immediately. Message history loads in the background so a
+    // slow MongoDB/network connection cannot make the password screen spin.
     await joinGroup(group.id, true);
-  } catch (_) { groupPasswordError.textContent = 'Could not verify password'; }
+  } catch (error) {
+    groupPasswordError.textContent = error?.name === 'AbortError'
+      ? 'Server is taking too long. Please try again.'
+      : 'Could not verify password';
+  } finally {
+    clearTimeout(timeout);
+    groupPasswordSubmit.disabled = false;
+    groupPasswordSubmit.textContent = oldLabel;
+  }
 }
 
 async function joinGroup(groupId, openAfter=true) {
@@ -1250,7 +1284,9 @@ async function joinGroup(groupId, openAfter=true) {
     if (!socket.connected) { resolve(); return; }
     socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => resolve());
   });
-  await syncMessages();
+  // Never block opening the chat on history synchronization.
+  // The chat becomes usable immediately; history is reconciled in the background.
+  syncMessages().catch(() => {});
   if (openAfter) openChat();
 }
 
@@ -1297,7 +1333,13 @@ function setOnlineStatus(state) {
 socket.on('connect', () => {
   setOnlineStatus('online');
   socket.emit('register-user', { userId });
-  socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => syncMessages().finally(markVisibleMessagesRead));
+  // Do not join/poll an empty group during startup. The group is joined only
+  // after its password has been successfully verified.
+  if (!currentGroupId) return;
+  socket.emit('join-group', {
+    groupId: currentGroupId,
+    password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
+  }, () => syncMessages().finally(markVisibleMessagesRead));
 });
 socket.on('disconnect', () => setOnlineStatus('connecting'));
 socket.on('reconnect', () => setOnlineStatus('online'));
