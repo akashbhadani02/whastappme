@@ -1469,11 +1469,23 @@ async function loadAdminGroupMedia(type = adminGroupMediaType, groupId = ''){
           <div class="admin-media-folder-actions">
             <button class="mini-btn view-folder-media">▶ View</button>
             <a class="mini-btn" href="${url}" target="_blank" rel="noopener" download="${safeText(item.fileName || (isPhoto?'photo':'video'))}">⬇ Save</a>
+            <button class="mini-btn admin-delete-btn delete-folder-media">🗑 Delete</button>
           </div>`;
         const mediaEl = card.querySelector('img,video');
         card.querySelector('.view-folder-media').onclick = () => {
           if(mediaEl?.requestFullscreen) mediaEl.requestFullscreen().catch(()=>{});
           else window.open(url,'_blank','noopener');
+        };
+        card.querySelector('.delete-folder-media').onclick = () => {
+          requestPassword('Delete media', 'Enter admin password to permanently delete this photo/video.', async () => {
+            try {
+              const r = await fetch('/api/admin/group-media/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, mediaId:item.mediaId, messageId:item.id})});
+              const data = await r.json();
+              if(!r.ok || !data.ok) throw new Error(data.error || 'Delete failed');
+              card.remove();
+              showToast('Media deleted');
+            } catch (e) { showToast(e.message || 'Delete failed'); }
+          }, 'delete');
         };
         grid.appendChild(card);
       });

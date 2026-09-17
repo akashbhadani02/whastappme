@@ -438,6 +438,22 @@ app.post('/api/admin/call-recordings', async (req, res) => {
 
 // Download all call recordings as one ZIP archive.
 // Admin media folders: photos and videos received in group chats.
+app.post('/api/admin/group-media/delete', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
+    const mediaId = String(req.body?.mediaId || '');
+    const messageId = String(req.body?.messageId || '');
+    const db = await getDb();
+    if (!db) return res.status(503).json({ok:false,error:'Database unavailable'});
+    if (messageId) await db.collection(COLLECTION_NAME).deleteOne({id:messageId});
+    if (ObjectId.isValid(mediaId)) { try { await (await getMediaBucket()).delete(new ObjectId(mediaId)); } catch (_) {} }
+    res.json({ok:true});
+  } catch (error) {
+    console.error('Admin group media delete failed:', error.message);
+    res.status(500).json({ok:false,error:'Could not delete group media'});
+  }
+});
+
 app.post('/api/admin/group-media', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) {
