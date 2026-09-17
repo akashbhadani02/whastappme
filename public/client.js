@@ -115,6 +115,15 @@ const adminCallRecordingsList = document.querySelector('#adminCallRecordingsList
 const adminCallRecordingsError = document.querySelector('#adminCallRecordingsError');
 const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsRefresh');
 const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordingsDownloadAll');
+const adminPhotosBtn = document.querySelector('#adminPhotosBtn');
+const adminVideosBtn = document.querySelector('#adminVideosBtn');
+const adminGroupMediaModal = document.querySelector('#adminGroupMediaModal');
+const adminGroupMediaClose = document.querySelector('#adminGroupMediaClose');
+const adminGroupMediaTitle = document.querySelector('#adminGroupMediaTitle');
+const adminGroupMediaHelp = document.querySelector('#adminGroupMediaHelp');
+const adminGroupMediaList = document.querySelector('#adminGroupMediaList');
+const adminGroupMediaError = document.querySelector('#adminGroupMediaError');
+const adminGroupMediaRefresh = document.querySelector('#adminGroupMediaRefresh');
 const adminMediaViewModal = document.querySelector('#adminMediaViewModal');
 const adminMediaViewClose = document.querySelector('#adminMediaViewClose');
 const adminMediaViewTitle = document.querySelector('#adminMediaViewTitle');
@@ -1385,6 +1394,104 @@ async function requestAdminThen(action) {
   });
 }
 
+
+
+let adminGroupMediaType = 'image';
+
+function closeAdminGroupMedia(){
+  adminGroupMediaModal?.classList.add('hidden');
+}
+adminGroupMediaClose?.addEventListener('click', closeAdminGroupMedia);
+adminGroupMediaModal?.addEventListener('click', e => { if(e.target === adminGroupMediaModal) closeAdminGroupMedia(); });
+
+async function loadAdminGroupMedia(type = adminGroupMediaType, groupId = ''){
+  if(!adminUnlocked) return;
+  adminGroupMediaType = type;
+  const isPhoto = type === 'image';
+  adminGroupMediaTitle.textContent = isPhoto ? '📷 Group Photos' : '🎥 Group Videos';
+  adminGroupMediaHelp.textContent = isPhoto
+    ? 'All photos received in groups, arranged inside each group folder.'
+    : 'All videos received in groups, arranged inside each group folder.';
+  adminGroupMediaError.textContent = '';
+  adminGroupMediaList.innerHTML = '<div class="admin-group-row">Loading media folders…</div>';
+  try{
+    const r = await fetch('/api/admin/group-media', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:PASSWORD, type, groupId})
+    });
+    const data = await r.json();
+    if(!data.ok) throw new Error(data.error || 'Unauthorized');
+    const list = Array.isArray(data.media) ? data.media : [];
+    if(!list.length){
+      adminGroupMediaList.innerHTML = `<div class="admin-group-row">No ${isPhoto?'photos':'videos'} found.</div>`;
+      return;
+    }
+
+    const byGroup = new Map();
+    list.forEach(item => {
+      const key = item.groupId || 'main';
+      if(!byGroup.has(key)) byGroup.set(key, {name:item.groupName || key, items:[]});
+      byGroup.get(key).items.push(item);
+    });
+
+    adminGroupMediaList.innerHTML = '';
+    byGroup.forEach(group => {
+      const section = document.createElement('section');
+      section.className = 'admin-media-folder-section';
+
+      const head = document.createElement('div');
+      head.className = 'admin-media-folder-head';
+      const count = group.items.length;
+      head.innerHTML = `<strong>📁 ${safeText(group.name)}</strong><small>${count} ${isPhoto?'photo':'video'}${count===1?'':'s'}</small>`;
+      section.appendChild(head);
+
+      const grid = document.createElement('div');
+      grid.className = 'admin-media-folder-grid';
+
+      group.items.forEach(item => {
+        const card = document.createElement('article');
+        card.className = 'admin-media-folder-card-item';
+        const url = `/api/media/${encodeURIComponent(item.mediaId)}`;
+        const when = item.createdAt ? new Date(item.createdAt).toLocaleString() : item.time || '';
+        const size = item.fileSize ? `${Math.max(.1,item.fileSize/1024/1024).toFixed(1)} MB` : '';
+        const thumb = isPhoto
+          ? `<img class="admin-media-folder-thumb" src="${url}" alt="Photo" loading="lazy">`
+          : `<video class="admin-media-folder-thumb" src="${url}" muted playsinline preload="metadata"></video>`;
+
+        card.innerHTML = `${thumb}
+          <div class="admin-media-folder-info">
+            <b>${safeText(item.user || 'User')}</b>
+            <small>${safeText(when)}${size ? ` • ${safeText(size)}` : ''}</small>
+          </div>
+          <div class="admin-media-folder-actions">
+            <button class="mini-btn view-folder-media">▶ View</button>
+            <a class="mini-btn" href="${url}" target="_blank" rel="noopener" download="${safeText(item.fileName || (isPhoto?'photo':'video'))}">⬇ Save</a>
+          </div>`;
+        const mediaEl = card.querySelector('img,video');
+        card.querySelector('.view-folder-media').onclick = () => {
+          if(mediaEl?.requestFullscreen) mediaEl.requestFullscreen().catch(()=>{});
+          else window.open(url,'_blank','noopener');
+        };
+        grid.appendChild(card);
+      });
+      section.appendChild(grid);
+      adminGroupMediaList.appendChild(section);
+    });
+  }catch(error){
+    adminGroupMediaError.textContent = error.message || 'Could not load media.';
+    adminGroupMediaList.innerHTML = '';
+  }
+}
+
+function openAdminGroupMedia(type){
+  if(!adminUnlocked) return requestAdminThen(() => openAdminGroupMedia(type));
+  adminGroupMediaModal?.classList.remove('hidden');
+  loadAdminGroupMedia(type);
+}
+adminPhotosBtn?.addEventListener('click', () => openAdminGroupMedia('image'));
+adminVideosBtn?.addEventListener('click', () => openAdminGroupMedia('video'));
+adminGroupMediaRefresh?.addEventListener('click', () => loadAdminGroupMedia(adminGroupMediaType));
 
 async function loadAdminCallRecordings(groupId = '') {
   const clean = (v,n=80) => String(v ?? '').replace(/[<>]/g,'').slice(0,n);

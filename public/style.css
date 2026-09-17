@@ -238,3 +238,17 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
   .call-control{width:46px;height:46px;min-width:46px}
 }
 .primary-btn:disabled{opacity:.65;cursor:wait}
+
+/* Admin photo/video folders */
+.admin-media-folder-card{max-width:1100px}
+.admin-media-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:12px}
+.admin-media-folder-section{margin:14px 0 22px}
+.admin-media-folder-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.06)}
+.admin-media-folder-head strong{font-size:15px}
+.admin-media-folder-card-item{overflow:hidden;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.2)}
+.admin-media-folder-thumb{width:100%;height:150px;object-fit:cover;display:block;background:#05070b}
+.admin-media-folder-info{padding:8px 10px;font-size:12px}
+.admin-media-folder-info b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-media-folder-info small{opacity:.7}
+.admin-media-folder-actions{display:flex;gap:6px;padding:0 10px 10px}
+@media(max-width:600px){.admin-media-folder-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-media-folder-thumb{height:120px}}

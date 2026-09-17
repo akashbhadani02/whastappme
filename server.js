@@ -437,6 +437,58 @@ app.post('/api/admin/call-recordings', async (req, res) => {
 
 
 // Download all call recordings as one ZIP archive.
+// Admin media folders: photos and videos received in group chats.
+app.post('/api/admin/group-media', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) {
+      return res.status(403).json({ ok:false, error:'Unauthorized' });
+    }
+    const db = await getDb();
+    if (!db) return res.json({ ok:true, media:[] });
+
+    const type = String(req.body?.type || '');
+    if (!['image','video'].includes(type)) {
+      return res.status(400).json({ ok:false, error:'Invalid media type' });
+    }
+    const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
+    const query = {
+      type,
+      mediaId: { $exists:true, $ne:'' },
+      ...(groupId ? { groupId } : {})
+    };
+    const messages = await db.collection(COLLECTION_NAME)
+      .find(query, { projection:{ _id:0, id:1, groupId:1, userId:1, user:1, mediaId:1, fileName:1, fileSize:1, mime:1, createdAt:1, time:1 } })
+      .sort({ createdAt:-1 }).limit(1000).toArray();
+
+    const groupIds = [...new Set(messages.map(m => normalizeGroupId(m.groupId)))];
+    const groups = await Promise.all(groupIds.map(async gid => {
+      const doc = await getGroupDoc(gid);
+      return [gid, doc?.name || gid];
+    }));
+    const groupNames = Object.fromEntries(groups);
+
+    res.json({
+      ok:true,
+      media: messages.map(m => ({
+        id:String(m.id || ''),
+        groupId:normalizeGroupId(m.groupId),
+        groupName:groupNames[normalizeGroupId(m.groupId)] || normalizeGroupId(m.groupId),
+        userId:String(m.userId || ''),
+        user:String(m.user || m.userId || 'User'),
+        mediaId:String(m.mediaId),
+        fileName:String(m.fileName || (type === 'image' ? 'photo' : 'video')),
+        fileSize:Number(m.fileSize || 0),
+        mime:String(m.mime || ''),
+        createdAt:m.createdAt || null,
+        time:String(m.time || '')
+      }))
+    });
+  } catch (error) {
+    console.error('Admin group media load failed:', error.message);
+    res.status(500).json({ ok:false, error:'Could not load group media.' });
+  }
+});
+
 app.get('/api/admin/call-recordings/download-all', async (req, res) => {
   try {
     const password = String(req.query?.password || '');
