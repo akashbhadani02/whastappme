@@ -1396,6 +1396,8 @@ async function requestAdminThen(action) {
 
 
 
+const safeText=(v,n=80)=>String(v??'').slice(0,n);
+
 let adminGroupMediaType = 'image';
 
 function closeAdminGroupMedia(){
@@ -2042,7 +2044,7 @@ updateAdvancedTools();
     recorders.clear();
   }
   const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
-  const safeText=(v,n=80)=>String(v||'').slice(0,n), newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
+  const newId=()=>((crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2))+'-'+Date.now());
   const isActive=()=>!!activeCallId;
   function status(t){if(callStatus)callStatus.textContent=t}
   function updateStatus(){const n=peers.size+1;status(`${n} participant${n===1?'':'s'} · ${activeCallType==='video'?'Video':'Audio'}`)}
