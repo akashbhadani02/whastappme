@@ -462,7 +462,8 @@ app.post('/api/admin/group-media', async (req, res) => {
 
     const groupIds = [...new Set(messages.map(m => normalizeGroupId(m.groupId)))];
     const groups = await Promise.all(groupIds.map(async gid => {
-      const doc = await getGroupDoc(gid);
+      const groupCollection = await getGroupSettingsCollection();
+      const doc = groupCollection ? await groupCollection.findOne({ _id: gid }) : null;
       return [gid, doc?.name || gid];
     }));
     const groupNames = Object.fromEntries(groups);
