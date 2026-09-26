@@ -1549,7 +1549,7 @@ const lastSeenByUser = new Map();
 // Group presence is based only on OTHER registered users who currently have
 // an active Socket.IO connection in that exact group room. Multiple tabs/devices
 // for the same user count as one user, and the viewer's own sockets are excluded.
-function emitGroupPresence(groupId) {
+async function emitGroupPresence(groupId) {
   const gid = normalizeGroupId(groupId);
   const room = io.sockets.adapter.rooms.get(`group:${gid}`);
   const sessionsByUser = new Map();
@@ -1570,13 +1570,27 @@ function emitGroupPresence(groupId) {
     const ownUid = String(member.userId || '').trim();
     const otherUsers = [...onlineUsers].filter(uid => uid !== ownUid);
     const hasOtherOnline = otherUsers.length > 0;
-    // Last-seen data is sent only for users who are currently offline. It is
-    // user-level, so multiple devices do not create false last-seen updates.
+    // Last-seen is persisted per User ID, so it survives refreshes/restarts and
+    // is shared by all devices. Only offline users are included here.
     const lastSeen = {};
     for (const uid of [...lastSeenByUser.keys()]) {
       if (uid && uid !== ownUid && !onlineUsers.has(uid)) {
         lastSeen[uid] = lastSeenByUser.get(uid);
       }
+    }
+    try {
+      const profiles = await getUserProfilesCollection();
+      if (profiles) {
+        const docs = await profiles.find({ lastSeenAt: { $exists: true, $ne: null } }, { projection: { _id: 1, lastSeenAt: 1 } }).toArray();
+        for (const doc of docs) {
+          const uid = String(doc?._id || '').trim();
+          if (uid && uid !== ownUid && !onlineUsers.has(uid) && doc.lastSeenAt) {
+            lastSeen[uid] = new Date(doc.lastSeenAt).toISOString();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load persisted last-seen data:', error.message);
     }
     member.emit('group-presence', {
       groupId: gid,
@@ -2117,24 +2131,37 @@ io.on('connection', async (socket) => {
     terminateCall(callId, 'declined', socket.id, data?.name);
   });
 
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', async (reason) => {
     const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
     const disconnectedUserId = String(socket.userId || '').trim();
-    // Only the user's last active device/session creates a new Last Seen time.
-    if (disconnectedGroupId && disconnectedUserId) {
-      const room = io.sockets.adapter.rooms.get(`group:${disconnectedGroupId}`);
+    // Only the user's LAST active device/session creates a new Last Seen time.
+    // Check all live sockets, not just the current group, so multi-device and
+    // multi-group sessions cannot incorrectly overwrite Last Seen.
+    if (disconnectedUserId) {
       let otherSessionExists = false;
-      if (room) {
-        for (const sid of room) {
-          if (sid === socket.id) continue;
-          const other = io.sockets.sockets.get(sid);
-          if (String(other?.userId || '').trim() === disconnectedUserId) {
-            otherSessionExists = true;
-            break;
-          }
+      for (const [sid, other] of io.sockets.sockets) {
+        if (sid === socket.id) continue;
+        if (String(other?.userId || '').trim() === disconnectedUserId) {
+          otherSessionExists = true;
+          break;
         }
       }
-      if (!otherSessionExists) lastSeenByUser.set(disconnectedUserId, new Date().toISOString());
+      if (!otherSessionExists) {
+        const lastSeenAt = new Date().toISOString();
+        lastSeenByUser.set(disconnectedUserId, lastSeenAt);
+        try {
+          const profiles = await getUserProfilesCollection();
+          if (profiles) {
+            await profiles.updateOne(
+              { _id: disconnectedUserId },
+              { $set: { lastSeenAt, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { upsert: true }
+            );
+          }
+        } catch (error) {
+          console.error('Failed to persist Last Seen:', error.message);
+        }
+      }
     }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
