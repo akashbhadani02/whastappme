@@ -2107,15 +2107,15 @@ io.on('connection', async (socket) => {
       declinedBy: reason === 'declined' ? actorSocketId : undefined,
       name: String(actorName || '').slice(0, 60)
     };
-    // Notify every participant explicitly, not only the currently active room,
-    // so no connected participant can remain stuck in the call UI.
-    for (const participantId of call.participants) {
-      const participantSocket = io.sockets.sockets.get(participantId);
-      if (participantSocket) {
-        participantSocket.emit('call-ended', payload);
-        participantSocket.leave(room);
-        participantSocket.callId = '';
-        participantSocket.callType = '';
+    // End the call for every connected member authorized for this exact group,
+    // including members who only have the incoming-call prompt open.
+    for (const target of io.sockets.sockets.values()) {
+      if (!target.authorizedGroups?.has(call.groupId)) continue;
+      target.emit('call-ended', payload);
+      if (target.callId === call.callId) {
+        target.leave(room);
+        target.callId = '';
+        target.callType = '';
       }
     }
     activeCalls.delete(call.callId);
