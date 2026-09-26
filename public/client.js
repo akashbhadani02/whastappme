@@ -1458,19 +1458,29 @@ function formatLastSeen(value) {
   return `last seen ${sameDay ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}`;
 }
 
-// Double-clicking an offline status shows the last-seen information.
-onlineStatus?.addEventListener('dblclick', (event) => {
-  event.preventDefault();
+// Last Seen interaction:
+// Desktop: double-click the offline status.
+// Mobile/touch: a single tap is used because many mobile browsers do not
+// reliably fire a dblclick event for small header elements.
+function showCurrentLastSeen(event) {
+  event?.preventDefault?.();
   if (otherGroupMemberOnline) return;
-  const entries = Object.entries(groupLastSeen);
-  const ts = latestLastSeen || (entries.length ? entries.sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime())[0][1] : null);
+  const entries = Object.entries(groupLastSeen || {}).filter(([, ts]) => ts);
+  entries.sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime());
+  const ts = latestLastSeen || (entries.length ? entries[0][1] : null);
   if (!ts) {
     showToast('Last seen unavailable');
     return;
   }
-  // Do not use a browser alert: Last Seen should be shown quietly on every
-  // active device of the same User ID.
   showToast(formatLastSeen(ts));
+}
+onlineStatus?.addEventListener('dblclick', showCurrentLastSeen);
+onlineStatus?.addEventListener('pointerup', (event) => {
+  if (event.pointerType === 'touch' || event.pointerType === 'pen') showCurrentLastSeen(event);
+});
+onlineStatus?.addEventListener('click', (event) => {
+  // Fallback for mobile WebViews that report touch as a normal click.
+  if (window.matchMedia?.('(max-width: 760px)').matches) showCurrentLastSeen(event);
 });
 
 socket.on('group-presence', data => {

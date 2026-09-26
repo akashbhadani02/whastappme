@@ -96,6 +96,8 @@ button,input,textarea{font:inherit}button{border:0;background:none;cursor:pointe
   .new-group-btn{width:calc(100% - 16px);margin-left:8px;margin-right:8px}
 }
 
+.contact-info #onlineStatus{cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;touch-action:manipulation}
+@media(max-width:760px){.contact-info #onlineStatus{display:inline-block;padding:2px 4px;margin-left:-4px;min-height:18px}}
 .message.send-failed{opacity:.65}.message.send-failed .meta::after{content:' • Not sent';color:#c62828;margin-left:4px}.media-wrap img,.media-wrap video{display:block;max-width:100%;width:auto;height:auto;max-height:360px;border-radius:8px}@media(max-width:760px){.send-btn{touch-action:manipulation;-webkit-user-select:none;user-select:none}.message{max-width:88%}.media-wrap{max-width:min(300px,76vw)}.message .media-wrap img,.message .media-wrap video{width:auto;max-width:100%;max-height:42vh;height:auto}}
 
 @media (max-width:760px){
