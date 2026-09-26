@@ -1610,13 +1610,35 @@ async function broadcastSaved(event, msg) {
 
 const lastSeenByUser = new Map();
 
-// Persist a user's latest Last Seen and notify viewers in the affected group.
-// This is used both for real disconnects and for leaving/switching groups, so
-// the Online/Offline label never stays stale on another device.
+function getActiveGroupUsers(groupId) {
+  const gid = normalizeGroupId(groupId);
+  const users = new Map();
+  const room = io.sockets.adapter.rooms.get(`group:${gid}`);
+  if (!room) return users;
+  for (const sid of room) {
+    const member = io.sockets.sockets.get(sid);
+    const uid = String(member?.userId || '').trim();
+    if (!uid) continue;
+    if (!users.has(uid)) users.set(uid, new Set());
+    users.get(uid).add(sid);
+  }
+  return users;
+}
+
+function isUserActiveInGroup(userId, groupId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return false;
+  return getActiveGroupUsers(groupId).has(uid);
+}
+
+// Persist a Last Seen value only when the user's LAST active session in the
+// affected group has gone offline. A second phone/browser in the same group
+// keeps that User ID online and must not create a new Last Seen timestamp.
 async function updateLastSeenForUser(userId, groupId = '') {
   const uid = String(userId || '').trim();
   const gid = normalizeGroupId(groupId || '');
-  if (!uid) return null;
+  if (!uid || !gid || isUserActiveInGroup(uid, gid)) return null;
+
   const lastSeenAt = new Date().toISOString();
   lastSeenByUser.set(uid, lastSeenAt);
   try {
@@ -1631,64 +1653,71 @@ async function updateLastSeenForUser(userId, groupId = '') {
   } catch (error) {
     console.error('Failed to persist Last Seen:', error.message);
   }
-  if (gid) {
-    const room = io.sockets.adapter.rooms.get(`group:${gid}`);
-    if (room) {
-      for (const sid of room) {
-        const viewer = io.sockets.sockets.get(sid);
-        if (!viewer || String(viewer.userId || '').trim() === uid) continue;
-        viewer.emit('last-seen-updated', { groupId: gid, userId: uid, lastSeenAt });
-      }
-    }
+
+  // Notify every currently connected viewer. The client will only apply this
+  // event when it is viewing the same group, so Last Seen stays group-scoped.
+  for (const viewer of io.sockets.sockets.values()) {
+    const viewerGroup = normalizeGroupId(viewer.groupId || '');
+    if (viewerGroup !== gid || String(viewer.userId || '').trim() === uid) continue;
+    viewer.emit('last-seen-updated', { groupId: gid, userId: uid, lastSeenAt });
   }
   return lastSeenAt;
 }
 
-// Group presence is based only on OTHER registered users who currently have
-// an active Socket.IO connection in that exact group room. Multiple tabs/devices
-// for the same user count as one user, and the viewer's own sockets are excluded.
+// Group presence is derived from live Socket.IO sessions in the exact group.
+// Multiple tabs/devices for one User ID count as ONE online member.
 async function emitGroupPresence(groupId) {
   const gid = normalizeGroupId(groupId);
-  const room = io.sockets.adapter.rooms.get(`group:${gid}`);
-  const sessionsByUser = new Map();
-  if (room) {
-    for (const sid of room) {
-      const member = io.sockets.sockets.get(sid);
-      const uid = String(member?.userId || '').trim();
-      if (!uid) continue;
-      if (!sessionsByUser.has(uid)) sessionsByUser.set(uid, new Set());
-      sessionsByUser.get(uid).add(sid);
-    }
-  }
+  const sessionsByUser = getActiveGroupUsers(gid);
   const onlineUsers = new Set(sessionsByUser.keys());
-  const socketsInRoom = room ? [...room] : [];
+  const socketsInRoom = [...(io.sockets.adapter.rooms.get(`group:${gid}`) || [])];
+
+  // Only users that have actually joined this group are eligible to appear in
+  // its Last Seen data. This avoids showing unrelated users from other groups.
+  let groupMemberIds = new Set(onlineUsers);
+  try {
+    const db = await getDb();
+    if (db) {
+      const docs = await db.collection('notification_access')
+        .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+      for (const doc of docs) {
+        const uid = String(doc?.userId || '').trim();
+        if (uid) groupMemberIds.add(uid);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load group member ids:', error.message);
+  }
+
+  let persistedLastSeen = new Map();
+  try {
+    const profiles = await getUserProfilesCollection();
+    if (profiles) {
+      const ids = [...groupMemberIds].filter(Boolean);
+      if (ids.length) {
+        const docs = await profiles.find({ _id: { $in: ids }, lastSeenAt: { $exists: true, $ne: null } },
+          { projection: { _id: 1, lastSeenAt: 1 } }).toArray();
+        persistedLastSeen = new Map(docs.map(doc => [String(doc._id), new Date(doc.lastSeenAt).toISOString()]));
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load persisted last-seen data:', error.message);
+  }
+  for (const [uid, ts] of lastSeenByUser.entries()) {
+    if (groupMemberIds.has(uid)) persistedLastSeen.set(uid, ts);
+  }
+
   for (const sid of socketsInRoom) {
     const member = io.sockets.sockets.get(sid);
     if (!member) continue;
     const ownUid = String(member.userId || '').trim();
     const otherUsers = [...onlineUsers].filter(uid => uid !== ownUid);
     const hasOtherOnline = otherUsers.length > 0;
-    // Last-seen is persisted per User ID, so it survives refreshes/restarts and
-    // is shared by all devices. Only offline users are included here.
     const lastSeen = {};
-    for (const uid of [...lastSeenByUser.keys()]) {
-      if (uid && uid !== ownUid && !onlineUsers.has(uid)) {
-        lastSeen[uid] = lastSeenByUser.get(uid);
-      }
-    }
-    try {
-      const profiles = await getUserProfilesCollection();
-      if (profiles) {
-        const docs = await profiles.find({ lastSeenAt: { $exists: true, $ne: null } }, { projection: { _id: 1, lastSeenAt: 1 } }).toArray();
-        for (const doc of docs) {
-          const uid = String(doc?._id || '').trim();
-          if (uid && uid !== ownUid && !onlineUsers.has(uid) && doc.lastSeenAt) {
-            lastSeen[uid] = new Date(doc.lastSeenAt).toISOString();
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load persisted last-seen data:', error.message);
+    for (const uid of groupMemberIds) {
+      if (!uid || uid === ownUid || onlineUsers.has(uid)) continue;
+      const ts = persistedLastSeen.get(uid);
+      if (ts) lastSeen[uid] = ts;
     }
     const lastSeenEntries = Object.entries(lastSeen)
       .filter(([, ts]) => ts)
@@ -1772,8 +1801,8 @@ io.on('connection', async (socket) => {
       const uid = String(socket.userId || '').trim();
       socket.leave(`group:${previous}`);
       socket.groupId = '';
-      // The user is now offline for this group even if the same User ID remains
-      // connected on another device or later joins a different group.
+      // Update Last Seen only if this was the user's final active session in
+      // this exact group. Another device/browser in the same group keeps them online.
       if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
     }
@@ -1801,10 +1830,13 @@ io.on('connection', async (socket) => {
       socket.authorizedGroups.add(groupId);
     }
     const previousGroupId = socket.groupId;
-    if (previousGroupId) {
+    if (previousGroupId && normalizeGroupId(previousGroupId) !== groupId) {
       const previous = normalizeGroupId(previousGroupId);
+      const uid = String(socket.userId || '').trim();
       socket.leave(`group:${previous}`);
-      // Recalculate immediately so remaining members don't see a stale online state.
+      // Switching groups is also an offline transition for the old group, but
+      // only when no other session for this User ID remains in that group.
+      if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
     }
     socket.groupId = groupId;
@@ -1822,14 +1854,9 @@ io.on('connection', async (socket) => {
     }
   });
 
-  socket.groupId = DEFAULT_GROUP_ID;
-  try {
-    const history = await loadMessages('', DEFAULT_GROUP_ID);
-    socket.emit('history', history);
-  } catch (error) {
-    console.error('Failed to load message history:', error.message);
-    socket.emit('history', []);
-  }
+  // Do not consider a socket a member of any group until the client has
+  // explicitly joined and, for protected groups, passed the group password.
+  socket.groupId = '';
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
@@ -2243,22 +2270,10 @@ io.on('connection', async (socket) => {
   socket.on('disconnect', async (reason) => {
     const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
     const disconnectedUserId = String(socket.userId || '').trim();
-    // Only the user's LAST active device/session creates a new Last Seen time.
-    // Check all live sockets, not just the current group, so multi-device and
-    // multi-group sessions cannot incorrectly overwrite Last Seen.
-    if (disconnectedUserId) {
-      let otherSessionExists = false;
-      for (const [sid, other] of io.sockets.sockets) {
-        if (sid === socket.id) continue;
-        if (String(other?.userId || '').trim() === disconnectedUserId) {
-          otherSessionExists = true;
-          break;
-        }
-      }
-      if (!otherSessionExists) {
-        // Only the last active device/session creates the user's global Last Seen.
-        await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
-      }
+    // Last Seen is group-aware: another device may still be online in this
+    // same group, so disconnecting this socket alone must not mark the user offline.
+    if (disconnectedUserId && disconnectedGroupId) {
+      await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
     }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
