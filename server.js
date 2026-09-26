@@ -1534,8 +1534,18 @@ io.on('connection', async (socket) => {
   const uploads = new Map();
 
   socket.on('presence-ping', (data) => {
-    // Keep presence tied to a live socket and the exact selected group.
+    // Presence is always recalculated from the live sockets in this exact group.
     if (socket.groupId) emitGroupPresence(socket.groupId);
+  });
+
+  // Explicit presence sync for login/re-login without requiring a page refresh.
+  // The client can call this after authentication changes while the same
+  // Socket.IO connection remains alive.
+  socket.on('presence-login', (data, ack) => {
+    const nextUserId = String(data?.userId || '').trim();
+    if (nextUserId) socket.userId = nextUserId;
+    if (socket.groupId) emitGroupPresence(socket.groupId);
+    if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId || '' });
   });
 
   socket.on('register-user', (data) => {
@@ -1584,6 +1594,8 @@ io.on('connection', async (socket) => {
     }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
+    // Broadcast immediately after the new member is fully registered in the
+    // room, so other users see login/re-login without refreshing.
     emitGroupPresence(groupId);
     try {
       const history = await loadMessages('', groupId);

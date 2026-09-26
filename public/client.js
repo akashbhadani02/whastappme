@@ -1293,7 +1293,12 @@ async function joinGroup(groupId, openAfter=true) {
   loadLocalMessageHistory();
   await new Promise(resolve => {
     if (!socket.connected) { resolve(); return; }
-    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => resolve());
+    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => {
+      socket.emit('presence-login', { userId }, () => {
+        socket.emit('presence-ping', { groupId: currentGroupId });
+        resolve();
+      });
+    });
   });
   // Never block opening the chat on history synchronization.
   // The chat becomes usable immediately; history is reconciled in the background.
@@ -1356,7 +1361,12 @@ socket.on('connect', () => {
   socket.emit('join-group', {
     groupId: currentGroupId,
     password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
-  }, () => syncMessages().finally(markVisibleMessagesRead));
+  }, () => {
+    socket.emit('presence-login', { userId }, () => {
+      socket.emit('presence-ping', { groupId: currentGroupId });
+    });
+    syncMessages().finally(markVisibleMessagesRead);
+  });
 });
 const presencePingTimer = setInterval(() => {
   if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
@@ -1375,7 +1385,15 @@ socket.on('connect_error', () => {
   setOnlineStatus('offline');
 });
 
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    markVisibleMessagesRead();
+    if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+  }
+});
+window.addEventListener('focus', () => {
+  if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+});
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 
