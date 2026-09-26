@@ -4,7 +4,9 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.Context;
 import android.os.Build;
 import android.os.IBinder;
 import androidx.core.app.NotificationCompat;
@@ -22,10 +24,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v2";
-    private static final String FG_CHANNEL_ID = "wassup_background_v2";
+    private static final String CHANNEL_ID = "wassup_messages_v3";
+    private static final String FG_CHANNEL_ID = "wassup_background_v3";
     private static final int SERVICE_ID = 7001;
-        private ScheduledExecutorService executor;
+    private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
 
     @Override public void onCreate() {
@@ -103,23 +105,33 @@ public class NotificationPollService extends Service {
                 if (created.compareTo(newest) > 0) newest = created;
                 if (id.isEmpty() || seen.contains(id)) continue;
                 seen.add(id);
-                if (!firstPoll) showMessageNotification(id, m.optString("groupName", "WhatsApp"));
+                if (!firstPoll) showMessageNotification(id, m.optString("groupName", "WhatsApp"), m.optString("groupId", ""));
             }
             if (!newest.isEmpty()) getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("lastSeenCreatedAt", newest).apply();
         } catch (Exception ignored) {}
     }
 
-    private void showMessageNotification(String id, String groupName) {
+    private void showMessageNotification(String id, String groupName, String groupId) {
+        Intent open = new Intent(this, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (groupId != null && !groupId.isEmpty()) open.putExtra("groupId", groupId);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pending = PendingIntent.getActivity(this, Math.abs(id.hashCode()), open, flags);
+
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle(groupName == null || groupName.trim().isEmpty() ? "WhatsApp" : groupName.trim())
                 .setContentText("New message")
+                .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .build();
-        ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(Math.abs(id.hashCode()), n);
+        NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        nm.notify(Math.abs(id.hashCode()), n);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
