@@ -1514,6 +1514,26 @@ async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   const gid = normalizeGroupId(saved.groupId);
   io.to(`group:${gid}`).emit(event, saved);
+  // Realtime unread notification for every active device of the same User ID.
+  // Devices currently inside the originating group already receive the normal
+  // message/media event, so notify only that user's sockets that are elsewhere
+  // (or on the group-list screen) to avoid double-counting.
+  if (event === 'message' || event === 'media') {
+    const senderId = String(saved.userId || '').trim();
+    for (const target of io.sockets.sockets.values()) {
+      const targetUserId = String(target.userId || '').trim();
+      if (!targetUserId || targetUserId === senderId) continue;
+      if (String(target.groupId || '') !== gid) {
+        target.emit('unread-message', {
+          id: String(saved.id),
+          groupId: gid,
+          userId: senderId,
+          readBy: Array.isArray(saved.readBy) ? saved.readBy : [],
+          type: event
+        });
+      }
+    }
+  }
   if (event === 'media') {
     for (const adminSocket of io.sockets.sockets.values()) {
       if (adminSocket.isAdmin) adminSocket.emit('admin-media-alert', saved);

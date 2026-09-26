@@ -1058,6 +1058,19 @@ socket.on('history', history => {
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
 
+// A socket is joined to only one group at a time, so messages arriving in
+// other groups are delivered through this user-level event. This makes the
+// group-list unread badge update instantly without a refresh.
+socket.on('unread-message', data => {
+  if (!data || !data.id || !data.groupId) return;
+  if (String(data.userId || '') === String(userId || '')) return;
+  if (Array.isArray(data.readBy) && data.readBy.map(String).includes(String(userId || ''))) return;
+  // If this group is currently open, the normal message event is responsible
+  // for marking it read; do not create a duplicate badge here.
+  if (String(data.groupId) === String(currentGroupId || '')) return;
+  incrementUnread(data.groupId);
+});
+
 function markMessageRead(msg) {
   if (!msg || !msg.id || msg.userId === userId || readSent.has(msg.id) || !chatOpen) return;
   readSent.add(msg.id);
