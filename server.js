@@ -2168,6 +2168,26 @@ io.on('connection', async (socket) => {
         } catch (error) {
           console.error('Failed to persist Last Seen:', error.message);
         }
+
+        // Sync the new Last Seen to every active device viewing the same group.
+        // This is deliberately a Socket.IO event, not a browser notification/alert.
+        if (disconnectedGroupId) {
+          const room = io.sockets.adapter.rooms.get(`group:${disconnectedGroupId}`);
+          if (room) {
+            for (const sid of room) {
+              const viewer = io.sockets.sockets.get(sid);
+              if (!viewer) continue;
+              const viewerUid = String(viewer.userId || '').trim();
+              if (viewerUid && viewerUid !== disconnectedUserId) {
+                viewer.emit('last-seen-updated', {
+                  groupId: disconnectedGroupId,
+                  userId: disconnectedUserId,
+                  lastSeenAt
+                });
+              }
+            }
+          }
+        }
       }
     }
     removeSocketFromCalls(socket);

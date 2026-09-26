@@ -45,7 +45,24 @@ async function refreshAllUnreadCounts(){
   if(!userId || !Array.isArray(groups)) return;
   await Promise.all(groups.map(g=>refreshUnreadCountForGroup(g.id)));
 }
-let verifiedGroupPasswords = new Map();
+// Group passwords are trusted only for the lifetime of this browser tab.
+// sessionStorage survives normal in-tab navigation/reloads, but is cleared when
+// the tab/session is closed, so a newly opened tab must ask for the password.
+const GROUP_PASSWORD_SESSION_KEY = 'wa_verified_group_passwords';
+function getVerifiedGroupPasswords() {
+  try { return JSON.parse(sessionStorage.getItem(GROUP_PASSWORD_SESSION_KEY) || '{}') || {}; } catch (_) { return {}; }
+}
+function getVerifiedGroupPassword(groupId) {
+  const store = getVerifiedGroupPasswords();
+  return String(store[String(groupId)] || '');
+}
+function setVerifiedGroupPassword(groupId, password) {
+  try {
+    const store = getVerifiedGroupPasswords();
+    store[String(groupId)] = String(password || '');
+    sessionStorage.setItem(GROUP_PASSWORD_SESSION_KEY, JSON.stringify(store));
+  } catch (_) {}
+}
 let selectionMode = false;
 const selectedMessageIds = new Set();
 function generateUserId() {
@@ -1281,8 +1298,17 @@ function renderGroupList() {
 
 async function openGroup(group) {
   if (!group) return;
-  // Always ask for the group password. Do not allow a previously unlocked
-  // session/tab to reopen the group without verification.
+
+  // Do not ask repeatedly inside the same tab. Once this tab has successfully
+  // verified a group's password, switching away and back can reuse that
+  // verification. sessionStorage is intentionally used instead of localStorage
+  // so closing the tab/browser session forces a fresh password next time.
+  const cachedPassword = group.id === 'main' ? '' : getVerifiedGroupPassword(group.id);
+  if (group.id === 'main' || cachedPassword) {
+    await joinGroup(group.id, true);
+    return;
+  }
+
   groupPasswordTarget = group;
   groupPasswordTitle.textContent = `Open ${group.name}`;
   groupPasswordHelp.textContent = "Enter this group's password to open it.";
@@ -1321,7 +1347,7 @@ async function verifyAndOpenGroup() {
     }
 
     groupPasswordModal.classList.add('hidden');
-    verifiedGroupPasswords.set(String(group.id), password);
+    setVerifiedGroupPassword(group.id, password);
     groupPasswordTarget = null;
 
     // Open the UI immediately. Message history loads in the background so a
@@ -1357,7 +1383,7 @@ async function joinGroup(groupId, openAfter=true) {
   loadLocalMessageHistory();
   await new Promise(resolve => {
     if (!socket.connected) { resolve(); return; }
-    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => {
+    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '') }, () => {
       socket.emit('presence-login', { userId, deviceId }, () => {
         socket.emit('presence-ping', { groupId: currentGroupId });
         resolve();
@@ -1442,13 +1468,27 @@ onlineStatus?.addEventListener('dblclick', (event) => {
     showToast('Last seen unavailable');
     return;
   }
-  const label = latestLastSeenUserId ? `${latestLastSeenUserId}: ` : '';
-  window.alert(`${label}${formatLastSeen(ts)}`);
+  // Do not use a browser alert: Last Seen should be shown quietly on every
+  // active device of the same User ID.
+  showToast(formatLastSeen(ts));
 });
 
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
   setGroupPresence(!!data.online, data.groupId, data.lastSeen, data.latestLastSeen, data.latestLastSeenUserId);
+});
+
+// Last Seen is synchronized in realtime to every active device of the same user.
+socket.on('last-seen-updated', data => {
+  if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
+  const uid = String(data.userId || '').trim();
+  if (!uid || !data.lastSeenAt) return;
+  groupLastSeen = { ...(groupLastSeen || {}), [uid]: data.lastSeenAt };
+  const entries = Object.entries(groupLastSeen).filter(([, ts]) => ts);
+  entries.sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime());
+  latestLastSeenUserId = entries.length ? entries[0][0] : null;
+  latestLastSeen = entries.length ? entries[0][1] : null;
+  setOnlineStatus(false);
 });
 
 socket.on('connect', () => {
@@ -1464,7 +1504,7 @@ socket.on('connect', () => {
   if (!currentGroupId) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
-    password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
+    password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '')
   }, () => {
     socket.emit('presence-login', { userId, deviceId }, () => {
       socket.emit('presence-ping', { groupId: currentGroupId });
