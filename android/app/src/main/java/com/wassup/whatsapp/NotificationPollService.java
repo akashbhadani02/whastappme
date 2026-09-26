@@ -122,7 +122,20 @@ public class NotificationPollService extends Service {
         ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(Math.abs(id.hashCode()), n);
     }
 
-    @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        // Keep the notification worker alive after the activity is removed.
+        // The service is foreground + START_STICKY, so Android can recreate it.
+        return START_STICKY;
+    }
+
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        try {
+            Intent restart = new Intent(getApplicationContext(), NotificationPollService.class);
+            if (Build.VERSION.SDK_INT >= 26) getApplicationContext().startForegroundService(restart);
+            else getApplicationContext().startService(restart);
+        } catch (Exception ignored) {}
+        super.onTaskRemoved(rootIntent);
+    }
     @Override public void onDestroy() { if (executor != null) executor.shutdownNow(); super.onDestroy(); }
     @Override public IBinder onBind(Intent intent) { return null; }
 }
