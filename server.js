@@ -1610,6 +1610,40 @@ async function broadcastSaved(event, msg) {
 
 const lastSeenByUser = new Map();
 
+// Persist a user's latest Last Seen and notify viewers in the affected group.
+// This is used both for real disconnects and for leaving/switching groups, so
+// the Online/Offline label never stays stale on another device.
+async function updateLastSeenForUser(userId, groupId = '') {
+  const uid = String(userId || '').trim();
+  const gid = normalizeGroupId(groupId || '');
+  if (!uid) return null;
+  const lastSeenAt = new Date().toISOString();
+  lastSeenByUser.set(uid, lastSeenAt);
+  try {
+    const profiles = await getUserProfilesCollection();
+    if (profiles) {
+      await profiles.updateOne(
+        { _id: uid },
+        { $set: { lastSeenAt, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch (error) {
+    console.error('Failed to persist Last Seen:', error.message);
+  }
+  if (gid) {
+    const room = io.sockets.adapter.rooms.get(`group:${gid}`);
+    if (room) {
+      for (const sid of room) {
+        const viewer = io.sockets.sockets.get(sid);
+        if (!viewer || String(viewer.userId || '').trim() === uid) continue;
+        viewer.emit('last-seen-updated', { groupId: gid, userId: uid, lastSeenAt });
+      }
+    }
+  }
+  return lastSeenAt;
+}
+
 // Group presence is based only on OTHER registered users who currently have
 // an active Socket.IO connection in that exact group room. Multiple tabs/devices
 // for the same user count as one user, and the viewer's own sockets are excluded.
@@ -1731,12 +1765,16 @@ io.on('connection', async (socket) => {
 
   socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
 
-  socket.on('leave-group', (data, ack) => {
+  socket.on('leave-group', async (data, ack) => {
     const requested = normalizeGroupId(data?.groupId || socket.groupId || '');
     const previous = normalizeGroupId(socket.groupId || '');
     if (previous && (!requested || requested === previous)) {
+      const uid = String(socket.userId || '').trim();
       socket.leave(`group:${previous}`);
       socket.groupId = '';
+      // The user is now offline for this group even if the same User ID remains
+      // connected on another device or later joins a different group.
+      if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
     }
     if (typeof ack === 'function') ack({ ok: true });
@@ -2218,40 +2256,8 @@ io.on('connection', async (socket) => {
         }
       }
       if (!otherSessionExists) {
-        const lastSeenAt = new Date().toISOString();
-        lastSeenByUser.set(disconnectedUserId, lastSeenAt);
-        try {
-          const profiles = await getUserProfilesCollection();
-          if (profiles) {
-            await profiles.updateOne(
-              { _id: disconnectedUserId },
-              { $set: { lastSeenAt, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
-              { upsert: true }
-            );
-          }
-        } catch (error) {
-          console.error('Failed to persist Last Seen:', error.message);
-        }
-
-        // Sync the new Last Seen to every active device viewing the same group.
-        // This is deliberately a Socket.IO event, not a browser notification/alert.
-        if (disconnectedGroupId) {
-          const room = io.sockets.adapter.rooms.get(`group:${disconnectedGroupId}`);
-          if (room) {
-            for (const sid of room) {
-              const viewer = io.sockets.sockets.get(sid);
-              if (!viewer) continue;
-              const viewerUid = String(viewer.userId || '').trim();
-              if (viewerUid && viewerUid !== disconnectedUserId) {
-                viewer.emit('last-seen-updated', {
-                  groupId: disconnectedGroupId,
-                  userId: disconnectedUserId,
-                  lastSeenAt
-                });
-              }
-            }
-          }
-        }
+        // Only the last active device/session creates the user's global Last Seen.
+        await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
       }
     }
     removeSocketFromCalls(socket);
