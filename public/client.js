@@ -23,10 +23,6 @@ const deviceId = (() => {
   return value;
 })();
 let userId = localStorage.getItem('wa_user_id') || '';
-if (!userId) {
-  userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
-  localStorage.setItem('wa_user_id', userId);
-}
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
@@ -35,10 +31,12 @@ let groupPasswordTarget = null;
 let verifiedGroupPasswords = new Map();
 let selectionMode = false;
 const selectedMessageIds = new Set();
-while (!name) {
-  name = (prompt('Please enter your name:') || '').trim();
+function generateUserId() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = 'WA-';
+  for (let i = 0; i < 8; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
 }
-localStorage.setItem('wa_name', name);
 
 document.title = 'WhatsApp';
 
@@ -1886,6 +1884,56 @@ const nameError = document.querySelector('#nameError');
 const nameTitle = document.querySelector('#nameTitle');
 const nameHelp = document.querySelector('#nameHelp');
 const meAvatar = document.querySelector('#profileAvatar');
+const accountModal = document.querySelector('#accountModal');
+const accountUserIdInput = document.querySelector('#accountUserIdInput');
+const accountNameInput = document.querySelector('#accountNameInput');
+const accountContinueBtn = document.querySelector('#accountContinueBtn');
+const accountNewBtn = document.querySelector('#accountNewBtn');
+const accountError = document.querySelector('#accountError');
+const accountGenerated = document.querySelector('#accountGenerated');
+
+function normalizeUserId(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 40);
+}
+
+function openAccountModal(force = false) {
+  if (!force && userId && name) return;
+  accountUserIdInput.value = userId || '';
+  accountNameInput.value = name || '';
+  accountError.textContent = '';
+  accountGenerated.style.display = userId ? 'block' : 'none';
+  accountGenerated.textContent = userId ? `Your User ID: ${userId}` : '';
+  accountModal.classList.remove('hidden');
+  setTimeout(() => (userId ? accountNameInput : accountUserIdInput).focus(), 50);
+}
+
+function finishAccountLogin() {
+  const nextId = normalizeUserId(accountUserIdInput.value);
+  const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
+  if (!nextId || nextId.length < 6) { accountError.textContent = 'Enter a valid User ID'; return; }
+  if (!nextName) { accountError.textContent = 'Enter your name'; return; }
+  userId = nextId;
+  name = nextName;
+  localStorage.setItem('wa_user_id', userId);
+  localStorage.setItem('wa_name', name);
+  accountModal.classList.add('hidden');
+  updateMyNameUI();
+  socket.emit('register-user', { userId, deviceId });
+  socket.emit('presence-login', { userId, deviceId });
+  if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
+}
+
+accountNewBtn?.addEventListener('click', () => {
+  const generated = generateUserId();
+  accountUserIdInput.value = generated;
+  accountGenerated.style.display = 'block';
+  accountGenerated.textContent = `Your new User ID: ${generated}`;
+  accountError.textContent = 'Save this User ID. Use the same ID to login on another device.';
+  accountNameInput.focus();
+});
+accountContinueBtn?.addEventListener('click', finishAccountLogin);
+accountUserIdInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');
@@ -1986,6 +2034,9 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
+if (!userId || !name) {
+  openAccountModal(true);
+}
 updateMyNameUI();
 updateGroupNameUI();
 nameSave.addEventListener('click', saveUserName);
