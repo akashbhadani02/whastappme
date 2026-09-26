@@ -28,8 +28,9 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let groupPasswordTarget = null;
-const unreadCounts = JSON.parse(localStorage.getItem('wa_unread_counts') || '{}');
-function saveUnreadCounts(){ try { localStorage.setItem('wa_unread_counts', JSON.stringify(unreadCounts)); } catch(_) {} }
+const unreadStorageKey = `wa_unread_counts:${deviceId}`;
+const unreadCounts = JSON.parse(localStorage.getItem(unreadStorageKey) || '{}');
+function saveUnreadCounts(){ try { localStorage.setItem(unreadStorageKey, JSON.stringify(unreadCounts)); } catch(_) {} }
 function getUnreadCount(groupId){ return Math.max(0, Number(unreadCounts[String(groupId)] || 0)); }
 function setUnreadCount(groupId, count){ const gid=String(groupId||''); if(!gid) return; if(Number(count)>0) unreadCounts[gid]=Math.floor(Number(count)); else delete unreadCounts[gid]; saveUnreadCounts(); renderGroupList(); }
 function incrementUnread(groupId){ const gid=String(groupId||''); if(!gid) return; setUnreadCount(gid, getUnreadCount(gid)+1); }
