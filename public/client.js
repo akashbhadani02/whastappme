@@ -1079,13 +1079,18 @@ socket.on('message-delivered', data => {
 });
 
 socket.on('message-read', data => {
-  if (!data || !data.id || !data.userId || (data.groupId && data.groupId !== currentGroupId)) return;
+  if (!data || !data.id || !data.userId) return;
+  // A read receipt is user-level, not device-level. Any device belonging to the
+  // same User ID must learn that this message is now seen.
   const msg = messages.get(data.id);
-  if (!msg) return;
-  msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
-  if (!msg.readBy.includes(data.userId)) msg.readBy.push(data.userId);
-  updateTicks(msg);
-  if (String(data.userId) === String(userId) && data.groupId) refreshUnreadCountForGroup(data.groupId);
+  if (msg) {
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    if (!msg.readBy.map(String).includes(String(data.userId))) msg.readBy.push(String(data.userId));
+    updateTicks(msg);
+  }
+  if (String(data.userId) === String(userId) && data.groupId) {
+    refreshUnreadCountForGroup(data.groupId).catch(() => {});
+  }
 });
 
 async function syncMessages() {
@@ -1232,6 +1237,7 @@ async function loadGroups() {
       updateGroupNameUI();
     }
     renderGroupList();
+    refreshAllUnreadCounts().catch(() => {});
   } catch (_) {
     groups = [];
     currentGroupId = '';
@@ -1322,6 +1328,8 @@ async function verifyAndOpenGroup() {
 async function joinGroup(groupId, openAfter=true) {
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
+  // Optimistically clear while opening, then reconcile against the persisted
+  // User-ID readBy state after the history/read receipts arrive.
   setUnreadCount(currentGroupId, 0);
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
@@ -1406,6 +1414,9 @@ socket.on('connect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
+  // Reconcile all group badges immediately on every login/reconnect. Counts are
+  // user-level, so the same User ID sees the same seen/unseen state on all devices.
+  if (userId) refreshAllUnreadCounts().catch(() => {});
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;

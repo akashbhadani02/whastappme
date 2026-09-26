@@ -1927,7 +1927,14 @@ io.on('connection', async (socket) => {
       console.error('Failed to save read receipt:', error.message);
     }
     const readEvent = { id: data.id, userId: readerId, groupId: gid };
-    io.to(`group:${gid}`).emit('message-read', readEvent);
+    // Read state belongs to the User ID, not a device. Broadcast the receipt to
+    // every active socket of that same User ID so all of their devices update
+    // their group-list unread badge immediately.
+    for (const target of io.sockets.sockets.values()) {
+      if (String(target.userId || '') === readerId) target.emit('message-read', readEvent);
+    }
+    // Other members in this group still need the receipt for message ticks.
+    io.to(`group:${gid}`).except ? io.to(`group:${gid}`).except(socket.id).emit('message-read', readEvent) : io.to(`group:${gid}`).emit('message-read', readEvent);
     publishRealtimeEvent('message-read', readEvent);
   });
 
