@@ -11,6 +11,17 @@ const socket = io({
 const PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = 'kmkm';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+// Stable per-installation/device identifier. The server still uses userId for
+// user-level presence, while this ID lets it distinguish multiple devices.
+const deviceId = (() => {
+  const key = 'wa_device_id';
+  let value = localStorage.getItem(key);
+  if (!value) {
+    value = (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+    localStorage.setItem(key, value);
+  }
+  return value;
+})();
 let userId = localStorage.getItem('wa_user_id') || '';
 if (!userId) {
   userId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -1294,7 +1305,7 @@ async function joinGroup(groupId, openAfter=true) {
   await new Promise(resolve => {
     if (!socket.connected) { resolve(); return; }
     socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '') }, () => {
-      socket.emit('presence-login', { userId }, () => {
+      socket.emit('presence-login', { userId, deviceId }, () => {
         socket.emit('presence-ping', { groupId: currentGroupId });
         resolve();
       });
@@ -1354,7 +1365,7 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId });
+  socket.emit('register-user', { userId, deviceId });
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;
@@ -1362,7 +1373,7 @@ socket.on('connect', () => {
     groupId: currentGroupId,
     password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
   }, () => {
-    socket.emit('presence-login', { userId }, () => {
+    socket.emit('presence-login', { userId, deviceId }, () => {
       socket.emit('presence-ping', { groupId: currentGroupId });
     });
     syncMessages().finally(markVisibleMessagesRead);

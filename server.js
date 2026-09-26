@@ -1504,14 +1504,21 @@ async function broadcastSaved(event, msg) {
 function emitGroupPresence(groupId) {
   const gid = normalizeGroupId(groupId);
   const room = io.sockets.adapter.rooms.get(`group:${gid}`);
-  const onlineUsers = new Set();
+  // Track active sessions per USER, not per browser/device socket.
+  // One user can be logged in on multiple devices/tabs; they still count as
+  // one online user. A user becomes offline only after their last session
+  // leaves this exact group room.
+  const sessionsByUser = new Map();
   if (room) {
     for (const sid of room) {
       const member = io.sockets.sockets.get(sid);
       const uid = String(member?.userId || '').trim();
-      if (uid) onlineUsers.add(uid);
+      if (!uid) continue;
+      if (!sessionsByUser.has(uid)) sessionsByUser.set(uid, new Set());
+      sessionsByUser.get(uid).add(sid);
     }
   }
+  const onlineUsers = new Set(sessionsByUser.keys());
   const socketsInRoom = room ? [...room] : [];
   for (const sid of socketsInRoom) {
     const member = io.sockets.sockets.get(sid);
@@ -1521,10 +1528,14 @@ function emitGroupPresence(groupId) {
     for (const uid of onlineUsers) {
       if (uid && uid !== ownUid) { hasOtherOnline = true; break; }
     }
+    const otherUsers = [...onlineUsers].filter(uid => uid !== ownUid);
     member.emit('group-presence', {
       groupId: gid,
       online: hasOtherOnline,
-      onlineCount: Math.max(0, [...onlineUsers].filter(uid => uid !== ownUid).length)
+      onlineCount: otherUsers.length,
+      // Number of active device/tab sessions for each visible user.
+      // This is informational; presence itself remains user-level.
+      deviceCounts: Object.fromEntries(otherUsers.map(uid => [uid, sessionsByUser.get(uid)?.size || 0]))
     });
   }
 }
