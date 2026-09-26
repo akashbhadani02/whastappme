@@ -1358,6 +1358,10 @@ socket.on('connect', () => {
     password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
   }, () => syncMessages().finally(markVisibleMessagesRead));
 });
+const presencePingTimer = setInterval(() => {
+  if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+}, 3000);
+
 socket.on('disconnect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');

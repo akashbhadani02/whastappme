@@ -1533,6 +1533,11 @@ io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
 
+  socket.on('presence-ping', (data) => {
+    // Keep presence tied to a live socket and the exact selected group.
+    if (socket.groupId) emitGroupPresence(socket.groupId);
+  });
+
   socket.on('register-user', (data) => {
     const previousUserId = String(socket.userId || '');
     socket.userId = data && data.userId ? String(data.userId) : '';
