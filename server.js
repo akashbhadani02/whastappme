@@ -1014,7 +1014,7 @@ app.post('/api/admin/recycle-bin/restore', async (req, res) => {
     if (recycleId) await recycle.deleteOne({ _id:recycleId });
     else await collection.updateOne({ id:msg.id }, { $unset:{ deletedAt:'', deletedBy:'', deleteReason:'' } });
     const event = { message: msg, groupId: msg.groupId };
-    io.emit('restore-message', event);
+    io.to(`group:${normalizeGroupId(msg.groupId)}`).emit('restore-message', event);
     await publishRealtimeEvent('restore-message', event);
     res.json({ ok:true, message:msg });
   } catch (error) {
@@ -1533,12 +1533,16 @@ async function sendPushToOtherUsers(msg) {
     const db = await getDb();
     if (!db) return;
     const senderUserId = String(msg.userId || '').trim();
-    // A message must never notify the device/user that sent it. Match the
-    // exact userId saved with the browser's push subscription.
-    const query = senderUserId
-      ? { userId: { $ne: senderUserId } }
-      : { userId: { $exists: true } };
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find(query).toArray();
+    const gid = normalizeGroupId(msg.groupId);
+    // Push only to users who have actually entered this group on at least one
+    // device. This prevents a Group A message from notifying a Group B-only user.
+    const accessDocs = await db.collection('notification_access')
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+    const allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
+    if (senderUserId) allowedUsers.delete(senderUserId);
+    if (!allowedUsers.size) return;
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
+      .find({ userId: { $in: [...allowedUsers] } }).toArray();
     if (!docs.length) return;
     // Show only the group name in the notification. Never expose the actual
     // message text, sender name, or message preview in the push payload.
@@ -1608,7 +1612,7 @@ async function broadcastSaved(event, msg) {
   return saved;
 }
 
-const lastSeenByUser = new Map();
+const lastSeenByUser = new Map(); // key: `${userId}:${groupId}`
 
 function getActiveGroupUsers(groupId) {
   const gid = normalizeGroupId(groupId);
@@ -1640,13 +1644,13 @@ async function updateLastSeenForUser(userId, groupId = '') {
   if (!uid || !gid || isUserActiveInGroup(uid, gid)) return null;
 
   const lastSeenAt = new Date().toISOString();
-  lastSeenByUser.set(uid, lastSeenAt);
+  lastSeenByUser.set(`${uid}:${gid}`, lastSeenAt);
   try {
     const profiles = await getUserProfilesCollection();
     if (profiles) {
       await profiles.updateOne(
         { _id: uid },
-        { $set: { lastSeenAt, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { $set: { [`lastSeenByGroup.${gid}`]: lastSeenAt, lastSeenAt, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
         { upsert: true }
       );
     }
@@ -1695,15 +1699,23 @@ async function emitGroupPresence(groupId) {
     if (profiles) {
       const ids = [...groupMemberIds].filter(Boolean);
       if (ids.length) {
-        const docs = await profiles.find({ _id: { $in: ids }, lastSeenAt: { $exists: true, $ne: null } },
-          { projection: { _id: 1, lastSeenAt: 1 } }).toArray();
-        persistedLastSeen = new Map(docs.map(doc => [String(doc._id), new Date(doc.lastSeenAt).toISOString()]));
+        const docs = await profiles.find({ _id: { $in: ids } },
+          { projection: { _id: 1, lastSeenAt: 1, lastSeenByGroup: 1 } }).toArray();
+        persistedLastSeen = new Map();
+        for (const doc of docs) {
+          const byGroup = doc?.lastSeenByGroup || {};
+          const groupTs = byGroup[gid];
+          if (groupTs) persistedLastSeen.set(String(doc._id), new Date(groupTs).toISOString());
+          else if (doc?.lastSeenAt) persistedLastSeen.set(String(doc._id), new Date(doc.lastSeenAt).toISOString());
+        }
       }
     }
   } catch (error) {
     console.error('Failed to load persisted last-seen data:', error.message);
   }
-  for (const [uid, ts] of lastSeenByUser.entries()) {
+  for (const [key, ts] of lastSeenByUser.entries()) {
+    if (!key.endsWith(`:${gid}`)) continue;
+    const uid = key.slice(0, -(gid.length + 1));
     if (groupMemberIds.has(uid)) persistedLastSeen.set(uid, ts);
   }
 
@@ -1805,6 +1817,12 @@ io.on('connection', async (socket) => {
       // this exact group. Another device/browser in the same group keeps them online.
       if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
+      try {
+        if (uid) {
+          const db = await getDb();
+          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
+        }
+      } catch (_) {}
     }
     if (typeof ack === 'function') ack({ ok: true });
   });
@@ -1837,6 +1855,12 @@ io.on('connection', async (socket) => {
       // Switching groups is also an offline transition for the old group, but
       // only when no other session for this User ID remains in that group.
       if (uid) await updateLastSeenForUser(uid, previous);
+      try {
+        if (uid) {
+          const db = await getDb();
+          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
+        }
+      } catch (_) {}
       setImmediate(() => emitGroupPresence(previous));
     }
     socket.groupId = groupId;
@@ -2010,7 +2034,7 @@ io.on('connection', async (socket) => {
       const updated = result?.value || result;
       if (!updated) { if (typeof ack === 'function') ack({ok:false}); return; }
       const event = { message: updated, groupId };
-      io.emit('message-updated', event);
+      io.to(`group:${groupId}`).emit('message-updated', event);
       publishRealtimeEvent('message-updated', event);
       if (typeof ack === 'function') ack({ok:true, message:updated});
     } catch (error) {
@@ -2035,7 +2059,7 @@ io.on('connection', async (socket) => {
       }
       // Persist first, then broadcast. This prevents another Vercel instance's
       // reconciliation request from briefly re-adding a just-deleted message.
-      io.emit('delete-message', deleteEvent);
+      io.to(`group:${groupId}`).emit('delete-message', deleteEvent);
       publishRealtimeEvent('delete-message', deleteEvent);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
@@ -2069,7 +2093,7 @@ io.on('connection', async (socket) => {
       }
 
       const event = { ids, groupId };
-      io.emit('delete-messages', event);
+      io.to(`group:${groupId}`).emit('delete-messages', event);
       publishRealtimeEvent('delete-messages', event);
       if (typeof ack === 'function') ack({ ok: true, count: ids.length });
     } catch (error) {
@@ -2080,18 +2104,22 @@ io.on('connection', async (socket) => {
 
   socket.on('typing', (data) => {
     if (!data || !socket.groupId || normalizeGroupId(data.groupId) !== normalizeGroupId(socket.groupId)) return;
-    io.emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || String(data.userId || ''), name: String(data.name || '').slice(0,60), active: !!data.active });
+    io.to(`group:${normalizeGroupId(socket.groupId)}`).except ? io.to(`group:${normalizeGroupId(socket.groupId)}`).except(socket.id).emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || '', name: String(data.name || '').slice(0,60), active: !!data.active }) : io.to(`group:${normalizeGroupId(socket.groupId)}`).emit('typing', { groupId: normalizeGroupId(socket.groupId), userId: socket.userId || '', name: String(data.name || '').slice(0,60), active: !!data.active });
   });
 
   socket.on('message-read', async (data) => {
-    if (!data || !data.id || !data.userId || !socket.groupId) return;
+    if (!data || !data.id || !socket.userId || !socket.groupId) return;
     const gid = normalizeGroupId(socket.groupId);
-    const readerId = String(data.userId);
+    const readerId = String(socket.userId);
     try {
       const collection = await getCollection();
       if (collection) {
+        const target = await collection.findOne({ id: String(data.id), groupId: gid, deletedAt: { $exists: false } }, { projection: { userId: 1 } });
+        // Only a recipient can create a read receipt; the sender's own device
+        // must never turn its message blue by claiming another User ID.
+        if (!target || String(target.userId || '') === readerId) return;
         await collection.updateOne(
-          { id: data.id, groupId: gid },
+          { id: String(data.id), groupId: gid, deletedAt: { $exists: false } },
           { $addToSet: { readBy: readerId } }
         );
       }
@@ -2111,7 +2139,8 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('message-delivered', async (data) => {
-    if (!data || !data.id || !socket.userId) return;
+    if (!data || !data.id || !socket.userId || !socket.groupId) return;
+    const gid = normalizeGroupId(socket.groupId);
     const receiverId = String(socket.userId);
     try {
       const collection = await getCollection();
@@ -2273,14 +2302,19 @@ io.on('connection', async (socket) => {
     // Last Seen is group-aware: another device may still be online in this
     // same group, so disconnecting this socket alone must not mark the user offline.
     if (disconnectedUserId && disconnectedGroupId) {
-      await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
+      // Socket.IO may still expose the socket in its room during the
+      // disconnect callback. Wait one turn so the departed session is removed
+      // before deciding whether this was the user's final device/session.
+      setImmediate(async () => {
+        await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
+        await emitGroupPresence(disconnectedGroupId);
+      });
     }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
     // Socket.IO removes the socket from its rooms before/around disconnect; defer
     // the calculation one tick so the departed user is definitely excluded.
-    if (disconnectedGroupId) setImmediate(() => emitGroupPresence(disconnectedGroupId));
     console.log('User disconnected:', socket.id, reason);
   });
 });

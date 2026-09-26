@@ -848,7 +848,7 @@ async function handleMediaPicker(input) {
   const files = [...(input?.files || [])];
   if (!files.length) return;
   for (const file of files) {
-    if (!/^(image\/|video\/)/i.test(file.type)) { showToast('Only photo and video are supported'); continue; }
+    if (!/^(image\/|video\/|audio\/)/i.test(file.type)) { showToast('Only photo, video and audio are supported'); continue; }
     await uploadMedia(file);
   }
   input.value = '';
@@ -864,7 +864,7 @@ function makeUploadBubble(file, type) {
   wrap.className = 'media-wrap upload-wrap';
   const placeholder = document.createElement(type === 'video' ? 'div' : 'div');
   placeholder.className = 'upload-placeholder';
-  placeholder.innerHTML = `<div class="upload-icon">${type === 'video' ? '🎥' : '📷'}</div><div class="upload-name"></div>`;
+  placeholder.innerHTML = `<div class="upload-icon">${type === 'video' ? '🎥' : type === 'audio' ? '🎵' : '📷'}</div><div class="upload-name"></div>`;
   placeholder.querySelector('.upload-name').textContent = file.name;
   const status = document.createElement('div'); status.className='upload-status'; status.textContent='⏳ Preparing video upload…';
   wrap.appendChild(status);
@@ -905,7 +905,7 @@ async function uploadMedia(file) {
   try {
     const uploadId = id();
     const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
-    if (ui.status) ui.status.textContent = type === 'video' ? '📤 Uploading video… 0%' : type === 'image' ? '📤 Uploading photo… 0%' : '📤 Uploading… 0%';
+    if (ui.status) ui.status.textContent = type === 'video' ? '📤 Uploading video… 0%' : type === 'image' ? '📤 Uploading photo… 0%' : type === 'audio' ? '📤 Uploading audio… 0%' : '📤 Uploading… 0%';
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
     if (!started.ok) throw new Error(started.error || 'Media upload could not start');
@@ -924,7 +924,7 @@ async function uploadMedia(file) {
       setUploadProgress(ui, sent / file.size * 100);
     }
     let finish, result;
-    if (ui.status) ui.status.textContent = type === 'video' ? '⚙️ Upload complete — sending video…' : type === 'image' ? '⚙️ Upload complete — sending photo…' : '⚙️ Upload complete — sending…';
+    if (ui.status) ui.status.textContent = type === 'video' ? '⚙️ Upload complete — sending video…' : type === 'image' ? '⚙️ Upload complete — sending photo…' : type === 'audio' ? '⚙️ Upload complete — sending audio…' : '⚙️ Upload complete — sending…';
     for (let attempt=0; attempt<3; attempt++) {
       finish = await fetch('/api/media/end', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ uploadId, user:name, time:now() }), cache:'no-store' });
       result = await finish.json().catch(() => ({}));
@@ -933,7 +933,7 @@ async function uploadMedia(file) {
     }
     if (!result.ok) throw new Error(result.error || 'Media upload could not finish');
     setUploadProgress(ui, 100, '✓');
-    if (ui.status) ui.status.textContent = type === 'video' ? '✅ Video sent' : type === 'image' ? '✅ Photo sent' : '✅ Sent';
+    if (ui.status) ui.status.textContent = type === 'video' ? '✅ Video sent' : type === 'image' ? '✅ Photo sent' : type === 'audio' ? '✅ Audio sent' : '✅ Sent';
     ui.el.classList.add('upload-done');
     setTimeout(() => ui.el.remove(), 2200);
     renderMessage(result.message, 'outgoing');
@@ -1521,6 +1521,10 @@ socket.on('last-seen-updated', data => {
 });
 
 socket.on('connect', () => {
+  // A reconnect may have happened before a previous read receipt reached the
+  // server. Allow visible messages to be sent again so blue ticks cannot get
+  // stuck after a temporary network drop.
+  readSent.clear();
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
