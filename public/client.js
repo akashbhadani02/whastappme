@@ -1011,7 +1011,8 @@ socket.on('admin-media-alert', item => showAdminMediaPopup(item, false));
 function receiveMessage(msg, options = {}) {
   if (!msg || !msg.id) return;
   const msgGroupId = msg.groupId || 'main';
-  const isIncoming = msg.userId !== userId;
+  const senderId = String(msg.userId || msg.senderId || msg.fromUserId || '');
+  const isIncoming = !!senderId && senderId !== String(userId || '');
   // Live socket messages for another group still count as unread.
   // Historical messages loaded on initial join must never create unread badges.
   if (isIncoming && !options.history && (msgGroupId !== currentGroupId || !chatOpen)) incrementUnread(msgGroupId);
@@ -1227,7 +1228,7 @@ function renderGroupList() {
     button.type = 'button';
     const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
     const summary = document.createElement('div'); summary.className = 'chat-summary';
-    summary.innerHTML = `<div class="chat-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
     summary.querySelector('strong').textContent = group.name;
     const badge = summary.querySelector('.group-unread-badge');
     const unread = getUnreadCount(group.id);
