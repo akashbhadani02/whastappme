@@ -1544,16 +1544,14 @@ async function broadcastSaved(event, msg) {
   return saved;
 }
 
+const lastSeenByUser = new Map();
+
 // Group presence is based only on OTHER registered users who currently have
 // an active Socket.IO connection in that exact group room. Multiple tabs/devices
 // for the same user count as one user, and the viewer's own sockets are excluded.
 function emitGroupPresence(groupId) {
   const gid = normalizeGroupId(groupId);
   const room = io.sockets.adapter.rooms.get(`group:${gid}`);
-  // Track active sessions per USER, not per browser/device socket.
-  // One user can be logged in on multiple devices/tabs; they still count as
-  // one online user. A user becomes offline only after their last session
-  // leaves this exact group room.
   const sessionsByUser = new Map();
   if (room) {
     for (const sid of room) {
@@ -1570,18 +1568,22 @@ function emitGroupPresence(groupId) {
     const member = io.sockets.sockets.get(sid);
     if (!member) continue;
     const ownUid = String(member.userId || '').trim();
-    let hasOtherOnline = false;
-    for (const uid of onlineUsers) {
-      if (uid && uid !== ownUid) { hasOtherOnline = true; break; }
-    }
     const otherUsers = [...onlineUsers].filter(uid => uid !== ownUid);
+    const hasOtherOnline = otherUsers.length > 0;
+    // Last-seen data is sent only for users who are currently offline. It is
+    // user-level, so multiple devices do not create false last-seen updates.
+    const lastSeen = {};
+    for (const uid of [...lastSeenByUser.keys()]) {
+      if (uid && uid !== ownUid && !onlineUsers.has(uid)) {
+        lastSeen[uid] = lastSeenByUser.get(uid);
+      }
+    }
     member.emit('group-presence', {
       groupId: gid,
       online: hasOtherOnline,
       onlineCount: otherUsers.length,
-      // Number of active device/tab sessions for each visible user.
-      // This is informational; presence itself remains user-level.
-      deviceCounts: Object.fromEntries(otherUsers.map(uid => [uid, sessionsByUser.get(uid)?.size || 0]))
+      deviceCounts: Object.fromEntries(otherUsers.map(uid => [uid, sessionsByUser.get(uid)?.size || 0])),
+      lastSeen
     });
   }
 }
@@ -2117,6 +2119,23 @@ io.on('connection', async (socket) => {
 
   socket.on('disconnect', (reason) => {
     const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
+    const disconnectedUserId = String(socket.userId || '').trim();
+    // Only the user's last active device/session creates a new Last Seen time.
+    if (disconnectedGroupId && disconnectedUserId) {
+      const room = io.sockets.adapter.rooms.get(`group:${disconnectedGroupId}`);
+      let otherSessionExists = false;
+      if (room) {
+        for (const sid of room) {
+          if (sid === socket.id) continue;
+          const other = io.sockets.sockets.get(sid);
+          if (String(other?.userId || '').trim() === disconnectedUserId) {
+            otherSessionExists = true;
+            break;
+          }
+        }
+      }
+      if (!otherSessionExists) lastSeenByUser.set(disconnectedUserId, new Date().toISOString());
+    }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();

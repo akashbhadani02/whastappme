@@ -1411,15 +1411,39 @@ function setOnlineStatus(state) {
 // IMPORTANT: this is NOT the user's own socket connection status.
 // It is the presence of at least one OTHER member in the currently selected group.
 let otherGroupMemberOnline = false;
-function setGroupPresence(online, groupId) {
+let groupLastSeen = {};
+function setGroupPresence(online, groupId, lastSeen = {}) {
   if (String(groupId || '') !== String(currentGroupId || '')) return;
   otherGroupMemberOnline = !!online;
+  groupLastSeen = (lastSeen && typeof lastSeen === 'object') ? lastSeen : {};
   setOnlineStatus(otherGroupMemberOnline ? 'online' : 'offline');
 }
 
+function formatLastSeen(value) {
+  if (!value) return 'Last seen unavailable';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return 'Last seen unavailable';
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  return `last seen ${sameDay ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}`;
+}
+
+// Double-clicking an offline status shows the last-seen information.
+onlineStatus?.addEventListener('dblclick', (event) => {
+  event.preventDefault();
+  if (otherGroupMemberOnline) return;
+  const entries = Object.entries(groupLastSeen);
+  if (!entries.length) {
+    showToast('Last seen unavailable');
+    return;
+  }
+  const text = entries.map(([uid, ts]) => `${uid}: ${formatLastSeen(ts)}`).join('\n');
+  window.alert(text);
+});
+
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
-  setGroupPresence(!!data.online, data.groupId);
+  setGroupPresence(!!data.online, data.groupId, data.lastSeen);
 });
 
 socket.on('connect', () => {
