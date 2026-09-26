@@ -1412,10 +1412,14 @@ function setOnlineStatus(state) {
 // It is the presence of at least one OTHER member in the currently selected group.
 let otherGroupMemberOnline = false;
 let groupLastSeen = {};
-function setGroupPresence(online, groupId, lastSeen = {}) {
+let latestLastSeen = null;
+let latestLastSeenUserId = null;
+function setGroupPresence(online, groupId, lastSeen = {}, latest = null, latestUserId = null) {
   if (String(groupId || '') !== String(currentGroupId || '')) return;
   otherGroupMemberOnline = !!online;
   groupLastSeen = (lastSeen && typeof lastSeen === 'object') ? lastSeen : {};
+  latestLastSeen = latest || null;
+  latestLastSeenUserId = latestUserId || null;
   setOnlineStatus(otherGroupMemberOnline ? 'online' : 'offline');
 }
 
@@ -1433,17 +1437,18 @@ onlineStatus?.addEventListener('dblclick', (event) => {
   event.preventDefault();
   if (otherGroupMemberOnline) return;
   const entries = Object.entries(groupLastSeen);
-  if (!entries.length) {
+  const ts = latestLastSeen || (entries.length ? entries.sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime())[0][1] : null);
+  if (!ts) {
     showToast('Last seen unavailable');
     return;
   }
-  const text = entries.map(([uid, ts]) => `${uid}: ${formatLastSeen(ts)}`).join('\n');
-  window.alert(text);
+  const label = latestLastSeenUserId ? `${latestLastSeenUserId}: ` : '';
+  window.alert(`${label}${formatLastSeen(ts)}`);
 });
 
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
-  setGroupPresence(!!data.online, data.groupId, data.lastSeen);
+  setGroupPresence(!!data.online, data.groupId, data.lastSeen, data.latestLastSeen, data.latestLastSeenUserId);
 });
 
 socket.on('connect', () => {

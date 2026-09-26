@@ -1592,12 +1592,19 @@ async function emitGroupPresence(groupId) {
     } catch (error) {
       console.error('Failed to load persisted last-seen data:', error.message);
     }
+    const lastSeenEntries = Object.entries(lastSeen)
+      .filter(([, ts]) => ts)
+      .sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime());
+    const latestLastSeen = lastSeenEntries.length ? lastSeenEntries[0][1] : null;
+    const latestLastSeenUserId = lastSeenEntries.length ? lastSeenEntries[0][0] : null;
     member.emit('group-presence', {
       groupId: gid,
       online: hasOtherOnline,
       onlineCount: otherUsers.length,
       deviceCounts: Object.fromEntries(otherUsers.map(uid => [uid, sessionsByUser.get(uid)?.size || 0])),
-      lastSeen
+      lastSeen,
+      latestLastSeen,
+      latestLastSeenUserId
     });
   }
 }
