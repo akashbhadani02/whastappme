@@ -33,7 +33,7 @@ public class NotificationPollService extends Service {
         createChannel();
         startForeground(SERVICE_ID, foregroundNotification());
         executor = Executors.newSingleThreadScheduledExecutor();
-        executor.scheduleWithFixedDelay(this::poll, 2, 15, TimeUnit.SECONDS);
+        executor.scheduleWithFixedDelay(this::poll, 1, 2, TimeUnit.SECONDS);
     }
 
     private Notification foregroundNotification() {

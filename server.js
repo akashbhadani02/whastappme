@@ -205,14 +205,43 @@ app.post('/api/push/subscribe', async (req, res) => {
   }
 });
 
+app.post('/api/notifications/access', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const groupId = normalizeGroupId(req.body?.groupId || '');
+    if (!userId || !groupId) return res.status(400).json({ ok: false });
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok: false });
+    await db.collection('notification_access').updateOne(
+      { userId, groupId },
+      { $set: { userId, groupId, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      { upsert: true }
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Notification access save failed:', error.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
 app.get('/api/notifications/poll', async (req, res) => {
   try {
     const userId = String(req.query?.userId || '').trim();
     const after = String(req.query?.after || '').trim();
     if (!userId) return res.json({ ok: true, messages: [] });
     const collection = await getCollection();
-    if (!collection) return res.json({ ok: true, messages: [] });
+    const db = await getDb();
+    if (!collection || !db) return res.json({ ok: true, messages: [] });
+
+    // Notification access is granted only after the user successfully joins a
+    // password-protected group. This keeps background notifications group-scoped
+    // without requiring Firebase or trusting arbitrary group IDs from the app.
+    const access = await db.collection('notification_access').find({ userId }).project({ _id: 0, groupId: 1 }).toArray();
+    const groupIds = access.map(x => normalizeGroupId(x.groupId)).filter(Boolean);
+    if (!groupIds.length) return res.json({ ok: true, messages: [] });
+
     const filter = {
+      groupId: { $in: groupIds },
       userId: { $ne: userId },
       deletedAt: { $exists: false },
       readBy: { $ne: userId }
@@ -223,10 +252,16 @@ app.get('/api/notifications/poll', async (req, res) => {
     }
     const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, user: 1, message: 1, createdAt: 1 } })
       .sort({ createdAt: 1 }).limit(50).toArray();
+
+    const settings = db.collection(GROUP_SETTINGS_COLLECTION_NAME);
+    const ids = [...new Set(messages.map(m => normalizeGroupId(m.groupId)))];
+    const groups = await settings.find({ _id: { $in: ids } }, { projection: { _id: 1, name: 1 } }).toArray();
+    const groupNames = new Map(groups.map(g => [String(g._id), String(g.name || 'WhatsApp')]));
+
     res.json({ ok: true, messages: messages.map(m => ({
       ...m,
-      createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt || '') ,
-      groupName: String(m.groupId || 'WhatsApp')
+      createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt || ''),
+      groupName: groupNames.get(String(m.groupId || '')) || String(m.groupId || 'WhatsApp')
     })) });
   } catch (error) {
     console.error('Notification poll failed:', error.message);

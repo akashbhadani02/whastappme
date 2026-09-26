@@ -1,12 +1,16 @@
-# WhatsApp Android APK
+# WhatsApp Android wrapper - Firebase-free notifications
 
-This is an Android WebView wrapper for the Wassup/WhatsApp-style web app.
+This Android wrapper uses a native foreground notification service and the app's existing server API. It does NOT require Firebase/FCM.
+
+## Notification behavior
+- The service checks for unread messages about every 2 seconds while Android permits the foreground service to run.
+- Only groups that the User ID has successfully joined are eligible for notifications.
+- The notification shows the real group name when available.
+- The sender does not receive a notification for their own message.
+- Android 13+ requires notification permission.
+
+## Important Android limitation
+Without FCM (or another OS push provider), Android cannot guarantee an instant wake-up when the process/service is stopped or the device applies aggressive battery/background restrictions. This is a near-realtime, Firebase-free solution. For guaranteed OS-level push delivery, FCM or another push provider is required.
 
 ## Build
-1. Open this `android` folder in Android Studio.
-2. In `gradle.properties`, replace `APP_URL` with your deployed Vercel URL.
-3. Build > Build APK(s).
-4. Rename the generated APK to `whatsapp.apk`.
-5. Copy `whatsapp.apk` into `public/` and deploy the web app. The Menu > Install WhatsApp shortcut will then open the APK on Android.
-
-Note: Android/browser security still requires the user to confirm installation and, depending on device settings, allow installs from the browser.
+Open this `android` folder in Android Studio. Set `APP_URL` in `gradle.properties` or pass `-PAPP_URL=https://your-domain.example/` when building.
