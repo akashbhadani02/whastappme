@@ -22,10 +22,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages";
+    private static final String CHANNEL_ID = "wassup_messages_v2";
+    private static final String FG_CHANNEL_ID = "wassup_background_v2";
     private static final int SERVICE_ID = 7001;
-    private static final String CHANNEL_ID_FG = "wassup_background";
-    private ScheduledExecutorService executor;
+        private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
 
     @Override public void onCreate() {
@@ -37,10 +37,11 @@ public class NotificationPollService extends Service {
     }
 
     private Notification foregroundNotification() {
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        return new NotificationCompat.Builder(this, FG_CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle("WhatsApp")
-                .setContentText("Notifications are enabled")
+                .setContentText("Message notifications are active")
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
                 .setSilent(true)
                 .build();
@@ -48,10 +49,16 @@ public class NotificationPollService extends Service {
 
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel c = new NotificationChannel(CHANNEL_ID, "Messages", NotificationManager.IMPORTANCE_DEFAULT);
-            c.setDescription("New message notifications");
-            c.setShowBadge(true);
-            ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(c);
+            NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+            NotificationChannel messages = new NotificationChannel(CHANNEL_ID, "Messages", NotificationManager.IMPORTANCE_HIGH);
+            messages.setDescription("New message notifications");
+            messages.setShowBadge(true);
+            messages.enableVibration(true);
+            nm.createNotificationChannel(messages);
+            NotificationChannel background = new NotificationChannel(FG_CHANNEL_ID, "Background service", NotificationManager.IMPORTANCE_LOW);
+            background.setDescription("Keeps message notifications available in the background");
+            background.setShowBadge(false);
+            nm.createNotificationChannel(background);
         }
     }
 
@@ -71,8 +78,13 @@ public class NotificationPollService extends Service {
             String sep = base.contains("?") ? "&" : "?";
             String urlText = base.replaceAll("/$", "") + "/api/notifications/poll" + sep + "userId=" + URLEncoder.encode(userId, "UTF-8") + "&after=" + URLEncoder.encode(after, "UTF-8");
             HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection();
-            c.setConnectTimeout(10000); c.setReadTimeout(10000); c.setRequestMethod("GET");
-            if (c.getResponseCode() != 200) return;
+            c.setConnectTimeout(5000); c.setReadTimeout(5000); c.setRequestMethod("GET");
+            c.setUseCaches(false);
+            c.setRequestProperty("Cache-Control", "no-cache, no-store");
+            c.setRequestProperty("Accept", "application/json");
+            c.setRequestProperty("User-Agent", "WhatsAppAndroidNotification/1.0");
+            int status = c.getResponseCode();
+            if (status != HttpURLConnection.HTTP_OK) { c.disconnect(); return; }
             InputStream in = c.getInputStream();
             BufferedReader br = new BufferedReader(new InputStreamReader(in));
             StringBuilder sb = new StringBuilder(); String line;

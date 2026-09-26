@@ -26,8 +26,7 @@ public class MainActivity extends Activity {
 
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
         }
         startNotificationService();
@@ -63,7 +62,14 @@ public class MainActivity extends Activity {
     private class AndroidBridge {
         @JavascriptInterface public void setUserId(String id) {
             if (id == null) return;
-            getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("userId", id.trim()).apply();
+            String next = id.trim();
+            if (next.isEmpty()) return;
+            android.content.SharedPreferences prefs = getSharedPreferences("wassup", MODE_PRIVATE);
+            String previous = prefs.getString("userId", "");
+            android.content.SharedPreferences.Editor e = prefs.edit().putString("userId", next);
+            if (!next.equals(previous)) e.remove("lastSeenCreatedAt").remove("lastSeenUserId");
+            e.putString("lastSeenUserId", next).apply();
+            startNotificationService();
         }
         @JavascriptInterface public void setAppUrl(String url) {
             if (url == null || url.trim().isEmpty()) return;
@@ -73,7 +79,18 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == MEDIA_PERMISSION_REQUEST && web != null) web.reload();
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
+            }
+        } else if (requestCode == MEDIA_PERMISSION_REQUEST && web != null) {
+            web.reload();
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        startNotificationService();
     }
 
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
