@@ -37,24 +37,6 @@ const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name
 // WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
 const activeCalls = new Map();
 function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
-
-// Group presence is based on currently connected, authorized sockets that have
-// actually joined the group. The current user is excluded from the count so
-// the UI answers the useful question: is another group member online?
-function emitGroupPresence(groupId) {
-  const gid = normalizeGroupId(groupId);
-  const onlineUsers = new Set();
-  for (const memberSocket of io.sockets.sockets.values()) {
-    if (normalizeGroupId(memberSocket.groupId || '') !== gid) continue;
-    if (!memberSocket.authorizedGroups?.has(gid)) continue;
-    onlineUsers.add(String(memberSocket.userId || `socket:${memberSocket.id}`));
-  }
-  io.to(`group:${gid}`).emit('group-presence', {
-    groupId: gid,
-    onlineCount: onlineUsers.size,
-    online: onlineUsers.size > 0
-  });
-}
 function removeSocketFromCalls(socket) {
   for (const [callId, call] of activeCalls) {
     if (!call.participants.has(socket.id)) continue;
@@ -1516,6 +1498,25 @@ async function broadcastSaved(event, msg) {
   return saved;
 }
 
+function getGroupOnlineUserIds(groupId) {
+  const gid = normalizeGroupId(groupId);
+  const ids = new Set();
+  const room = io.sockets.adapter.rooms.get(`group:${gid}`);
+  if (!room) return [];
+  for (const socketId of room) {
+    const member = io.sockets.sockets.get(socketId);
+    const uid = String(member?.userId || '').trim();
+    if (uid) ids.add(uid);
+  }
+  return [...ids];
+}
+
+function broadcastGroupPresence(groupId) {
+  const gid = normalizeGroupId(groupId);
+  const onlineUserIds = getGroupOnlineUserIds(gid);
+  io.to(`group:${gid}`).emit('group-presence', { groupId: gid, onlineUserIds });
+}
+
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
@@ -1555,16 +1556,15 @@ io.on('connection', async (socket) => {
       socket.authorizedGroups.add(groupId);
     }
     const previousGroupId = socket.groupId;
-    if (previousGroupId) {
-      const previous = normalizeGroupId(previousGroupId);
-      socket.leave(`group:${previous}`);
-      // Recalculate the old group's presence immediately after this member leaves.
-      setTimeout(() => emitGroupPresence(previous), 0);
-    }
+    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
-    // Presence is emitted only to the authorized group room.
-    setTimeout(() => emitGroupPresence(groupId), 0);
+    // Presence is based only on sockets that are actually inside this group.
+    // A user's connection elsewhere must never make this group appear online.
+    broadcastGroupPresence(groupId);
+    if (previousGroupId && normalizeGroupId(previousGroupId) !== groupId) {
+      broadcastGroupPresence(previousGroupId);
+    }
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1583,6 +1583,12 @@ io.on('connection', async (socket) => {
     console.error('Failed to load message history:', error.message);
     socket.emit('history', []);
   }
+
+  socket.on('disconnect', () => {
+    const gid = socket.groupId;
+    // Socket.IO removes the socket from its room before this event is emitted.
+    if (gid) broadcastGroupPresence(gid);
+  });
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
@@ -1982,9 +1988,7 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('disconnect', (reason) => {
-    const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
     removeSocketFromCalls(socket);
-    if (disconnectedGroupId) setTimeout(() => emitGroupPresence(disconnectedGroupId), 0);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
     console.log('User disconnected:', socket.id, reason);

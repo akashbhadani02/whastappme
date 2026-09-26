@@ -1320,54 +1320,41 @@ socket.on('delete-messages', data => {
   deleteMessages(data.ids, false);
 });
 socket.on('clear-chat', data => { if (data && data.groupId && data.groupId !== currentGroupId) return; clearChat(false); showToast('Chat was cleared'); });
-
-// The header status represents other members of the currently opened group,
-// not merely this browser's Socket.IO connection.
-socket.on('group-presence', data => {
-  if (!data || String(data.groupId) !== String(currentGroupId)) return;
-  if (data.online) setOnlineStatus('online');
-  else setOnlineStatus('offline');
-});
-
 let disconnectTimer = null;
-function setOnlineStatus(state) {
-  clearTimeout(disconnectTimer);
-  if (state === 'online') {
+let groupOnlineUserIds = new Set();
+
+function setGroupOnlineStatus(onlineUserIds) {
+  groupOnlineUserIds = new Set((Array.isArray(onlineUserIds) ? onlineUserIds : []).map(String));
+  const hasAnotherMemberOnline = [...groupOnlineUserIds].some(id => id && id !== String(userId));
+  if (hasAnotherMemberOnline) {
     onlineStatus.textContent = 'online';
     onlineStatus.classList.remove('offline');
     onlineStatus.classList.add('online');
-    return;
-  }
-  if (state === 'offline') {
+  } else {
     onlineStatus.textContent = 'offline';
     onlineStatus.classList.remove('online');
     onlineStatus.classList.add('offline');
-    return;
   }
-  // Do not flash 'connecting…' for tiny transport reconnects. Show it only
-  // when the connection has actually been down for a short period.
-  disconnectTimer = setTimeout(() => {
-    if (!socket.connected) {
-      onlineStatus.textContent = 'connecting…';
-      onlineStatus.classList.remove('online');
-      onlineStatus.classList.add('offline');
-    }
-  }, 1500);
 }
+
+socket.on('group-presence', data => {
+  if (!data || String(data.groupId) !== String(currentGroupId || 'main')) return;
+  setGroupOnlineStatus(data.onlineUserIds);
+});
+
 socket.on('connect', () => {
-  setOnlineStatus('offline');
+  // Do not show this user as online. The label is strictly for another
+  // member currently connected to the same group.
+  setGroupOnlineStatus([]);
   socket.emit('register-user', { userId });
-  // Do not join/poll an empty group during startup. The group is joined only
-  // after its password has been successfully verified.
   if (!currentGroupId) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
     password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
   }, () => syncMessages().finally(markVisibleMessagesRead));
 });
-socket.on('disconnect', () => setOnlineStatus('connecting'));
-socket.on('reconnect', () => setOnlineStatus('offline'));
-socket.on('connect_error', () => setOnlineStatus('connecting'));
+socket.on('disconnect', () => setGroupOnlineStatus([]));
+socket.on('connect_error', () => setGroupOnlineStatus([]));
 
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
