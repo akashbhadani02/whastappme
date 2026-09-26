@@ -1,16 +1,29 @@
-# WhatsApp Android wrapper - Firebase-free notifications
+# WhatsApp Android wrapper - realtime group notifications
 
-This Android wrapper uses a native foreground notification service and the app's existing server API. It does NOT require Firebase/FCM.
+The Android wrapper now uses a native Socket.IO realtime notification channel as
+the primary notification path, with HTTP polling retained as a recovery fallback.
 
 ## Notification behavior
-- The service checks for unread messages about every 2 seconds while Android permits the foreground service to run.
-- Only groups that the User ID has successfully joined are eligible for notifications.
-- The notification shows the real group name when available.
-- The sender does not receive a notification for their own message.
-- Android 13+ requires notification permission.
+- Group member messages trigger a native Android notification immediately when the
+  app's background notification service has a live connection.
+- Notifications show the group name and "New message"; message text is not exposed.
+- The sender's own messages do not trigger a notification.
+- Only groups the User ID has previously joined are eligible.
+- Android 13+ requires POST_NOTIFICATIONS permission.
+- The foreground service requests battery-optimization exemption to improve
+  reliability on Android devices that aggressively stop background work.
+- The service reconnects automatically after network interruptions, app task
+  removal, reboot, or package replacement.
+- HTTP polling remains enabled as a fallback if realtime Socket.IO is temporarily
+  unavailable.
 
 ## Important Android limitation
-Without FCM (or another OS push provider), Android cannot guarantee an instant wake-up when the process/service is stopped or the device applies aggressive battery/background restrictions. This is a near-realtime, Firebase-free solution. For guaranteed OS-level push delivery, FCM or another push provider is required.
+This is a native realtime Socket.IO channel, not Firebase Cloud Messaging. It can
+deliver instantly while Android keeps the foreground service alive. Some OEMs can
+still force-stop background services or disable network activity. For guaranteed
+OS-level delivery even after the app process is killed, integrate FCM with a
+Firebase project.
 
 ## Build
-Open this `android` folder in Android Studio. Set `APP_URL` in `gradle.properties` or pass `-PAPP_URL=https://your-domain.example/` when building.
+Open this `android` folder in Android Studio. Set `APP_URL` in `gradle.properties`
+or pass `-PAPP_URL=https://your-domain.example/` when building.

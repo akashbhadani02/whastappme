@@ -94,7 +94,13 @@ public class MainActivity extends Activity {
             if (next.isEmpty()) return;
             android.content.SharedPreferences prefs = getSharedPreferences("wassup", MODE_PRIVATE);
             String previous = prefs.getString("userId", "");
-            android.content.SharedPreferences.Editor e = prefs.edit().putString("userId", next);
+            String deviceId = prefs.getString("androidDeviceId", "");
+            if (deviceId.isEmpty()) {
+                deviceId = java.util.UUID.randomUUID().toString();
+            }
+            android.content.SharedPreferences.Editor e = prefs.edit()
+                    .putString("userId", next)
+                    .putString("androidDeviceId", deviceId);
             if (!next.equals(previous)) e.remove("lastSeenCreatedAt").remove("lastSeenUserId");
             e.putString("lastSeenUserId", next).apply();
             startNotificationService();

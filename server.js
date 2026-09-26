@@ -105,6 +105,9 @@ async function startRealtimeBridge() {
     // Realtime events are always scoped to their originating group. Never
     // broadcast a group message/event to every connected socket.
     if (gid) io.to(`group:${gid}`).emit(event.event, payload);
+    if ((event.event === 'message' || event.event === 'media') && payload?.id) {
+      sendNativeRealtimeNotification(payload).catch(() => {});
+    }
 
   });
   stream.on('error', (error) => {
@@ -1578,6 +1581,54 @@ async function sendPushToOtherUsers(msg) {
   }
 }
 
+
+async function sendNativeRealtimeNotification(msg) {
+  if (!MONGODB_URI || !msg || !msg.id || !msg.groupId) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const gid = normalizeGroupId(msg.groupId);
+    const senderUserId = String(msg.userId || '').trim();
+
+    // Only users who have actually joined this group are eligible.
+    const accessDocs = await db.collection('notification_access')
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+    const allowedUsers = new Set(
+      accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean)
+    );
+    if (senderUserId) allowedUsers.delete(senderUserId);
+    if (!allowedUsers.size) return;
+
+    let groupName = String(msg.groupName || '').trim();
+    if (!groupName) {
+      const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne(
+        { _id: gid }, { projection: { name: 1 } }
+      );
+      groupName = String(group?.name || gid || 'WhatsApp').trim();
+    }
+    if (!groupName) groupName = 'WhatsApp';
+
+    const payload = {
+      id: String(msg.id),
+      groupId: gid,
+      groupName,
+      type: String(msg.type || 'message')
+    };
+
+    // This is a native Android realtime channel. It is deliberately separate
+    // from the normal group room so the Android service can receive alerts
+    // without knowing or storing the group's password.
+    for (const target of io.sockets.sockets.values()) {
+      const uid = String(target.userId || '').trim();
+      if (uid && allowedUsers.has(uid)) {
+        target.emit('native-notification', payload);
+      }
+    }
+  } catch (error) {
+    console.error('Native realtime notification failed:', error.message);
+  }
+}
+
 async function broadcastSaved(event, msg) {
   const saved = await saveMessage(msg);
   const gid = normalizeGroupId(saved.groupId);
@@ -1608,7 +1659,10 @@ async function broadcastSaved(event, msg) {
     }
   }
   publishRealtimeEvent(event, saved);
-  if (event === 'message' || event === 'media') await sendPushToOtherUsers(saved);
+  if (event === 'message' || event === 'media') {
+    await sendNativeRealtimeNotification(saved);
+    await sendPushToOtherUsers(saved);
+  }
   return saved;
 }
 
