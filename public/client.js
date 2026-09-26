@@ -1320,6 +1320,15 @@ socket.on('delete-messages', data => {
   deleteMessages(data.ids, false);
 });
 socket.on('clear-chat', data => { if (data && data.groupId && data.groupId !== currentGroupId) return; clearChat(false); showToast('Chat was cleared'); });
+
+// The header status represents other members of the currently opened group,
+// not merely this browser's Socket.IO connection.
+socket.on('group-presence', data => {
+  if (!data || String(data.groupId) !== String(currentGroupId)) return;
+  if (data.online) setOnlineStatus('online');
+  else setOnlineStatus('offline');
+});
+
 let disconnectTimer = null;
 function setOnlineStatus(state) {
   clearTimeout(disconnectTimer);
@@ -1327,6 +1336,12 @@ function setOnlineStatus(state) {
     onlineStatus.textContent = 'online';
     onlineStatus.classList.remove('offline');
     onlineStatus.classList.add('online');
+    return;
+  }
+  if (state === 'offline') {
+    onlineStatus.textContent = 'offline';
+    onlineStatus.classList.remove('online');
+    onlineStatus.classList.add('offline');
     return;
   }
   // Do not flash 'connecting…' for tiny transport reconnects. Show it only
@@ -1340,7 +1355,7 @@ function setOnlineStatus(state) {
   }, 1500);
 }
 socket.on('connect', () => {
-  setOnlineStatus('online');
+  setOnlineStatus('offline');
   socket.emit('register-user', { userId });
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
@@ -1351,7 +1366,7 @@ socket.on('connect', () => {
   }, () => syncMessages().finally(markVisibleMessagesRead));
 });
 socket.on('disconnect', () => setOnlineStatus('connecting'));
-socket.on('reconnect', () => setOnlineStatus('online'));
+socket.on('reconnect', () => setOnlineStatus('offline'));
 socket.on('connect_error', () => setOnlineStatus('connecting'));
 
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });

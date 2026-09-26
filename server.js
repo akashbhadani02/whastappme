@@ -37,6 +37,24 @@ const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name
 // WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
 const activeCalls = new Map();
 function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
+
+// Group presence is based on currently connected, authorized sockets that have
+// actually joined the group. The current user is excluded from the count so
+// the UI answers the useful question: is another group member online?
+function emitGroupPresence(groupId) {
+  const gid = normalizeGroupId(groupId);
+  const onlineUsers = new Set();
+  for (const memberSocket of io.sockets.sockets.values()) {
+    if (normalizeGroupId(memberSocket.groupId || '') !== gid) continue;
+    if (!memberSocket.authorizedGroups?.has(gid)) continue;
+    onlineUsers.add(String(memberSocket.userId || `socket:${memberSocket.id}`));
+  }
+  io.to(`group:${gid}`).emit('group-presence', {
+    groupId: gid,
+    onlineCount: onlineUsers.size,
+    online: onlineUsers.size > 0
+  });
+}
 function removeSocketFromCalls(socket) {
   for (const [callId, call] of activeCalls) {
     if (!call.participants.has(socket.id)) continue;
@@ -1537,9 +1555,16 @@ io.on('connection', async (socket) => {
       socket.authorizedGroups.add(groupId);
     }
     const previousGroupId = socket.groupId;
-    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
+    if (previousGroupId) {
+      const previous = normalizeGroupId(previousGroupId);
+      socket.leave(`group:${previous}`);
+      // Recalculate the old group's presence immediately after this member leaves.
+      setTimeout(() => emitGroupPresence(previous), 0);
+    }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
+    // Presence is emitted only to the authorized group room.
+    setTimeout(() => emitGroupPresence(groupId), 0);
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1957,7 +1982,9 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('disconnect', (reason) => {
+    const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
     removeSocketFromCalls(socket);
+    if (disconnectedGroupId) setTimeout(() => emitGroupPresence(disconnectedGroupId), 0);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
     console.log('User disconnected:', socket.id, reason);
