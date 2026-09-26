@@ -28,6 +28,11 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let groupPasswordTarget = null;
+const unreadCounts = JSON.parse(localStorage.getItem('wa_unread_counts') || '{}');
+function saveUnreadCounts(){ try { localStorage.setItem('wa_unread_counts', JSON.stringify(unreadCounts)); } catch(_) {} }
+function getUnreadCount(groupId){ return Math.max(0, Number(unreadCounts[String(groupId)] || 0)); }
+function setUnreadCount(groupId, count){ const gid=String(groupId||''); if(!gid) return; if(Number(count)>0) unreadCounts[gid]=Math.floor(Number(count)); else delete unreadCounts[gid]; saveUnreadCounts(); renderGroupList(); }
+function incrementUnread(groupId){ const gid=String(groupId||''); if(!gid) return; setUnreadCount(gid, getUnreadCount(gid)+1); }
 let verifiedGroupPasswords = new Map();
 let selectionMode = false;
 const selectedMessageIds = new Set();
@@ -1003,11 +1008,14 @@ socket.on('admin-media-alert', item => showAdminMediaPopup(item, false));
 // Call recordings are saved silently; do not open a View popup when the call ends.
 // Admin can still open recordings manually from the Call Recordings list.
 
-function receiveMessage(msg) {
+function receiveMessage(msg, options = {}) {
   if (!msg || !msg.id) return;
   const msgGroupId = msg.groupId || 'main';
-  if (msgGroupId !== currentGroupId) return;
   const isIncoming = msg.userId !== userId;
+  // Live socket messages for another group still count as unread.
+  // Historical messages loaded on initial join must never create unread badges.
+  if (isIncoming && !options.history && (msgGroupId !== currentGroupId || !chatOpen)) incrementUnread(msgGroupId);
+  if (msgGroupId !== currentGroupId) return;
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
   if (isIncoming) {
     socket.emit('message-delivered', { id: msg.id, userId });
@@ -1023,7 +1031,7 @@ function receiveMessage(msg) {
 
 socket.on('history', history => {
   if (!Array.isArray(history)) return;
-  history.forEach(receiveMessage);
+  history.forEach(msg => receiveMessage(msg, {history:true}));
   if (history.length) {
     const last = history[history.length - 1];
     if (last.createdAt) lastSyncAt = new Date(last.createdAt).toISOString();
@@ -1219,8 +1227,11 @@ function renderGroupList() {
     button.type = 'button';
     const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
     const summary = document.createElement('div'); summary.className = 'chat-summary';
-    summary.innerHTML = `<div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
+    summary.innerHTML = `<div class="chat-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
     summary.querySelector('strong').textContent = group.name;
+    const badge = summary.querySelector('.group-unread-badge');
+    const unread = getUnreadCount(group.id);
+    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
     button.append(avatar, summary);
     button.addEventListener('click', () => openGroup(group));
     chatList.appendChild(button);
@@ -1289,6 +1300,7 @@ async function verifyAndOpenGroup() {
 async function joinGroup(groupId, openAfter=true) {
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
+  setUnreadCount(currentGroupId, 0);
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   groupName = group.name || 'WhatsApp';
@@ -1414,7 +1426,7 @@ function updatePreview(text){ listPreview.textContent=text; listTime.textContent
 
 
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); const mode=btn.textContent.trim().toLowerCase(); document.querySelectorAll('.message').forEach(el=>{const m=messages.get(el.dataset.id);let show=true;if(mode==='favourites') show=starredIds.has(el.dataset.id)||!!m?.starred;if(mode==='groups') show=true;el.style.display=show?'':'none';}); }));
-function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(() => { scrollToBottom(); markVisibleMessagesRead(); }, 50); }
+function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(currentGroupId) setUnreadCount(currentGroupId, 0); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(() => { scrollToBottom(); markVisibleMessagesRead(); }, 50); }
 function closeChat(){
   chatOpen=false;
   app.classList.remove('chat-open');
