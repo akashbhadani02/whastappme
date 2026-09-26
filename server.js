@@ -205,6 +205,35 @@ app.post('/api/push/subscribe', async (req, res) => {
   }
 });
 
+app.get('/api/notifications/poll', async (req, res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    const after = String(req.query?.after || '').trim();
+    if (!userId) return res.json({ ok: true, messages: [] });
+    const collection = await getCollection();
+    if (!collection) return res.json({ ok: true, messages: [] });
+    const filter = {
+      userId: { $ne: userId },
+      deletedAt: { $exists: false },
+      readBy: { $ne: userId }
+    };
+    if (after) {
+      const d = new Date(after);
+      if (!Number.isNaN(d.getTime())) filter.createdAt = { $gt: d };
+    }
+    const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, user: 1, message: 1, createdAt: 1 } })
+      .sort({ createdAt: 1 }).limit(50).toArray();
+    res.json({ ok: true, messages: messages.map(m => ({
+      ...m,
+      createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt || '') ,
+      groupName: String(m.groupId || 'WhatsApp')
+    })) });
+  } catch (error) {
+    console.error('Notification poll failed:', error.message);
+    res.status(500).json({ ok: false, messages: [] });
+  }
+});
+
 app.post('/api/push/unsubscribe', async (req, res) => {
   try {
     const endpoint = req.body && req.body.endpoint;

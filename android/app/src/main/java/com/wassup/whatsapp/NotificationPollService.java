@@ -24,6 +24,7 @@ import org.json.JSONObject;
 public class NotificationPollService extends Service {
     private static final String CHANNEL_ID = "wassup_messages";
     private static final int SERVICE_ID = 7001;
+    private static final String CHANNEL_ID_FG = "wassup_background";
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
 

@@ -23,6 +23,15 @@ const deviceId = (() => {
   return value;
 })();
 let userId = localStorage.getItem('wa_user_id') || '';
+function syncAndroidNotificationIdentity() {
+  try {
+    if (window.AndroidBridge) {
+      if (userId) window.AndroidBridge.setUserId(String(userId));
+      window.AndroidBridge.setAppUrl(window.location.origin);
+    }
+  } catch (_) {}
+}
+syncAndroidNotificationIdentity();
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
@@ -1084,9 +1093,7 @@ socket.on('unread-message', data => {
   if (Array.isArray(data.readBy) && data.readBy.map(String).includes(String(userId || ''))) return;
   // If this group is currently open, the normal message event is responsible
   // for marking it read; do not create a duplicate badge here.
-  // If the originating group is currently open and visible, receiveMessage()/read
-  // handling owns the seen state. Otherwise this is a genuine sidebar unread.
-  if (String(data.groupId) === String(currentGroupId || '') && chatOpen && document.visibilityState === 'visible') return;
+  if (String(data.groupId) === String(currentGroupId || '')) return;
   incrementUnread(data.groupId);
 });
 
@@ -1395,9 +1402,6 @@ async function joinGroup(groupId, openAfter=true) {
   // Never block opening the chat on history synchronization.
   // The chat becomes usable immediately; history is reconciled in the background.
   syncMessages().catch(() => {});
-  // Keep every other group's sidebar badge hydrated immediately after a switch.
-  // This is user-level state, so all devices for the same User ID see the same counts.
-  refreshAllUnreadCounts().catch(() => {});
   if (openAfter) openChat();
 }
 
@@ -2066,6 +2070,7 @@ function finishAccountLogin() {
   name = nextName;
   localStorage.setItem('wa_user_id', userId);
   localStorage.setItem('wa_name', name);
+  syncAndroidNotificationIdentity();
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
