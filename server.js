@@ -1498,23 +1498,35 @@ async function broadcastSaved(event, msg) {
   return saved;
 }
 
-function getGroupOnlineUserIds(groupId) {
+// Group presence is based only on OTHER registered users who currently have
+// an active Socket.IO connection in that exact group room. Multiple tabs/devices
+// for the same user count as one user, and the viewer's own sockets are excluded.
+function emitGroupPresence(groupId) {
   const gid = normalizeGroupId(groupId);
-  const ids = new Set();
   const room = io.sockets.adapter.rooms.get(`group:${gid}`);
-  if (!room) return [];
-  for (const socketId of room) {
-    const member = io.sockets.sockets.get(socketId);
-    const uid = String(member?.userId || '').trim();
-    if (uid) ids.add(uid);
+  const onlineUsers = new Set();
+  if (room) {
+    for (const sid of room) {
+      const member = io.sockets.sockets.get(sid);
+      const uid = String(member?.userId || '').trim();
+      if (uid) onlineUsers.add(uid);
+    }
   }
-  return [...ids];
-}
-
-function broadcastGroupPresence(groupId) {
-  const gid = normalizeGroupId(groupId);
-  const onlineUserIds = getGroupOnlineUserIds(gid);
-  io.to(`group:${gid}`).emit('group-presence', { groupId: gid, onlineUserIds });
+  const socketsInRoom = room ? [...room] : [];
+  for (const sid of socketsInRoom) {
+    const member = io.sockets.sockets.get(sid);
+    if (!member) continue;
+    const ownUid = String(member.userId || '').trim();
+    let hasOtherOnline = false;
+    for (const uid of onlineUsers) {
+      if (uid && uid !== ownUid) { hasOtherOnline = true; break; }
+    }
+    member.emit('group-presence', {
+      groupId: gid,
+      online: hasOtherOnline,
+      onlineCount: Math.max(0, [...onlineUsers].filter(uid => uid !== ownUid).length)
+    });
+  }
 }
 
 io.on('connection', async (socket) => {
@@ -1522,9 +1534,12 @@ io.on('connection', async (socket) => {
   const uploads = new Map();
 
   socket.on('register-user', (data) => {
+    const previousUserId = String(socket.userId || '');
     socket.userId = data && data.userId ? String(data.userId) : '';
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
+    if (socket.groupId) emitGroupPresence(socket.groupId);
+    if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
   });
 
   socket.on('register-admin', (data, ack) => {
@@ -1556,15 +1571,15 @@ io.on('connection', async (socket) => {
       socket.authorizedGroups.add(groupId);
     }
     const previousGroupId = socket.groupId;
-    if (previousGroupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
+    if (previousGroupId) {
+      const previous = normalizeGroupId(previousGroupId);
+      socket.leave(`group:${previous}`);
+      // Recalculate immediately so remaining members don't see a stale online state.
+      setImmediate(() => emitGroupPresence(previous));
+    }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
-    // Presence is based only on sockets that are actually inside this group.
-    // A user's connection elsewhere must never make this group appear online.
-    broadcastGroupPresence(groupId);
-    if (previousGroupId && normalizeGroupId(previousGroupId) !== groupId) {
-      broadcastGroupPresence(previousGroupId);
-    }
+    emitGroupPresence(groupId);
     try {
       const history = await loadMessages('', groupId);
       socket.emit('history', history);
@@ -1583,12 +1598,6 @@ io.on('connection', async (socket) => {
     console.error('Failed to load message history:', error.message);
     socket.emit('history', []);
   }
-
-  socket.on('disconnect', () => {
-    const gid = socket.groupId;
-    // Socket.IO removes the socket from its room before this event is emitted.
-    if (gid) broadcastGroupPresence(gid);
-  });
 
   socket.on('message', async (msg, ack) => {
     if (!msg || !msg.message || !msg.id) return;
@@ -1988,9 +1997,13 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('disconnect', (reason) => {
+    const disconnectedGroupId = socket.groupId ? normalizeGroupId(socket.groupId) : '';
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
     uploads.clear();
+    // Socket.IO removes the socket from its rooms before/around disconnect; defer
+    // the calculation one tick so the departed user is definitely excluded.
+    if (disconnectedGroupId) setImmediate(() => emitGroupPresence(disconnectedGroupId));
     console.log('User disconnected:', socket.id, reason);
   });
 });

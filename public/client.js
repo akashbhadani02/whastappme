@@ -1280,6 +1280,8 @@ async function verifyAndOpenGroup() {
 async function joinGroup(groupId, openAfter=true) {
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
   groupName = group.name || 'WhatsApp';
   app?.classList.remove('group-locked');
   composer?.classList.remove('hidden');
@@ -1321,40 +1323,53 @@ socket.on('delete-messages', data => {
 });
 socket.on('clear-chat', data => { if (data && data.groupId && data.groupId !== currentGroupId) return; clearChat(false); showToast('Chat was cleared'); });
 let disconnectTimer = null;
-let groupOnlineUserIds = new Set();
+function setOnlineStatus(state) {
+  clearTimeout(disconnectTimer);
+  const online = state === 'online';
+  onlineStatus.textContent = online ? 'online' : 'offline';
+  onlineStatus.classList.toggle('online', online);
+  onlineStatus.classList.toggle('offline', !online);
+}
 
-function setGroupOnlineStatus(onlineUserIds) {
-  groupOnlineUserIds = new Set((Array.isArray(onlineUserIds) ? onlineUserIds : []).map(String));
-  const hasAnotherMemberOnline = [...groupOnlineUserIds].some(id => id && id !== String(userId));
-  if (hasAnotherMemberOnline) {
-    onlineStatus.textContent = 'online';
-    onlineStatus.classList.remove('offline');
-    onlineStatus.classList.add('online');
-  } else {
-    onlineStatus.textContent = 'offline';
-    onlineStatus.classList.remove('online');
-    onlineStatus.classList.add('offline');
-  }
+// IMPORTANT: this is NOT the user's own socket connection status.
+// It is the presence of at least one OTHER member in the currently selected group.
+let otherGroupMemberOnline = false;
+function setGroupPresence(online, groupId) {
+  if (String(groupId || '') !== String(currentGroupId || '')) return;
+  otherGroupMemberOnline = !!online;
+  setOnlineStatus(otherGroupMemberOnline ? 'online' : 'offline');
 }
 
 socket.on('group-presence', data => {
-  if (!data || String(data.groupId) !== String(currentGroupId || 'main')) return;
-  setGroupOnlineStatus(data.onlineUserIds);
+  if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
+  setGroupPresence(!!data.online, data.groupId);
 });
 
 socket.on('connect', () => {
-  // Do not show this user as online. The label is strictly for another
-  // member currently connected to the same group.
-  setGroupOnlineStatus([]);
+  // Never show online merely because THIS browser connected.
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
   socket.emit('register-user', { userId });
+  // Do not join/poll an empty group during startup. The group is joined only
+  // after its password has been successfully verified.
   if (!currentGroupId) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
     password: currentGroupId === 'main' ? '' : (verifiedGroupPasswords.get(String(currentGroupId)) || '')
   }, () => syncMessages().finally(markVisibleMessagesRead));
 });
-socket.on('disconnect', () => setGroupOnlineStatus([]));
-socket.on('connect_error', () => setGroupOnlineStatus([]));
+socket.on('disconnect', () => {
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
+});
+socket.on('reconnect', () => {
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
+});
+socket.on('connect_error', () => {
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
+});
 
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
