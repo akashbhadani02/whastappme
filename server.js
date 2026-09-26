@@ -1415,6 +1415,26 @@ app.get('/api/messages/deleted', async (req, res) => {
   }
 });
 
+app.get('/api/unread-count', async (req, res) => {
+  try {
+    const groupId = normalizeGroupId(req.query?.groupId);
+    const readerId = String(req.query?.userId || '').trim();
+    if (!groupId || !readerId) return res.json({ ok:true, count:0 });
+    const collection = await getCollection();
+    if (!collection) return res.json({ ok:true, count:0 });
+    const count = await collection.countDocuments({
+      groupId,
+      userId: { $ne: readerId },
+      deletedAt: { $exists: false },
+      readBy: { $ne: readerId }
+    });
+    res.json({ ok:true, count });
+  } catch (error) {
+    console.error('Failed to load unread count:', error.message);
+    res.status(500).json({ ok:false, count:0 });
+  }
+});
+
 app.get('/api/messages', async (req, res) => {
   try {
     const after = typeof req.query.after === 'string' && req.query.after ? req.query.after : '';

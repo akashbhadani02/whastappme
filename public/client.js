@@ -28,12 +28,23 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let groupPasswordTarget = null;
-const unreadStorageKey = `wa_unread_counts:${deviceId}`;
-const unreadCounts = JSON.parse(localStorage.getItem(unreadStorageKey) || '{}');
-function saveUnreadCounts(){ try { localStorage.setItem(unreadStorageKey, JSON.stringify(unreadCounts)); } catch(_) {} }
+const unreadCounts = {};
 function getUnreadCount(groupId){ return Math.max(0, Number(unreadCounts[String(groupId)] || 0)); }
-function setUnreadCount(groupId, count){ const gid=String(groupId||''); if(!gid) return; if(Number(count)>0) unreadCounts[gid]=Math.floor(Number(count)); else delete unreadCounts[gid]; saveUnreadCounts(); renderGroupList(); }
+function setUnreadCount(groupId, count){ const gid=String(groupId||''); if(!gid) return; if(Number(count)>0) unreadCounts[gid]=Math.floor(Number(count)); else delete unreadCounts[gid]; renderGroupList(); }
 function incrementUnread(groupId){ const gid=String(groupId||''); if(!gid) return; setUnreadCount(gid, getUnreadCount(gid)+1); }
+async function refreshUnreadCountForGroup(groupId){
+  const gid=String(groupId||''); if(!gid || !userId) return;
+  try {
+    const r=await fetch(`/api/unread-count?groupId=${encodeURIComponent(gid)}&userId=${encodeURIComponent(userId)}`,{cache:'no-store'});
+    if(!r.ok) return;
+    const d=await r.json();
+    setUnreadCount(gid, Number(d.count||0));
+  } catch(_) {}
+}
+async function refreshAllUnreadCounts(){
+  if(!userId || !Array.isArray(groups)) return;
+  await Promise.all(groups.map(g=>refreshUnreadCountForGroup(g.id)));
+}
 let verifiedGroupPasswords = new Map();
 let selectionMode = false;
 const selectedMessageIds = new Set();
@@ -1016,7 +1027,11 @@ function receiveMessage(msg, options = {}) {
   const isIncoming = !!senderId && senderId !== String(userId || '');
   // Live socket messages for another group still count as unread.
   // Historical messages loaded on initial join must never create unread badges.
-  if (isIncoming && !options.history && (msgGroupId !== currentGroupId || !chatOpen)) incrementUnread(msgGroupId);
+  if (isIncoming && !options.history && (msgGroupId !== currentGroupId || !chatOpen)) {
+    // User-level read state is stored on the server. A message already seen on
+    // any device for this User ID must never become unread again.
+    if (!(Array.isArray(msg.readBy) && msg.readBy.map(String).includes(String(userId)))) incrementUnread(msgGroupId);
+  }
   if (msgGroupId !== currentGroupId) return;
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
   if (isIncoming) {
@@ -1070,6 +1085,7 @@ socket.on('message-read', data => {
   msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
   if (!msg.readBy.includes(data.userId)) msg.readBy.push(data.userId);
   updateTicks(msg);
+  if (String(data.userId) === String(userId) && data.groupId) refreshUnreadCountForGroup(data.groupId);
 });
 
 async function syncMessages() {
@@ -1121,6 +1137,10 @@ async function syncMessages() {
       if (sender && existing.user) sender.textContent = existing.user;
       updateTicks(existing);
     });
+
+    // Reconcile the badge from the server's user-level readBy state. This
+    // makes read/seen status shared across every device logged into this User ID.
+    await refreshUnreadCountForGroup(currentGroupId);
 
     saveLocalMessageHistory();
     if (data.messages.length) {
