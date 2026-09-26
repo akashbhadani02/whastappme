@@ -1565,6 +1565,17 @@ io.on('connection', async (socket) => {
 
   socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
 
+  socket.on('leave-group', (data, ack) => {
+    const requested = normalizeGroupId(data?.groupId || socket.groupId || '');
+    const previous = normalizeGroupId(socket.groupId || '');
+    if (previous && (!requested || requested === previous)) {
+      socket.leave(`group:${previous}`);
+      socket.groupId = '';
+      setImmediate(() => emitGroupPresence(previous));
+    }
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
     const suppliedPassword = String(data?.password || '');

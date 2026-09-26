@@ -18,7 +18,7 @@ if (!userId) {
 }
 let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
-let currentGroupId = localStorage.getItem('wa_group_id') || 'main';
+let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let groupPasswordTarget = null;
 let verifiedGroupPasswords = new Map();
@@ -1394,6 +1394,9 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', () => {
   if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
 });
+window.addEventListener('pagehide', () => {
+  if (socket.connected && currentGroupId) socket.emit('leave-group', { groupId: currentGroupId });
+});
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 
@@ -1408,8 +1411,12 @@ function closeChat(){
   app.classList.remove('chat-open');
   // Leaving a group locks it again. The next entry must verify the group password.
   if (currentGroupId) {
+    const leavingGroupId = currentGroupId;
+    if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
     localStorage.removeItem('wa_group_id');
+    otherGroupMemberOnline = false;
+    setOnlineStatus('offline');
     renderGroupList();
   }
   if(window.innerWidth<=760 && location.hash==='#chat') history.back();
@@ -1419,8 +1426,12 @@ window.addEventListener('popstate', () => {
   chatOpen=false;
   app.classList.remove('chat-open');
   if (currentGroupId) {
+    const leavingGroupId = currentGroupId;
+    if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
     localStorage.removeItem('wa_group_id');
+    otherGroupMemberOnline = false;
+    setOnlineStatus('offline');
     renderGroupList();
   }
 });
