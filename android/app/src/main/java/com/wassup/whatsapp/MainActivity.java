@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.net.Uri;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -46,6 +48,11 @@ public class MainActivity extends Activity {
         web.loadUrl(BuildConfig.APP_URL);
         setContentView(web);
 
+        // Firebase-free background notifications depend on the foreground
+        // service not being battery-optimized away. Ask once; the user can
+        // decline and notifications will still work while Android keeps the service alive.
+        requestBatteryOptimizationExemption();
+
         // Ask for notification permission only after the activity/WebView is ready.
         // This avoids racing the media permission dialog and makes the Android
         // notification flow reliable on Android 13+.
@@ -57,6 +64,21 @@ public class MainActivity extends Activity {
         }
         if (Build.VERSION.SDK_INT < 33 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
+        }
+    }
+
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            String pkg = getPackageName();
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(pkg)) {
+                Intent i = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                i.setData(Uri.parse("package:" + pkg));
+                startActivity(i);
+            }
+        } catch (Exception ignored) {
+            // Some manufacturers do not expose this screen.
         }
     }
 

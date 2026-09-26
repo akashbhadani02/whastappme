@@ -29,6 +29,7 @@ public class NotificationPollService extends Service {
     private static final int SERVICE_ID = 7001;
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
+    private volatile boolean polling = false;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -65,6 +66,8 @@ public class NotificationPollService extends Service {
     }
 
     private void poll() {
+        if (polling) return;
+        polling = true;
         try {
             String userId = getSharedPreferences("wassup", MODE_PRIVATE).getString("userId", "");
             if (userId.isEmpty()) return;
@@ -109,6 +112,7 @@ public class NotificationPollService extends Service {
             }
             if (!newest.isEmpty()) getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("lastSeenCreatedAt", newest).apply();
         } catch (Exception ignored) {}
+        finally { polling = false; }
     }
 
     private void showMessageNotification(String id, String groupName, String groupId) {
@@ -122,7 +126,7 @@ public class NotificationPollService extends Service {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle(groupName == null || groupName.trim().isEmpty() ? "WhatsApp" : groupName.trim())
-                .setContentText("New message")
+                .setContentText("New message in " + (groupName == null || groupName.trim().isEmpty() ? "WhatsApp" : groupName.trim()))
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
