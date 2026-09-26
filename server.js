@@ -27,6 +27,7 @@ const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
+const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
@@ -142,6 +143,11 @@ async function getCollection() {
   mediaBucket = mediaBucket || new GridFSBucket(db, { bucketName: MEDIA_BUCKET_NAME });
   startRealtimeBridge().catch((error) => console.error('Realtime bridge start failed:', error.message));
   return db.collection(COLLECTION_NAME);
+}
+
+async function getUserProfilesCollection() {
+  const db = await getDb();
+  return db ? db.collection(USER_PROFILES_COLLECTION_NAME) : null;
 }
 
 async function publishRealtimeEvent(event, payload) {
@@ -1579,13 +1585,35 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId || '' });
   });
 
-  socket.on('register-user', (data) => {
+  socket.on('register-user', async (data, ack) => {
     const previousUserId = String(socket.userId || '');
     socket.userId = data && data.userId ? String(data.userId) : '';
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
+    const requestedName = String(data?.name || '').trim().slice(0, 40);
+    if (socket.userId) {
+      try {
+        const profiles = await getUserProfilesCollection();
+        if (profiles) {
+          const existing = await profiles.findOne({ _id: socket.userId });
+          if (existing?.name) {
+            socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
+          } else if (requestedName) {
+            await profiles.updateOne(
+              { _id: socket.userId },
+              { $set: { name: requestedName, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { upsert: true }
+            );
+            socket.emit('user-profile', { userId: socket.userId, name: requestedName });
+          }
+        }
+      } catch (error) {
+        console.error('Failed to sync user profile:', error.message);
+      }
+    }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
+    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
   });
 
   socket.on('register-admin', (data, ack) => {
@@ -1757,30 +1785,35 @@ io.on('connection', async (socket) => {
     }
   });
 
-  socket.on('rename-user', (data, ack) => {
-    if (!data || !data.userId || !data.name) return;
+  socket.on('rename-user', async (data, ack) => {
+    const requestedUserId = String(data?.userId || socket.userId || '').trim();
+    if (!requestedUserId || requestedUserId !== String(socket.userId || '') || !data?.name) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Invalid user identity' });
+      return;
+    }
     const nextName = String(data.name).trim().slice(0, 40);
-    if (!nextName) return;
+    if (!nextName) { if (typeof ack === 'function') ack({ ok: false }); return; }
 
-    // Do not block the Socket.IO connection while updating old messages.
-    // Broadcast the new name immediately so chat messaging continues normally.
-    const renameEvent = { userId: data.userId, name: nextName };
-    io.emit('user-renamed', renameEvent);
-    publishRealtimeEvent('user-renamed', renameEvent);
-    if (typeof ack === 'function') ack({ ok: true });
-
-    // Persist the rename in the background.
-    getCollection()
-      .then(async (collection) => {
-        if (!collection) return;
-        return collection.updateMany(
-          { userId: data.userId },
-          { $set: { user: nextName } }
+    try {
+      const profiles = await getUserProfilesCollection();
+      if (profiles) {
+        await profiles.updateOne(
+          { _id: requestedUserId },
+          { $set: { name: nextName, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+          { upsert: true }
         );
-      })
-      .catch((error) => {
-        console.error('Failed to rename user in MongoDB:', error.message);
-      });
+      }
+      const renameEvent = { userId: requestedUserId, name: nextName };
+      io.emit('user-renamed', renameEvent);
+      await publishRealtimeEvent('user-renamed', renameEvent);
+      // Keep historical messages consistent with the account profile.
+      const collection = await getCollection();
+      if (collection) await collection.updateMany({ userId: requestedUserId }, { $set: { user: nextName } });
+      if (typeof ack === 'function') ack({ ok: true, userId: requestedUserId, name: nextName });
+    } catch (error) {
+      console.error('Failed to rename user:', error.message);
+      if (typeof ack === 'function') ack({ ok: false, error: 'Could not save name' });
+    }
   });
 
   socket.on('update-message', async (data, ack) => {

@@ -1351,6 +1351,14 @@ async function joinGroup(groupId, openAfter=true) {
 
 loadGroups();
 
+socket.on('user-profile', data => {
+  if (!data || String(data.userId || '') !== String(userId || '') || !data.name) return;
+  name = String(data.name).trim().slice(0, 40);
+  localStorage.setItem('wa_name', name);
+  updateMyNameUI();
+  renameRenderedMessages(name);
+});
+
 socket.on('user-renamed', data => {
   if (!data || !data.userId || !data.name) return;
   messages.forEach(msg => {
@@ -1397,7 +1405,7 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, deviceId });
+  socket.emit('register-user', { userId, name, deviceId });
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;
@@ -1952,7 +1960,7 @@ function finishAccountLogin() {
   localStorage.setItem('wa_name', name);
   accountModal.classList.add('hidden');
   updateMyNameUI();
-  socket.emit('register-user', { userId, deviceId });
+  socket.emit('register-user', { userId, name, deviceId });
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
 }
@@ -2043,7 +2051,11 @@ function saveUserName() {
   updateMyNameUI();
   renameRenderedMessages(name);
   socket.emit('rename-user', { userId, name }, result => {
-    if (!result || !result.ok) showToast('Name sync will retry');
+    if (!result || !result.ok) { showToast('Name could not be synced'); return; }
+    name = String(result.name || nextName).trim().slice(0, 40);
+    localStorage.setItem('wa_name', name);
+    updateMyNameUI();
+    renameRenderedMessages(name);
   });
   closeNameModal();
   showToast(`Your name is now ${name}`);
