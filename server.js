@@ -839,9 +839,13 @@ app.post('/api/admin/recycle-bin', async (req, res) => {
     // A normal deletion starts in the group's recycle bin. Once the admin
     // moves it to Main Recycle, recycleStage becomes 'main'. Legacy records
     // without a stage are treated as main so they are not lost.
+    // Main Recycle is the admin-wide view of every message that is actually
+    // deleted. Normal deletes are initially stored with recycleStage='group',
+    // but they must still be visible in Main Recycle (group-wise filtering is
+    // done in the UI). A group-specific Recycle view remains group-scoped.
     const filter = requestedGroupId && requestedGroupId !== DEFAULT_GROUP_ID
       ? { $and: [ { $or: [{ deletedGroupId: requestedGroupId }, { groupId: requestedGroupId }] }, { $or: [{ recycleStage: 'group' }, { recycleStage: { $exists:false } }] } ] }
-      : { $or: [{ recycleStage: 'main' }, { recycleStage: { $exists:false }, groupId: DEFAULT_GROUP_ID }] };
+      : { $or: [{ recycleStage: 'main' }, { recycleStage: 'group' }, { recycleStage: { $exists:false } }] };
 
     // Read the dedicated recycle collection first.
     const recycleDocs = await db.collection(RECYCLE_BIN_COLLECTION_NAME)
@@ -1034,6 +1038,7 @@ app.post('/api/admin/recycle-bin/delete', async (req, res) => {
     const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
     const collection = db.collection(COLLECTION_NAME);
     const rawId = String(req.body?.id || '').trim();
+    const permanentRequested = req.body?.permanent === true;
     let item = null;
     let recycleId = null;
     if (ObjectId.isValid(rawId)) { recycleId = new ObjectId(rawId); item = await recycle.findOne({ _id:recycleId }); }
@@ -1048,7 +1053,7 @@ app.post('/api/admin/recycle-bin/delete', async (req, res) => {
     // It always transfers the item to Main Recycle. Only deleting from Main
     // Recycle can permanently remove the message/media.
     const stage = String(item.recycleStage || '').toLowerCase();
-    const isGroupItem = stage === 'group' || (stage !== 'main' && String(item.groupId || '') !== DEFAULT_GROUP_ID);
+    const isGroupItem = !permanentRequested && (stage === 'group' || (stage !== 'main' && String(item.groupId || '') !== DEFAULT_GROUP_ID));
     if (isGroupItem) {
       const msg = { ...(item.message || {}) };
       delete msg._id;
@@ -1330,11 +1335,14 @@ app.post('/api/admin/recycle-bin/empty', async (req, res) => {
     }
 
     // MAIN RECYCLE: this is the ONLY Empty operation that permanently deletes.
-    const filter = { $or:[{recycleStage:'main'},{recycleStage:{$exists:false},groupId:DEFAULT_GROUP_ID}] };
+    // Main Recycle contains every actually-deleted chat message, regardless
+    // of whether it has been moved from Group Recycle yet. Emptying Main is
+    // therefore a true permanent cleanup of all deleted chat records/media.
+    const filter = { $or:[{recycleStage:'main'},{recycleStage:'group'},{recycleStage:{$exists:false}}] };
     const recycleItems = await recycle.find(filter,{projection:{'message.mediaId':1}}).toArray();
     const mediaIds = new Set();
     for (const item of recycleItems) if (item.message?.mediaId) mediaIds.add(String(item.message.mediaId));
-    const mainSoftFilter = {deletedAt:{$exists:true},movedToMainRecycleAt:{$exists:true}};
+    const mainSoftFilter = {deletedAt:{$exists:true}};
     const softItems = await collection.find(mainSoftFilter,{projection:{mediaId:1}}).toArray();
     for (const item of softItems) if (item.mediaId) mediaIds.add(String(item.mediaId));
     const bucket = await getMediaBucket();

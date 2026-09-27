@@ -2031,7 +2031,7 @@ function openRecycleChatView(items, groupName, targetId='') {
     restore.onclick=async()=>{ if(!confirm('Restore this deleted item to the group?')) return; try{const r=await fetch('/api/admin/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});const d=await r.json();if(!d.ok)throw new Error(d.error||'Restore failed');showToast('Item restored');loadAdminRecycle();}catch(e){showToast(e.message||'Restore failed');} };
     actions.appendChild(restore);
     const del=document.createElement('button'); del.className='mini-btn admin-delete-btn'; del.textContent='Delete permanently';
-    del.onclick=async()=>{ if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return; try{const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});const d=await r.json();if(!d.ok)throw new Error(d.error||'Delete failed');showToast('Permanently deleted');loadAdminRecycle();}catch(e){showToast(e.message||'Delete failed');} };
+    del.onclick=async()=>{ if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return; try{const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id,permanent:true})});const d=await r.json();if(!d.ok)throw new Error(d.error||'Delete failed');showToast('Permanently deleted');loadAdminRecycle();}catch(e){showToast(e.message||'Delete failed');} };
     if(adminRecycleGroupId==='main') actions.appendChild(del);
     bubble.appendChild(actions);
     body.appendChild(bubble);
@@ -2107,7 +2107,7 @@ async function loadAdminRecycle() {
       if (permanentDeleteBtn) permanentDeleteBtn.onclick=async()=>{
         if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return;
         try {
-          const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id,permanent:true})});
           const d=await r.json(); if(!d.ok) throw new Error(d.error||'Delete failed');
           showToast('Permanently deleted'); loadAdminRecycle();
         } catch(e){ adminRecycleError.textContent=e.message||'Delete failed'; }
