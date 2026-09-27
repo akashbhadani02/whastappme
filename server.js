@@ -1339,17 +1339,18 @@ async function loadMessages(after, groupId = DEFAULT_GROUP_ID) {
 
 app.post('/api/messages', async (req, res) => {
   try {
-    const msg = req.body || {};
+    const msg = { ...(req.body || {}) };
     if (!msg.id || !String(msg.message || '').trim()) return res.status(400).json({ ok: false, error: 'Invalid message' });
-    msg.message = String(msg.message).trim();
+    msg.id = String(msg.id).trim();
+    msg.message = String(msg.message).trim().slice(0, 5000);
     msg.groupId = normalizeGroupId(msg.groupId);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
     msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
     const saved = await broadcastSaved('message', msg);
     res.json({ ok: true, message: saved });
   } catch (error) {
-    console.error('REST message save failed:', error.message);
-    res.status(500).json({ ok: false, error: 'Message could not be saved' });
+    console.error('REST message save failed:', error.stack || error.message);
+    res.status(503).json({ ok: false, retryable: true, error: 'Message is temporarily unavailable. Please retry.' });
   }
 });
 
@@ -1521,13 +1522,49 @@ app.get('/api/messages', async (req, res) => {
 });
 
 async function saveMessage(msg) {
-  const collection = await getCollection();
-  if (!collection) return { ...msg, groupId: normalizeGroupId(msg.groupId), createdAt: msg.createdAt || new Date().toISOString() };
+  const gid = normalizeGroupId(msg?.groupId);
+  const messageId = String(msg?.id || '').trim();
+  if (!messageId) throw new Error('Missing message id');
 
-  const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
-  const saved = { ...msg, createdAt };
-  await collection.updateOne({ id: msg.id }, { $setOnInsert: saved }, { upsert: true });
-  return saved;
+  const collection = await getCollection();
+  if (!collection) {
+    return {
+      saved: { ...msg, id: messageId, groupId: gid, createdAt: msg.createdAt || new Date().toISOString() },
+      inserted: true
+    };
+  }
+
+  const parsedCreatedAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
+  const createdAt = Number.isNaN(parsedCreatedAt.getTime()) ? new Date() : parsedCreatedAt;
+  const saved = { ...msg, id: messageId, groupId: gid, createdAt };
+
+  // Messages are scoped by group. Retries for the same id are idempotent.
+  try {
+    const result = await collection.updateOne(
+      { id: messageId, groupId: gid },
+      { $setOnInsert: saved },
+      { upsert: true }
+    );
+    if (result.upsertedCount === 0) {
+      const existing = await collection.findOne(
+        { id: messageId, groupId: gid },
+        { projection: { _id: 0 } }
+      );
+      if (existing) return { saved: existing, inserted: false };
+    }
+    return { saved, inserted: true };
+  } catch (error) {
+    // If two retries race, MongoDB can report duplicate-key. Treat it as a
+    // successful idempotent retry by reading the already-created message.
+    if (error && error.code === 11000) {
+      const existing = await collection.findOne(
+        { id: messageId, groupId: gid },
+        { projection: { _id: 0 } }
+      );
+      if (existing) return { saved: existing, inserted: false };
+    }
+    throw error;
+  }
 }
 
 async function sendPushToOtherUsers(msg) {
@@ -1630,8 +1667,13 @@ async function sendNativeRealtimeNotification(msg) {
 }
 
 async function broadcastSaved(event, msg) {
-  const saved = await saveMessage(msg);
+  const result = await saveMessage(msg);
+  const saved = result.saved;
+  const inserted = result.inserted !== false;
   const gid = normalizeGroupId(saved.groupId);
+  // A retry that finds an existing message is an ACK-only operation. Do not
+  // emit/push the same message twice.
+  if (!inserted) return saved;
   io.to(`group:${gid}`).emit(event, saved);
   // Realtime unread notification for every active device of the same User ID.
   // Devices currently inside the originating group already receive the normal
@@ -1937,7 +1979,10 @@ io.on('connection', async (socket) => {
   socket.groupId = '';
 
   socket.on('message', async (msg, ack) => {
-    if (!msg || !msg.message || !msg.id) return;
+    if (!msg || !String(msg.message || '').trim() || !msg.id || !socket.groupId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Group is not ready' });
+      return;
+    }
     msg.groupId = normalizeGroupId(socket.groupId);
     // Prefer the registered socket identity over a client-supplied value.
     if (socket.userId) msg.userId = String(socket.userId);
@@ -1947,8 +1992,8 @@ io.on('connection', async (socket) => {
       const saved = await broadcastSaved('message', msg);
       if (typeof ack === 'function') ack({ ok: true, message: saved });
     } catch (error) {
-      console.error('Failed to save message:', error.message);
-      if (typeof ack === 'function') ack({ ok: false });
+      console.error('Failed to save message:', error.stack || error.message);
+      if (typeof ack === 'function') ack({ ok: false, retryable: true, error: 'Message save temporarily failed' });
     }
   });
 

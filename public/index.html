@@ -205,9 +205,14 @@
       <div class="lock-icon">♻️</div>
       <h3 id="adminRecycleTitle">Group Recycle Bin</h3>
       <p>Deleted group images, videos, documents and messages are kept here for the admin.</p>
+      <div class="recycle-admin-actions recycle-admin-actions-top">
+        <button class="mini-btn" id="adminRecycleRefresh">↻ Refresh</button>
+        <button class="mini-btn" id="adminMainRecycleBtn">♻️ Main Recycle</button>
+        <button class="mini-btn admin-delete-btn" id="adminRecycleEmpty">🧹 Empty this bin</button>
+      </div>
+      <div id="adminRecycleGroupFilters" class="recycle-group-filters hidden"></div>
       <div id="adminRecycleList" class="admin-groups-list"></div>
       <div class="password-error" id="adminRecycleError"></div>
-      <div class="recycle-admin-actions"><button class="mini-btn" id="adminRecycleRefresh">↻ Refresh</button><button class="mini-btn" id="adminMainRecycleBtn">♻️ Main Recycle</button><button class="mini-btn admin-delete-btn" id="adminRecycleEmpty">🧹 Empty this bin</button></div>
     </div>
   </div>
 

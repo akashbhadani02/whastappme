@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v12-group-notification';
+const CACHE = 'whatsapp-pwa-v13-live-notification';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -47,7 +47,7 @@ self.addEventListener('push', (event) => {
       badge: data.badge || '/icon.svg',
       tag: messageId ? `wa-${messageId}` : 'wa-message',
       renotify: false,
-      data: { url: data.url || '/#chat', messageId },
+      data: { url: data.url || '/#chat', messageId, groupId: data.groupId || '' },
       vibrate: [150, 80, 150]
     };
 

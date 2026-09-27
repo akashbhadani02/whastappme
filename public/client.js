@@ -321,10 +321,43 @@ async function setupWebPush() {
   }
 }
 
+let foregroundNotificationIds = new Set();
 function notifyIncomingMessage(msg) {
-  // Browser push is handled by the service worker. Do not create a second
-  // foreground Notification here; otherwise the same message can notify twice.
-  return;
+  if (!msg || !msg.id || msg.userId === userId) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // The service worker is the background source of truth. Foreground
+  // notifications are only a fallback when PushManager is unavailable or no
+  // subscription exists on this browser.
+  if ('serviceWorker' in navigator && 'PushManager' in window) {
+    navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
+      if (sub) return;
+      showForegroundNotification(msg);
+    }).catch(() => showForegroundNotification(msg));
+  } else {
+    showForegroundNotification(msg);
+  }
+}
+function showForegroundNotification(msg) {
+  const id = String(msg.id);
+  if (foregroundNotificationIds.has(id)) return;
+  foregroundNotificationIds.add(id);
+  if (foregroundNotificationIds.size > 200) foregroundNotificationIds = new Set([...foregroundNotificationIds].slice(-100));
+  const group = groups.find(g => String(g.id) === String(msg.groupId));
+  const title = String(msg.groupName || group?.name || 'WhatsApp');
+  const n = new Notification(title, {
+    body: 'New message',
+    tag: `wa-${id}`,
+    icon: '/icon.svg',
+    data: { groupId: msg.groupId || currentGroupId, messageId: id }
+  });
+  n.onclick = () => {
+    try { window.focus(); } catch (_) {}
+    if (msg.groupId && String(msg.groupId) !== String(currentGroupId)) {
+      const target = groups.find(g => String(g.id) === String(msg.groupId));
+      if (target) joinGroup(target.id, true);
+    }
+    n.close();
+  };
 }
 
 function notificationSetup() {
@@ -446,12 +479,18 @@ async function sendMessage(text) {
     const ack = await emitAck('message', msg, 12000, 1);
     if (!ack || !ack.ok) {
       const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
-      if (el) el.classList.add('send-failed');
-      showToast('Message not sent — check server/MongoDB connection');
+      if (el) {
+        el.classList.add('send-failed');
+        el.title = 'Send failed. Tap Send again when the connection returns.';
+      }
+      showToast('Message is waiting for connection — please retry');
     } else {
       messages.set(msg.id, ack.message || msg);
       const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
-      if (el) el.dataset.synced = '1';
+      if (el) {
+        el.dataset.synced = '1';
+        el.classList.remove('send-failed');
+      }
     }
   }
 }
@@ -1909,6 +1948,34 @@ function renderAdminGroups(list) {
 }
 
 
+let adminRecycleFilterGroup = 'all';
+
+function renderAdminRecycleGroupFilters(items) {
+  const box = document.querySelector('#adminRecycleGroupFilters');
+  if (!box) return;
+  box.innerHTML = '';
+  if (adminRecycleGroupId !== 'main') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const groupsMap = new Map();
+  items.forEach(item => {
+    const id = String(item.deletedGroupId || item.message?.groupId || 'main');
+    const name = String(item.deletedGroupName || item.message?.groupName || id);
+    if (!groupsMap.has(id)) groupsMap.set(id, name);
+  });
+  const make = (id, label, count) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mini-btn recycle-filter-btn' + (adminRecycleFilterGroup === id ? ' active' : '');
+    b.textContent = `${label}${count ? ` (${count})` : ''}`;
+    b.onclick = () => { adminRecycleFilterGroup = id; loadAdminRecycle(); };
+    box.appendChild(b);
+  };
+  make('all', 'All groups', items.length);
+  [...groupsMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).forEach(([id,name]) => {
+    make(id, name, items.filter(x => String(x.deletedGroupId || x.message?.groupId || 'main') === id).length);
+  });
+}
+
 async function loadAdminRecycle() {
   adminRecycleError.textContent = '';
   adminRecycleList.innerHTML = '<div class="recycle-empty">Loading recycle bin…</div>';
@@ -1919,10 +1986,15 @@ async function loadAdminRecycle() {
     const items = Array.isArray(data.items) ? data.items : [];
     adminRecycleList.innerHTML = '';
     if (adminRecycleGroupId === 'main') {
+      renderAdminRecycleGroupFilters(items);
       adminRecycleTitle.textContent = `♻️ Main Recycle Bin (${items.length})`;
     }
+    const visibleItems = adminRecycleGroupId === 'main' && adminRecycleFilterGroup !== 'all'
+      ? items.filter(item => String(item.deletedGroupId || item.message?.groupId || 'main') === adminRecycleFilterGroup)
+      : items;
     if (!items.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">Recycle bin is empty.</div>'; return; }
-    items.forEach(item => {
+    if (!visibleItems.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">No deleted items in this group.</div>'; return; }
+    visibleItems.forEach(item => {
       const m = item.message || {};
       const row = document.createElement('div'); row.className='recycle-item';
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
@@ -1971,9 +2043,9 @@ async function loadAdminRecycle() {
       };
       const moveBtn = row.querySelector('.recycle-main-move-btn');
       if (moveBtn) moveBtn.onclick=async()=>{
-        if(!confirm('Delete this item from Group Recycle? It will move to Main Recycle and will NOT be permanently deleted.')) return;
+        if(!confirm('Move this item from Group Recycle to Main Recycle? It will NOT be permanently deleted.')) return;
         try {
-          const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+          const r=await fetch('/api/admin/recycle-bin/move-to-main',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
           const d=await r.json(); if(!d.ok) throw new Error(d.error||'Move failed');
           showToast('Moved to Main Recycle Bin'); loadAdminRecycle();
         } catch(e){ adminRecycleError.textContent=e.message||'Move failed'; }
@@ -1986,6 +2058,7 @@ async function loadAdminRecycle() {
 function openAdminRecycle(groupId, groupName) {
   adminRecycleGroupId = String(groupId || 'main');
   adminRecycleGroupName = String(groupName || 'Group');
+  if (adminRecycleGroupId !== 'main') adminRecycleFilterGroup = 'all';
   adminRecycleTitle.textContent = `♻️ ${adminRecycleGroupName} Recycle Bin`;
   adminRecycleModal.classList.remove('hidden');
   loadAdminRecycle();
