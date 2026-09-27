@@ -2262,8 +2262,10 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (collection) {
         const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+        // Only archive messages that are actually being deleted now.
+        // Already-deleted records must never be copied into Recycle Bin again.
         const existing = await collection.find(
-          { $and: [groupFilter, { id: { $in: ids } }] }
+          { $and: [groupFilter, { id: { $in: ids } }, { deletedAt: { $exists:false } }] }
         ).toArray();
 
         if (existing.length) {
