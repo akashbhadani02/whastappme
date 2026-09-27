@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 import androidx.core.app.NotificationCompat;
 
 import org.json.JSONArray;
@@ -37,6 +38,7 @@ public class NotificationPollService extends Service {
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
     private volatile boolean polling = false;
+    private PowerManager.WakeLock pollWakeLock;
 
     private Socket realtimeSocket;
     private String realtimeUserId = "";
@@ -48,10 +50,14 @@ public class NotificationPollService extends Service {
         startForeground(SERVICE_ID, foregroundNotification());
 
         executor = Executors.newSingleThreadScheduledExecutor();
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) pollWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "wassup:notification-poll");
+        } catch (Exception ignored) {}
 
         // Polling remains as a recovery path. Realtime Socket.IO is the primary
         // notification path and normally delivers the alert immediately.
-        executor.scheduleWithFixedDelay(this::poll, 3, 10, TimeUnit.SECONDS);
+        executor.scheduleWithFixedDelay(this::poll, 1, 2, TimeUnit.SECONDS);
         connectRealtimeIfNeeded();
     }
 
@@ -152,11 +158,12 @@ public class NotificationPollService extends Service {
                 String id = data.optString("id", "");
                 String groupName = data.optString("groupName", "WhatsApp");
                 String groupId = data.optString("groupId", "");
+                String body = data.optString("body", "New message");
                 if (id.isEmpty()) return;
 
                 // Do not show the sender's own message. The server also filters
                 // it, but this extra check makes the client defensive.
-                showMessageNotification(id, groupName, groupId);
+                showMessageNotification(id, groupName, groupId, body);
             });
 
             realtimeSocket.on(Socket.EVENT_CONNECT_ERROR, args -> {
@@ -182,6 +189,8 @@ public class NotificationPollService extends Service {
 
     private void poll() {
         if (polling) return;
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        if (pollWakeLock != null) { try { pollWakeLock.acquire(12000); } catch (Exception ignored) {} }
         polling = true;
         try {
             // If the user changed account after service startup, reconnect the
@@ -258,7 +267,8 @@ public class NotificationPollService extends Service {
                     showMessageNotification(
                             id,
                             m.optString("groupName", "WhatsApp"),
-                            m.optString("groupId", "")
+                            m.optString("groupId", ""),
+                            m.optString("body", "New message")
                     );
                 }
             }
@@ -270,10 +280,11 @@ public class NotificationPollService extends Service {
         } catch (Exception ignored) {
         } finally {
             polling = false;
+            if (pollWakeLock != null && pollWakeLock.isHeld()) { try { pollWakeLock.release(); } catch (Exception ignored) {} }
         }
     }
 
-    private void showMessageNotification(String id, String groupName, String groupId) {
+    private void showMessageNotification(String id, String groupName, String groupId, String body) {
         synchronized (seen) {
             if (seen.contains("notified:" + id)) return;
             seen.add("notified:" + id);
@@ -298,7 +309,7 @@ public class NotificationPollService extends Service {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle(title)
-                .setContentText("New message")
+                .setContentText(body == null || body.trim().isEmpty() ? "New message" : body.trim())
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
@@ -310,7 +321,10 @@ public class NotificationPollService extends Service {
 
         NotificationManager nm =
                 (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(Math.abs(id.hashCode()), n);
+        if (nm != null) {
+            if (Build.VERSION.SDK_INT >= 24 && !nm.areNotificationsEnabled()) return;
+            nm.notify(Math.abs(id.hashCode()), n);
+        }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -333,6 +347,7 @@ public class NotificationPollService extends Service {
     @Override public void onDestroy() {
         disconnectRealtime();
         if (executor != null) executor.shutdownNow();
+        if (pollWakeLock != null && pollWakeLock.isHeld()) { try { pollWakeLock.release(); } catch (Exception ignored) {} }
         super.onDestroy();
     }
 

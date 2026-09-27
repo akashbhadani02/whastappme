@@ -1738,7 +1738,8 @@ async function sendNativeRealtimeNotification(msg) {
       id: String(msg.id),
       groupId: gid,
       groupName,
-      type: String(msg.type || 'message')
+      type: String(msg.type || 'message'),
+      body: String(msg.message || msg.text || (msg.type === 'audio' ? 'Audio message' : msg.type === 'video' ? 'Video' : msg.type === 'image' ? 'Photo' : 'New message')).slice(0, 180)
     };
 
     // This is a native Android realtime channel. It is deliberately separate

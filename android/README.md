@@ -1,7 +1,6 @@
 # WhatsApp Android wrapper - realtime group notifications
 
-The Android wrapper now uses a native Socket.IO realtime notification channel as
-the primary notification path, with HTTP polling retained as a recovery fallback.
+The Android wrapper uses a native Socket.IO realtime notification channel as the primary path, with a 5-second HTTP polling fallback. The notification service also checks Android notification permission/channel state and uses a short partial wake lock while polling.
 
 ## Notification behavior
 - Group member messages trigger a native Android notification immediately when the
@@ -18,12 +17,11 @@ the primary notification path, with HTTP polling retained as a recovery fallback
   unavailable.
 
 ## Important Android limitation
-This is a native realtime Socket.IO channel, not Firebase Cloud Messaging. It can
-deliver instantly while Android keeps the foreground service alive. Some OEMs can
-still force-stop background services or disable network activity. For guaranteed
-OS-level delivery even after the app process is killed, integrate FCM with a
-Firebase project.
+This wrapper does not contain Firebase/FCM configuration. Socket.IO + foreground service + polling can deliver while Android keeps the service alive, but an OEM force-stop or a fully killed process can prevent delivery. Guaranteed OS-level background delivery after process death requires FCM and a Firebase project configuration (`google-services.json`).
 
 ## Build
 Open this `android` folder in Android Studio. Set `APP_URL` in `gradle.properties`
 or pass `-PAPP_URL=https://your-domain.example/` when building.
+
+## Android 13+ notification permission
+Android 13/API 33+ requires `POST_NOTIFICATIONS`; the app requests it at startup. If the user previously denied notifications, enable notifications for the app in Android Settings.
