@@ -1130,6 +1130,8 @@ socket.on('history', history => {
   }
 });
 
+socket.on('connect', () => { if (userId) refreshAllUnreadCounts().catch(() => {}); });
+
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
 
@@ -1252,10 +1254,11 @@ async function syncMessages() {
 // Frequent reconciliation keeps all devices in the same group state, including
 // users connected to different Vercel instances.
 setInterval(() => {
-  // Do not poll the messages API while no group has been unlocked.
-  // This removes unnecessary requests and the loading delay on startup.
+  // Keep group unread badges reconciled even while another group is open.
+  // The badge is user-level, so every group must be refreshed independently.
+  if (userId && Array.isArray(groups) && groups.length) refreshAllUnreadCounts().catch(() => {});
   if (currentGroupId) syncMessages();
-}, 1000);
+}, 3000);
 
 socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
