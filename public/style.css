@@ -264,3 +264,24 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
   .recycle-group-filters{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}
   .recycle-group-filters .mini-btn{flex:0 0 auto}
 }
+
+
+/* Recycle Bin chat-style viewer */
+.recycle-chat-view{display:flex;flex-direction:column;min-height:320px;max-height:62vh;overflow:hidden;border:1px solid #dfe5e8;border-radius:12px;background:#efeae2}
+.recycle-chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;background:#f7f8f9;border-bottom:1px solid #d8dee1;position:sticky;top:0;z-index:2}
+.recycle-chat-title{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recycle-chat-body{padding:12px;overflow:auto;display:flex;flex-direction:column;gap:7px}
+.recycle-chat-date{text-align:center;margin:7px auto;padding:4px 10px;border-radius:10px;background:#dfe5e8;color:#58636a;font-size:11px}
+.recycle-chat-bubble{max-width:min(78%,520px);padding:7px 9px 5px;border-radius:8px;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.08);align-self:flex-start;position:relative}
+.recycle-chat-bubble.mine{align-self:flex-end;background:#dcf8c6}
+.recycle-chat-sender{font-size:11px;font-weight:700;margin-bottom:3px}
+.recycle-chat-text{font-size:14px;white-space:pre-wrap;word-break:break-word}
+.recycle-chat-media{display:block;max-width:100%;max-height:260px;border-radius:7px;overflow:hidden}
+.recycle-chat-media img,.recycle-chat-media video{display:block;max-width:100%;max-height:260px;border-radius:7px}
+.recycle-chat-media audio{width:min(320px,100%)}
+.recycle-chat-doc{padding:10px;border:1px solid #d8dee1;border-radius:8px;background:#f8fafb}
+.recycle-chat-meta{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:4px;font-size:10px;color:#6d777d}
+.recycle-chat-deleted{font-size:10px;color:#a33;margin-top:2px}
+.recycle-chat-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.recycle-chat-empty{padding:30px;text-align:center;color:#68737a}
+@media(max-width:600px){.recycle-chat-view{max-height:68vh}.recycle-chat-bubble{max-width:88%}.recycle-chat-body{padding:8px}.recycle-chat-media img,.recycle-chat-media video{max-height:220px}}

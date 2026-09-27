@@ -1976,8 +1976,75 @@ function renderAdminRecycleGroupFilters(items) {
   });
 }
 
+
+function recycleItemGroupId(item){ return String(item?.deletedGroupId || item?.message?.groupId || 'main'); }
+function recycleItemGroupName(item){ return String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
+
+function openRecycleChatView(items, groupName, targetId='') {
+  const view = document.querySelector('#adminRecycleChatView');
+  const list = document.querySelector('#adminRecycleList');
+  if (!view || !list) return;
+  view.classList.remove('hidden');
+  list.classList.add('hidden');
+  view.innerHTML='';
+
+  const head=document.createElement('div'); head.className='recycle-chat-head';
+  const title=document.createElement('div'); title.className='recycle-chat-title'; title.textContent=`♻️ ${groupName} — Deleted messages`;
+  const back=document.createElement('button'); back.className='mini-btn'; back.textContent='← Back';
+  back.onclick=()=>{ view.classList.add('hidden'); list.classList.remove('hidden'); };
+  head.append(title,back); view.appendChild(head);
+
+  const body=document.createElement('div'); body.className='recycle-chat-body'; view.appendChild(body);
+  const ordered=[...items].sort((a,b)=>new Date(a.deletedAt||a.message?.createdAt||0)-new Date(b.deletedAt||b.message?.createdAt||0));
+  if(!ordered.length){ body.innerHTML='<div class="recycle-chat-empty">No deleted messages in this group.</div>'; return; }
+  let lastDay='';
+  ordered.forEach(item=>{
+    const m=item.message||{};
+    const dt=new Date(item.deletedAt||m.createdAt||0);
+    const day=Number.isNaN(dt.getTime())?'':dt.toLocaleDateString();
+    if(day && day!==lastDay){ const sep=document.createElement('div'); sep.className='recycle-chat-date'; sep.textContent=day; body.appendChild(sep); lastDay=day; }
+    const bubble=document.createElement('div');
+    bubble.className='recycle-chat-bubble' + (m.userId===userId ? ' mine' : '');
+    bubble.dataset.itemId=String(item.id||'');
+    const sender=document.createElement('div'); sender.className='recycle-chat-sender'; sender.textContent=String(m.user||m.senderName||m.senderId||m.userId||'Unknown user'); bubble.appendChild(sender);
+    const type=String(m.type||'text').toLowerCase();
+    if(type==='image'||type==='video'||type==='audio'){
+      const wrap=document.createElement('div'); wrap.className='recycle-chat-media';
+      const url=m.mediaId?`/api/media/${encodeURIComponent(m.mediaId)}`:m.data;
+      if(type==='image'){ const el=document.createElement('img'); el.src=url||''; el.alt='Deleted photo'; el.loading='lazy'; wrap.appendChild(el); }
+      else if(type==='video'){ const el=document.createElement('video'); el.controls=true; el.preload='metadata'; const src=document.createElement('source'); src.src=url||''; src.type=m.mime||'video/mp4'; el.appendChild(src); wrap.appendChild(el); }
+      else { const el=document.createElement('audio'); el.controls=true; el.preload='metadata'; el.src=url||''; wrap.appendChild(el); }
+      bubble.appendChild(wrap);
+    } else if(type==='document'){
+      const doc=document.createElement('div'); doc.className='recycle-chat-doc'; doc.textContent=`📄 ${m.fileName||'Document'}`; bubble.appendChild(doc);
+    } else {
+      const text=document.createElement('div'); text.className='recycle-chat-text'; text.textContent=m.message||'Deleted message'; bubble.appendChild(text);
+    }
+    const deleted=document.createElement('div'); deleted.className='recycle-chat-deleted'; deleted.textContent='Deleted • kept in Recycle Bin'; bubble.appendChild(deleted);
+    const actions=document.createElement('div'); actions.className='recycle-chat-actions';
+    if(m.mediaId){
+      const dl=document.createElement('button'); dl.className='mini-btn'; dl.textContent='⬇ Download';
+      dl.onclick=async()=>{ try{ const r=await fetch('/api/admin/recycle-bin/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})}); if(!r.ok){let d={};try{d=await r.json()}catch(_){} throw new Error(d.error||'Download failed');} const blob=await r.blob(); const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download=m.fileName||`recycle-${item.id}`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),1000);}catch(e){showToast(e.message||'Download failed');} };
+      actions.appendChild(dl);
+    }
+    const restore=document.createElement('button'); restore.className='mini-btn'; restore.textContent='♻️ Restore';
+    restore.onclick=async()=>{ if(!confirm('Restore this deleted item to the group?')) return; try{const r=await fetch('/api/admin/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});const d=await r.json();if(!d.ok)throw new Error(d.error||'Restore failed');showToast('Item restored');loadAdminRecycle();}catch(e){showToast(e.message||'Restore failed');} };
+    actions.appendChild(restore);
+    const del=document.createElement('button'); del.className='mini-btn admin-delete-btn'; del.textContent='Delete permanently';
+    del.onclick=async()=>{ if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return; try{const r=await fetch('/api/admin/recycle-bin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});const d=await r.json();if(!d.ok)throw new Error(d.error||'Delete failed');showToast('Permanently deleted');loadAdminRecycle();}catch(e){showToast(e.message||'Delete failed');} };
+    if(adminRecycleGroupId==='main') actions.appendChild(del);
+    bubble.appendChild(actions);
+    body.appendChild(bubble);
+  });
+  if(targetId){ const target=[...body.children].find(el=>el.dataset?.itemId===targetId); if(target) target.scrollIntoView({block:'center'}); }
+  const targetBubble=[...body.querySelectorAll('.recycle-chat-bubble')].find(el=>el.dataset?.itemId===targetId);
+  if(targetBubble) targetBubble.scrollIntoView({block:'center'});
+}
+
 async function loadAdminRecycle() {
   adminRecycleError.textContent = '';
+  adminRecycleChatView?.classList.add('hidden');
+  adminRecycleList.classList.remove('hidden');
   adminRecycleList.innerHTML = '<div class="recycle-empty">Loading recycle bin…</div>';
   try {
     const response = await fetch('/api/admin/recycle-bin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(adminRecycleGroupId === 'main' ? { password:PASSWORD } : { password:PASSWORD, groupId:adminRecycleGroupId }) });
@@ -2011,8 +2078,12 @@ async function loadAdminRecycle() {
       row.querySelector('.recycle-meta').textContent=when;
       const view=row.querySelector('.recycle-view-btn');
       const download=row.querySelector('.recycle-download-btn');
+      view.onclick=()=>{
+        const groupItems=visibleItems.filter(x=>recycleItemGroupId(x)===recycleItemGroupId(item));
+        openRecycleChatView(groupItems, recycleItemGroupName(item), String(item.id||''));
+      };
       if (m.mediaId) {
-        view.onclick=()=>window.open(`/api/media/${encodeURIComponent(m.mediaId)}`, '_blank', 'noopener');
+        
         download.onclick=async()=>{
           try {
             const r=await fetch('/api/admin/recycle-bin/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
@@ -2070,7 +2141,7 @@ adminMainRecycleFromGroupsBtn?.addEventListener('click',()=>openAdminRecycle('ma
 adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
 adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{
-  if(!confirm(adminRecycleGroupId === 'main' ? `Empty Main Recycle Bin for "${adminRecycleGroupName}"? This permanently deletes all stored data.` : `Empty Group Recycle Bin for "${adminRecycleGroupName}"? All items will move to Main Recycle Bin and will NOT be permanently deleted.`)) return;
+  if(!confirm(adminRecycleGroupId === 'main' ? `Empty Main Recycle Bin for "${adminRecycleGroupName}"? This PERMANENTLY deletes all messages, media and recycle records. This cannot be undone.` : `Empty Group Recycle Bin for "${adminRecycleGroupName}"? All items will move to Main Recycle Bin and will NOT be permanently deleted.`)) return;
   try {
     const r=await fetch('/api/admin/recycle-bin/empty',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(adminRecycleGroupId === 'main' ? {password:PASSWORD} : {password:PASSWORD,groupId:adminRecycleGroupId})});
     const d=await r.json(); if(!d.ok) throw new Error(d.error||'Empty failed');
