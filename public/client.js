@@ -1950,30 +1950,57 @@ function renderAdminGroups(list) {
 
 let adminRecycleFilterGroup = 'all';
 
-function renderAdminRecycleGroupFilters(items) {
+async function renderAdminRecycleGroupFilters(items) {
   const box = document.querySelector('#adminRecycleGroupFilters');
   if (!box) return;
   box.innerHTML = '';
   if (adminRecycleGroupId !== 'main') { box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
+
+  // Main Recycle must show EVERY admin group, not only groups that currently
+  // have deleted messages. Deleted-message counts are calculated separately.
   const groupsMap = new Map();
+  try {
+    const r = await fetch('/api/admin/groups', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:PASSWORD}), cache:'no-store'
+    });
+    const d = await r.json();
+    if (d.ok && Array.isArray(d.groups)) {
+      d.groups.forEach(g => groupsMap.set(String(g.id), String(g.name || g.id)));
+    }
+  } catch (_) {}
+
+  // Also retain groups represented by legacy/deleted records.
   items.forEach(item => {
     const id = String(item.deletedGroupId || item.message?.groupId || 'main');
     const name = String(item.deletedGroupName || item.message?.groupName || id);
     if (!groupsMap.has(id)) groupsMap.set(id, name);
   });
-  const make = (id, label, count) => {
+
+  const countFor = id => items.filter(x => String(x.deletedGroupId || x.message?.groupId || 'main') === id).length;
+  const make = (id, label, count, openChat=false) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'mini-btn recycle-filter-btn' + (adminRecycleFilterGroup === id ? ' active' : '');
     b.textContent = `${label}${count ? ` (${count})` : ''}`;
-    b.onclick = () => { adminRecycleFilterGroup = id; loadAdminRecycle(); };
+    b.title = count ? `View ${count} deleted item${count === 1 ? '' : 's'} from ${label}` : `No deleted messages in ${label}`;
+    b.onclick = () => {
+      adminRecycleFilterGroup = id;
+      if (openChat) {
+        const groupItems = items.filter(x => recycleItemGroupId(x) === id);
+        openRecycleChatView(groupItems, label);
+      } else {
+        loadAdminRecycle();
+      }
+    };
     box.appendChild(b);
   };
-  make('all', 'All groups', items.length);
-  [...groupsMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).forEach(([id,name]) => {
-    make(id, name, items.filter(x => String(x.deletedGroupId || x.message?.groupId || 'main') === id).length);
-  });
+
+  make('all', 'All groups', items.length, false);
+  [...groupsMap.entries()]
+    .sort((a,b)=>a[1].localeCompare(b[1]))
+    .forEach(([id,name]) => make(id, name, countFor(id), true));
 }
 
 
@@ -2053,7 +2080,7 @@ async function loadAdminRecycle() {
     const items = Array.isArray(data.items) ? data.items : [];
     adminRecycleList.innerHTML = '';
     if (adminRecycleGroupId === 'main') {
-      renderAdminRecycleGroupFilters(items);
+      await renderAdminRecycleGroupFilters(items);
       adminRecycleTitle.textContent = `♻️ Main Recycle Bin (${items.length})`;
     }
     const visibleItems = adminRecycleGroupId === 'main' && adminRecycleFilterGroup !== 'all'
