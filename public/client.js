@@ -604,8 +604,10 @@ function renderMessage(msg, direction) {
   if (msg.reactions && Object.keys(msg.reactions).length) { const rr=document.createElement('span'); rr.className='reactions'; rr.textContent=Object.values(msg.reactions).join(' '); meta.appendChild(rr); }
   if (direction === 'outgoing') {
     const ticks=document.createElement('span');
-    ticks.className='ticks' + (isMessageRead(msg) ? ' read' : '');
-    ticks.textContent='✓✓';
+    const read = isMessageRead(msg);
+    const delivered = isMessageDelivered(msg);
+    ticks.className='ticks' + (read ? ' read' : (delivered ? ' delivered' : ''));
+    ticks.textContent = read || delivered ? '✓✓' : '✓';
     meta.appendChild(ticks);
   }
   el.appendChild(meta);
@@ -1044,7 +1046,13 @@ function extension(mime,type) { const ext=(mime||'').split('/')[1]; return ext==
 let lastSyncAt = '';
 
 function isMessageRead(msg) {
-  return Array.isArray(msg.readBy) && msg.readBy.some(id => id && id !== msg.userId);
+  const sender = String(msg?.userId || '');
+  return Array.isArray(msg?.readBy) && msg.readBy.some(id => id && String(id) !== sender);
+}
+
+function isMessageDelivered(msg) {
+  const sender = String(msg?.userId || '');
+  return Array.isArray(msg?.deliveredTo) && msg.deliveredTo.some(id => id && String(id) !== sender);
 }
 
 function updateTicks(msg) {
@@ -1053,8 +1061,10 @@ function updateTicks(msg) {
   const ticks = el.querySelector('.ticks');
   if (!ticks) return;
   const read = isMessageRead(msg);
-  ticks.textContent = '✓✓';
+  const delivered = isMessageDelivered(msg);
+  ticks.textContent = read || delivered ? '✓✓' : '✓';
   ticks.classList.toggle('read', read);
+  ticks.classList.toggle('delivered', delivered && !read);
 }
 
 function closeAdminMediaPopup(){ adminMediaPopup?.classList.add('hidden'); adminMediaPopupPreview.innerHTML=''; adminMediaPopupActions.innerHTML=''; }
@@ -1100,7 +1110,7 @@ function receiveMessage(msg, options = {}) {
   if (msgGroupId !== currentGroupId) return;
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
   if (isIncoming) {
-    socket.emit('message-delivered', { id: msg.id, userId });
+    socket.emit('message-delivered', { id: msg.id, userId, groupId: msgGroupId });
   }
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : msg.type === 'audio' ? '🎤 Voice message' : msg.type === 'document' ? '📎 Document' : 'New message'));
@@ -1137,7 +1147,7 @@ socket.on('unread-message', data => {
 });
 
 function markMessageRead(msg) {
-  if (!msg || !msg.id || msg.userId === userId || readSent.has(msg.id) || !chatOpen) return;
+  if (!msg || !msg.id || String(msg.userId || '') === String(userId || '') || readSent.has(msg.id) || !chatOpen) return;
   readSent.add(msg.id);
   socket.emit('message-read', { id: msg.id, userId });
 }
@@ -1153,7 +1163,8 @@ socket.on('message-delivered', data => {
   if (!data || !data.id || !data.userId || (data.groupId && data.groupId !== currentGroupId)) return;
   const msg = messages.get(data.id); if (!msg) return;
   msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
-  if (!msg.deliveredTo.includes(data.userId)) msg.deliveredTo.push(data.userId);
+  if (!msg.deliveredTo.map(String).includes(String(data.userId))) msg.deliveredTo.push(String(data.userId));
+  updateTicks(msg);
 });
 
 socket.on('message-read', data => {
