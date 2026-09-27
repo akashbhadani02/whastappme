@@ -2137,7 +2137,30 @@ function openAdminRecycle(groupId, groupName) {
 
 adminRecycleClose?.addEventListener('click',()=>adminRecycleModal.classList.add('hidden'));
 adminMainRecycleBtn?.addEventListener('click',()=>openAdminRecycle('main','Main Recycle Bin'));
+
 adminMainRecycleFromGroupsBtn?.addEventListener('click',()=>openAdminRecycle('main','Main Recycle Bin'));
+
+// ABC = permanent MongoDB chat cleanup. This intentionally does NOT remove
+// groups, users, passwords, call recordings or notification subscriptions.
+document.querySelector('#adminAbcClearBtn')?.addEventListener('click', async () => {
+  const first = prompt('ABC: Permanently delete ALL chat messages and chat media from MongoDB. Type ABC to continue:');
+  if (first !== 'ABC') return;
+  const second = prompt('This cannot be undone. Type DELETE again to confirm:');
+  if (second !== 'DELETE') return;
+  try {
+    const r = await fetch('/api/admin/abc-clear-messages', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:PASSWORD})
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'ABC cleanup failed');
+    showToast(`ABC complete: ${d.messagesDeleted || 0} messages and ${d.mediaDeleted || 0} media deleted`);
+    if (typeof loadAdminRecycle === 'function' && adminRecycleModal && !adminRecycleModal.classList.contains('hidden')) loadAdminRecycle();
+  } catch (e) {
+    showToast(e.message || 'ABC cleanup failed');
+  }
+});
+
 adminRecycleModal?.addEventListener('click',e=>{if(e.target===adminRecycleModal)adminRecycleModal.classList.add('hidden');});
 adminRecycleRefresh?.addEventListener('click',loadAdminRecycle);
 adminRecycleEmpty?.addEventListener('click',async()=>{

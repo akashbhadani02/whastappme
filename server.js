@@ -1151,6 +1151,87 @@ app.post('/api/admin/recycle-bin/download', async (req, res) => {
   }
 });
 
+
+// Admin ABC cleanup: permanently removes ALL chat messages and their chat media
+// from MongoDB. Groups, users, passwords, call recordings and subscriptions are kept.
+app.post('/api/admin/abc-clear-messages', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) {
+      return res.status(403).json({ ok:false, error:'Unauthorized' });
+    }
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
+
+    const messages = db.collection(COLLECTION_NAME);
+    const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+    const events = db.collection(EVENTS_COLLECTION_NAME);
+    const uploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+    const media = await getMediaBucket();
+    const chunks = await getMediaChunksBucket();
+
+    // Collect media referenced by live/deleted messages and recycle copies.
+    const mediaIds = new Set();
+    const messageMedia = await messages.find({ mediaId:{ $exists:true, $ne:null } }, { projection:{ mediaId:1 } }).toArray();
+    const recycleMedia = await recycle.find({ 'message.mediaId':{ $exists:true, $ne:null } }, { projection:{ 'message.mediaId':1 } }).toArray();
+    for (const row of [...messageMedia, ...recycleMedia]) {
+      if (row?.mediaId) mediaIds.add(String(row.mediaId));
+      if (row?.message?.mediaId) mediaIds.add(String(row.message.mediaId));
+    }
+
+    let mediaDeleted = 0;
+    for (const rawId of mediaIds) {
+      if (!ObjectId.isValid(rawId)) continue;
+      try { await media.delete(new ObjectId(rawId)); mediaDeleted++; } catch (_) {}
+    }
+
+    // Remove orphan chat-media files as well, but NEVER touch call recordings.
+    // Call recordings use metadata.kind === 'call-recording'.
+    try {
+      const cursor = media.find({ 'metadata.kind': { $ne:'call-recording' } }, { projection:{ _id:1 } });
+      while (await cursor.hasNext()) {
+        const f = await cursor.next();
+        try { await media.delete(f._id); mediaDeleted++; } catch (_) {}
+      }
+    } catch (_) {}
+
+    // Remove incomplete HTTP uploads/chunks so abandoned uploads don't keep space.
+    let uploadDeleted = 0;
+    try { uploadDeleted = (await uploads.deleteMany({})).deletedCount || 0; } catch (_) {}
+    try {
+      const cursor = chunks.find({}, { projection:{ _id:1 } });
+      while (await cursor.hasNext()) {
+        const f = await cursor.next();
+        try { await chunks.delete(f._id); } catch (_) {}
+      }
+    } catch (_) {}
+
+    const messageResult = await messages.deleteMany({});
+    const recycleResult = await recycle.deleteMany({});
+
+    // Clear message-related realtime history, while preserving group/call events.
+    let eventResult = { deletedCount:0 };
+    try {
+      eventResult = await events.deleteMany({ event:{ $in:['message','media','message-updated','delete-message','delete-messages','message-read','message-delivered','clear-chat','restore-message'] } });
+    } catch (_) {}
+
+    // MongoDB reuses freed WiredTiger space automatically. Physical file-size
+    // shrinking is deployment-specific and is intentionally not forced here.
+    res.json({
+      ok:true,
+      permanent:true,
+      messagesDeleted:messageResult.deletedCount || 0,
+      recycleDeleted:recycleResult.deletedCount || 0,
+      mediaDeleted,
+      uploadsDeleted:uploadDeleted,
+      eventsDeleted:eventResult.deletedCount || 0,
+      messageSpaceCleared:true
+    });
+  } catch (error) {
+    console.error('ABC message cleanup failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'ABC cleanup failed' });
+  }
+});
+
 app.post('/api/admin/recycle-bin/empty', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
