@@ -505,9 +505,23 @@ app.post('/api/admin/private-chats', async (req, res) => {
 
 app.post('/api/admin/private-users/delete', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const suppliedPassword = String(req.body?.password || '');
     const userId = String(req.body?.userId || '').trim();
     if (!userId || userId.length > 200) return res.status(400).json({ ok:false, error:'Invalid user' });
+
+    // The Admin panel is already protected by the admin password. For the
+    // individual Delete User action, also allow the private user's own chat
+    // password so the user can be deleted from this list using that password.
+    let authorized = suppliedPassword === ADMIN_PASSWORD;
+    const settingsCollection = await getPrivateChatSettingsCollection();
+    let userSettings = [];
+    if (!authorized && settingsCollection) {
+      userSettings = await settingsCollection.find({
+        $or: [{ userA:userId }, { userB:userId }]
+      }).toArray();
+      authorized = userSettings.some(x => String(x.password || '') === suppliedPassword);
+    }
+    if (!authorized) return res.status(403).json({ ok:false, error:'Wrong admin or private-user password' });
 
     const db = await getDb();
     const profiles = await getUserProfilesCollection();
@@ -522,6 +536,16 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
     const privateResult = await collection.deleteMany({
       conversationId: { $regex: new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`) }
     });
+
+    let privateSettingsResult = { deletedCount:0 };
+    try {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) privateSettingsResult = await settings.deleteMany({ $or:[{ userA:userId }, { userB:userId }] });
+      fallbackPrivateChatSettings.forEach((_, key) => {
+        const parts = String(key).split(':');
+        if (parts.length === 3 && (parts[1] === userId || parts[2] === userId)) fallbackPrivateChatSettings.delete(key);
+      });
+    } catch (_) {}
 
     const mediaUploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
     let mediaResult = { deletedCount:0 };
@@ -556,6 +580,7 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
       name:String(profile.name || 'User'),
       deletedAccount:Number(profileResult.deletedCount || 0),
       deletedPrivateMessages:Number(privateResult.deletedCount || 0),
+      deletedPrivateChatSettings:Number(privateSettingsResult.deletedCount || 0),
       deletedPrivateMediaSessions:Number(mediaResult.deletedCount || 0),
       recycleBinPreserved:true
     });

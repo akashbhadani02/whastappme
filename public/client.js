@@ -2365,7 +2365,7 @@ async function loadAdminPrivateChats() {
       const passwordsForUser = privatePasswordSettings.filter(x => String(x.userA) === String(user.userId) || String(x.userB) === String(user.userId));
       row.querySelector('.admin-private-chat-password').textContent = passwordsForUser.length ? passwordsForUser.map(x => `🔑 ${x.password}`).join('  •  ') : '🔑 No password set';
       row.querySelector('.admin-delete-btn').addEventListener('click', () => {
-        requestPassword('Delete user permanently', `Permanently delete ${String(user.name || user.userId || 'this user')} and their private chat data? Their account will be deleted. Main Recycle Bin data will NOT be deleted.`, async () => {
+        requestPassword('Delete user permanently', `Permanently delete ${String(user.name || user.userId || 'this user')} and their private chat data? Enter the Admin password or this user's private-chat password. Main Recycle Bin data will NOT be deleted.`, async () => {
           try {
             const rr = await fetch('/api/admin/private-users/delete', {
               method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, userId:user.userId})
