@@ -376,7 +376,7 @@ app.post('/api/auth/login', async (req,res)=>{
             { name: { $regex: `^${safe}$`, $options:'i' } },
             { displayName: { $regex: `^${safe}$`, $options:'i' } }
           ] },
-          { $or: [ { adminCreated:true }, { adminCreated:{ $exists:false } } ] },
+          { adminCreated:true },
           { deleted: { $ne:true } },
           { deletedAt: { $exists:false } },
           { enabled: { $ne:false } }
@@ -386,7 +386,7 @@ app.post('/api/auth/login', async (req,res)=>{
     if (!user) {
       user = [...fallbackUsers.values()].find(u =>
         u.deleted!==true && !u.deletedAt && u.enabled!==false &&
-        (u.adminCreated===true || u.adminCreated===undefined) &&
+        u.adminCreated===true &&
         (String(u.name||'').trim().toLowerCase()===wanted || String(u.displayName||'').trim().toLowerCase()===wanted)
       ) || null;
     }
@@ -2160,6 +2160,28 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Socket account login failed:', error.message);
       if (typeof ack === 'function') ack({ok:false,error:'Login failed. Please try again.'});
+    }
+  });
+
+  socket.on('resume-account', async (data, ack) => {
+    const requestedId = String(data?.userId || '').trim().toUpperCase();
+    if (!requestedId) { if (typeof ack === 'function') ack({ok:false,error:'Account session is missing.'}); return; }
+    try {
+      const profiles = await getUserProfilesCollection();
+      const profile = profiles ? await profiles.findOne({ _id: requestedId, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false} }) : fallbackUsers.get(requestedId);
+      if (!profile || profile.adminCreated !== true || profile.deleted === true || profile.deletedAt || profile.enabled === false) {
+        if (typeof ack === 'function') ack({ok:false,error:'Account session is no longer valid.'});
+        return;
+      }
+      const resolvedName = String(profile.name || profile.displayName || requestedId).trim();
+      socket.userId = requestedId;
+      socket.callDeviceId = String(data?.deviceId || '').slice(0,160);
+      fallbackUsers.set(requestedId,{id:requestedId,name:resolvedName,updatedAt:new Date(),adminCreated:true,enabled:true});
+      socket.emit('user-profile',{userId:requestedId,name:resolvedName});
+      if (typeof ack === 'function') ack({ok:true,user:{id:requestedId,name:resolvedName}});
+    } catch (error) {
+      console.error('Account resume failed:', error.message);
+      if (typeof ack === 'function') ack({ok:false,error:'Could not restore account session.'});
     }
   });
 

@@ -1434,7 +1434,7 @@ async function clientDmId(peerId) {
 }
 function ensureSocketUserRegistered() {
   return new Promise((resolve, reject) => {
-    if (!userId) return reject(new Error('Please enter your name first.'));
+    if (!userId) return reject(new Error('Please login first.'));
     if (!socket.connected) return reject(new Error('Connecting to chat server…'));
     let done = false;
     const finish = (ok, err) => {
@@ -1444,9 +1444,15 @@ function ensureSocketUserRegistered() {
       if (ok) resolve(); else reject(new Error(err || 'Unable to connect to chat server.'));
     };
     const timer = setTimeout(() => finish(false, 'Chat connection timed out.'), 8000);
-    socket.emit('register-user', { userId, name, deviceId }, response => {
-      if (response?.ok) finish(true);
-      else finish(false, response?.error || 'User registration failed.');
+    socket.emit('resume-account', { userId, deviceId }, response => {
+      if (response?.ok) {
+        if (response.user?.name) {
+          name = String(response.user.name).trim();
+          localStorage.setItem('wa_name', name);
+          updateMyNameUI();
+        }
+        finish(true);
+      } else finish(false, response?.error || 'Account session could not be restored.');
     });
   });
 }
@@ -2483,7 +2489,15 @@ async function finishAccountLogin() {
       accountError.textContent = 'Chat server is not connected. Please try Login again.';
       return;
     }
-    try { await ensureSocketUserRegistered(); } catch (e) {
+    try {
+      const socketLogin = await socketAccountLogin(enteredName, enteredPassword);
+      if (!socketLogin?.ok) throw new Error(socketLogin?.error || 'Could not connect this account.');
+      userId = String(socketLogin.user?.id || userId).trim().toUpperCase();
+      name = String(socketLogin.user?.name || name).trim();
+      localStorage.setItem('wa_user_id', userId);
+      localStorage.setItem('wa_name', name);
+      localStorage.setItem('wa_logged_in', '1');
+    } catch (e) {
       localStorage.removeItem('wa_user_id');
       localStorage.removeItem('wa_name');
       localStorage.removeItem('wa_logged_in');
@@ -2518,6 +2532,10 @@ async function validateSavedLogin() {
     name = String(d.user.name || name);
     localStorage.setItem('wa_user_id', userId);
     localStorage.setItem('wa_name', name);
+    try { if (!socket.connected) socket.connect(); } catch (_) {}
+    const connected = await waitForSocketConnection(10000);
+    if (!connected) throw new Error('Chat server is not connected.');
+    await ensureSocketUserRegistered();
     closeAccountModalAfterLogin();
     return true;
   } catch (_) {
