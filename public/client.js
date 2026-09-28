@@ -1373,7 +1373,7 @@ async function startNewChatWithUser(user){
   closeNewChatModal();
   requestUserPassword(user, async () => {
     try { await openDirectChat(user, pendingVerifiedUserPassword); showToast(`${user.name || user.id} chat opened`); }
-    catch (err) { showToast(err?.message || 'Unable to open this chat. Please try again.'); }
+    catch (_) { showToast('Unable to open this chat. Please try again.'); }
   });
 }
 
@@ -1405,7 +1405,7 @@ function renderGroupList() {
     summary.querySelector('strong').textContent=user.name || user.id;
     summary.querySelector('.group-unread-badge').textContent=unread>0?(unread>99?'99+':String(unread)):'';
     if(unread>0) summary.querySelector('.group-unread-badge').style.display='inline-flex';
-    button.append(avatar,summary); button.addEventListener('click',()=>requestUserPassword(user, async()=>{ try{ await openDirectChat(user,pendingVerifiedUserPassword); }catch(err){ showToast(err?.message || 'Unable to open this chat.'); } })); chatList.appendChild(button);
+    button.append(avatar,summary); button.addEventListener('click',()=>requestUserPassword(user, async()=>{ try{ await openDirectChat(user,pendingVerifiedUserPassword); }catch(_){ showToast('Unable to open this chat.'); } })); chatList.appendChild(button);
   });
 }
 function makeClientDirectChatId(peerId) {
@@ -1424,17 +1424,11 @@ async function refreshContacts() {
   } catch (_) {}
 }
 async function clientDmId(peerId) {
-  const key = String(peerId || '').trim().toUpperCase();
-  if (!key || !userId) return '';
-  const cached = directChatIds.get(key);
-  if (cached) return cached;
-  const r = await fetch(`/api/direct-chat-id?userId=${encodeURIComponent(userId)}&peerUserId=${encodeURIComponent(key)}`, {cache:'no-store'});
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok || !d.ok || !d.chatId) throw new Error(d.error || 'Could not create chat ID.');
-  directChatIds.set(key, String(d.chatId));
-  return String(d.chatId);
+  const ids=[String(userId||'').trim(),String(peerId||'').trim()].sort();
+  const data=new TextEncoder().encode(ids.join(':'));
+  const digest=await crypto.subtle.digest('SHA-256',data);
+  return 'dm-'+Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,48);
 }
-
 function ensureSocketUserRegistered() {
   return new Promise((resolve, reject) => {
     if (!userId) return reject(new Error('Please enter your name first.'));
@@ -1448,10 +1442,7 @@ function ensureSocketUserRegistered() {
     };
     const timer = setTimeout(() => finish(false, 'Chat connection timed out.'), 8000);
     socket.emit('register-user', { userId, name, deviceId }, response => {
-      if (response?.ok) {
-        if (response.name) { name = String(response.name).trim(); localStorage.setItem('wa_name', name); updateMyNameUI(); }
-        finish(true);
-      }
+      if (response?.ok) finish(true);
       else finish(false, response?.error || 'User registration failed.');
     });
   });
@@ -1467,74 +1458,46 @@ function joinDirectChat(chatId, peerUserId, peerPassword) {
       clearTimeout(timer);
       if (ok) resolve(); else reject(new Error(err || 'Unable to open chat.'));
     };
-    const timer = setTimeout(() => finish(false, 'Chat server did not respond. Please refresh the page.'), 10000);
-    socket.emit('open-direct-chat', { peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
-      if (response?.ok) {
-        if (response.peerName) {
-          groupName = String(response.peerName);
-          updateGroupNameUI();
-        }
-        finish(true);
-      } else {
-        finish(false, response?.error || 'Unable to open chat.');
-      }
+    const timer = setTimeout(() => finish(false, 'Unable to open chat. Please check your connection.'), 8000);
+    socket.emit('join-group', { groupId: chatId, peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
+      if (response?.ok) finish(true);
+      else finish(false, response?.error || 'Unable to open chat.');
     });
   });
 }
 
 async function openDirectChat(user, verifiedPassword) {
   if (!user || !user.id) throw new Error('Invalid user.');
-  if (!userId) { openAccountModal(true); throw new Error('Please login with your admin-created account first.'); }
+  if (!userId) { openAccountModal(true); throw new Error('Please enter your name first.'); }
+  if (!name) { openAccountModal(true); throw new Error('Please enter your name first.'); }
   if (!socket.connected) throw new Error('Connecting to chat server…');
 
   await ensureSocketUserRegistered();
-  const peerId = String(user.id).trim().toUpperCase();
-  const chatId = await clientDmId(peerId);
-  if (!chatId) throw new Error('Could not create this chat.');
-  directChatIds.set(peerId, chatId);
-
-  // Switch the client state BEFORE the server sends the history event.
-  // Otherwise the history can arrive while currentGroupId still points to the
-  // previous chat and receiveMessage() correctly (but incorrectly for this
-  // transition) discards it as a cross-chat message.
-  const previousState = {
-    groupId: currentGroupId, peerId: currentPeerUserId, name: groupName,
-    chatOpen, html: messageArea?.innerHTML || ''
-  };
-  currentPeerUserId = peerId;
+  const chatId = await clientDmId(user.id);
+  directChatIds.set(String(user.id), chatId);
+  currentPeerUserId = String(user.id);
   currentGroupId = chatId;
-  groupName = String(user.name || peerId);
-  messages.clear();
-  deletedIds.clear();
-  readSent.clear();
-  lastRenderedDate = '';
-  lastSyncAt = '';
-  if (messageArea) messageArea.innerHTML = '';
-  updateGroupNameUI();
-
-  try {
-    await joinDirectChat(chatId, peerId, verifiedPassword);
-  } catch (err) {
-    // Restore the previous view if authorization/socket join fails.
-    currentGroupId = previousState.groupId;
-    currentPeerUserId = previousState.peerId;
-    groupName = previousState.name;
-    if (messageArea) messageArea.innerHTML = previousState.html;
-    updateGroupNameUI();
-    throw err;
-  }
-
+  groupName = String(user.name || user.id);
   localStorage.setItem('wa_chat_id', chatId);
   localStorage.setItem('wa_chat_name', groupName);
   localStorage.setItem('wa_peer_user_id', currentPeerUserId);
+
+  await joinDirectChat(chatId, currentPeerUserId, verifiedPassword);
+
   setUnreadCount(chatId, 0);
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   composer?.classList.remove('hidden');
   app?.classList.remove('group-locked');
+  messages.clear();
+  deletedIds.clear();
+  readSent.clear();
+  lastRenderedDate = '';
+  lastSyncAt = '';
+  messageArea.innerHTML = '';
+  updateGroupNameUI();
   renderGroupList();
-  // Socket history is now associated with the correct chat. The REST sync is
-  // kept as a recovery path for refreshes/serverless instances.
+  loadLocalMessageHistory();
   await syncMessages();
   openChat();
 }
@@ -2424,9 +2387,6 @@ const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
 const accountPasswordInput = document.querySelector('#accountPasswordInput');
-const meAccountName = document.querySelector('#meAccountName');
-const meAccountId = document.querySelector('#meAccountId');
-const meAccount = document.querySelector('#meAccount');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
@@ -2437,63 +2397,98 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = name || '';
-  if (accountPasswordInput) accountPasswordInput.value = '';
+  accountNameInput.value = '';
+  accountPasswordInput.value = '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
   accountModal.classList.remove('hidden');
+  document.querySelector('.app-shell')?.classList.add('login-locked');
   setTimeout(() => accountNameInput.focus(), 50);
 }
 
-async function finishAccountLogin() {
-  const entered = String(accountNameInput.value || '').trim();
-  const password = String(accountPasswordInput?.value || '');
-  if (!entered) { accountError.textContent = 'Enter your name'; return; }
-  if (!password) { accountError.textContent = 'Enter your password'; return; }
-  accountError.textContent = 'Checking login…';
-  try {
-    // Authenticate by NAME + PASSWORD in one server-side operation. The generated
-    // User ID is only used internally after authentication; users never need to
-    // remember or type it.
-    const rr = await fetch('/api/users/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:entered,password}),cache:'no-store'});
-    const resolved = await rr.json().catch(()=>({}));
-    if (!rr.ok || !resolved.ok || !resolved.user?.id) { accountError.textContent = resolved.error || 'Login failed'; return; }
-    const resolvedId = String(resolved.user.id).trim().toUpperCase();
+function closeAccountModalAfterLogin() {
+  accountModal.classList.add('hidden');
+  document.querySelector('.app-shell')?.classList.remove('login-locked');
+}
 
-    // Socket.IO can still be connecting on the very first page load. Wait for
-    // the existing socket instead of rejecting a valid login prematurely.
-    if (!socket.connected) {
-      accountError.textContent = 'Connecting…';
-      await new Promise((resolve,reject)=>{
-        const started=Date.now();
-        const check=()=>{
-          if(socket.connected) return resolve();
-          if(Date.now()-started>10000) return reject(new Error('Chat server connection timed out.'));
-          setTimeout(check,100);
-        };
-        check();
-      });
-    }
-    const reg = await new Promise(resolve => socket.emit('register-user', { userId: resolvedId, name:String(resolved.user.name||entered), deviceId }, resolve));
-    if (!reg?.ok) { localStorage.removeItem('wa_user_id'); localStorage.removeItem('wa_name'); userId=''; name=''; accountError.textContent = reg?.error || 'Could not open your account'; return; }
-    userId = String(reg.userId || resolvedId).trim().toUpperCase();
-    name = String(reg.name || resolved.user.name || userId).trim();
+async function finishAccountLogin() {
+  const enteredName = String(accountNameInput.value || '').trim();
+  const enteredPassword = String(accountPasswordInput.value || '');
+  if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput.focus(); return; }
+  if (!enteredPassword) { accountError.textContent = 'Enter your password'; accountPasswordInput.focus(); return; }
+  accountContinueBtn.disabled = true;
+  accountContinueBtn.textContent = 'Logging in…';
+  accountError.textContent = '';
+  try {
+    const r = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:enteredName,password:enteredPassword}), cache:'no-store' });
+    const response = await r.json().catch(()=>({ok:false,error:'Invalid server response'}));
+    if (!r.ok || !response?.ok) { accountError.textContent = response?.error || 'Login failed'; return; }
+    userId = String(response.user?.id || '').trim().toUpperCase();
+    name = String(response.user?.name || enteredName).trim();
+    if (!userId) { accountError.textContent = 'Login failed: account ID missing'; return; }
     localStorage.setItem('wa_user_id', userId);
     localStorage.setItem('wa_name', name);
-    socket.emit('presence-login', { userId, deviceId });
-    accountModal.classList.add('hidden');
-    document.body.classList.add('logged-in');
-    appMenu?.classList.add('hidden');
-    updateMyNameUI();
-    refreshContacts();
-    showToast('Logged in as ' + name);
-  } catch (e) { accountError.textContent = e?.message || 'Could not connect to chat server'; }
+    localStorage.setItem('wa_logged_in', '1');
+    socket.emit('register-user', { userId, deviceId }, reg => {
+      if (!reg?.ok) { accountError.textContent = reg?.error || 'Could not connect this account'; return; }
+      socket.emit('presence-login', { userId, deviceId });
+      closeAccountModalAfterLogin();
+      updateMyNameUI();
+      refreshContacts();
+      refreshAllUnreadCounts();
+      showToast('Logged in as ' + name);
+    });
+  } catch (e) {
+    accountError.textContent = 'Server is not reachable. Please try again.';
+  } finally {
+    accountContinueBtn.disabled = false;
+    accountContinueBtn.textContent = 'Login';
+  }
+}
+
+async function validateSavedLogin() {
+  if (!userId || !name || localStorage.getItem('wa_logged_in') !== '1') {
+    openAccountModal(true);
+    return false;
+  }
+  try {
+    const r = await fetch('/api/auth/validate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId}), cache:'no-store' });
+    const d = await r.json().catch(()=>({ok:false}));
+    if (!r.ok || !d?.ok) throw new Error('invalid');
+    userId = String(d.user.id).toUpperCase();
+    name = String(d.user.name || name);
+    localStorage.setItem('wa_user_id', userId);
+    localStorage.setItem('wa_name', name);
+    closeAccountModalAfterLogin();
+    return true;
+  } catch (_) {
+    localStorage.removeItem('wa_user_id');
+    localStorage.removeItem('wa_name');
+    localStorage.removeItem('wa_logged_in');
+    userId = ''; name = '';
+    openAccountModal(true);
+    return false;
+  }
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
-accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') accountPasswordInput.focus(); });
 accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+
+const logoutBtn = document.querySelector('#logoutBtn');
+logoutBtn?.addEventListener('click', () => {
+  appMenu?.classList.add('hidden');
+  try { socket.emit('presence-logout', { userId, deviceId }); } catch (_) {}
+  try { socket.disconnect(); } catch (_) {}
+  localStorage.removeItem('wa_user_id');
+  localStorage.removeItem('wa_name');
+  localStorage.removeItem('wa_logged_in');
+  localStorage.removeItem('wa_peer_user_id');
+  localStorage.removeItem('wa_chat_id');
+  userId = ''; name = ''; currentPeerUserId = ''; currentGroupId = '';
+  location.reload();
+});
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');
@@ -2508,8 +2503,6 @@ function firstCharacter(value, fallback = 'W') {
 
 function updateMyNameUI() {
   if (meAvatar) meAvatar.textContent = firstCharacter(name);
-  if (meAccountName) meAccountName.textContent = name || 'Not logged in';
-  if (meAccountId) meAccountId.textContent = userId ? ('ID: ' + userId) : 'Login required';
 }
 
 function updateGroupNameUI() {
@@ -2606,31 +2599,14 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
-
-const logoutBtn = document.querySelector('#logoutBtn');
-logoutBtn?.addEventListener('click', () => {
-  if (userId) socket.emit('presence-logout', { userId, deviceId });
-  localStorage.removeItem('wa_user_id');
-  localStorage.removeItem('wa_name');
-  userId = ''; name = ''; currentGroupId = ''; currentPeerUserId = '';
-  if (accountPasswordInput) accountPasswordInput.value = '';
-  if (typeof closeCurrentChat === 'function') { try { closeCurrentChat(); } catch (_) {} }
-  document.querySelector('#appMenu')?.classList.add('hidden');
-  document.body.classList.remove('logged-in');
-  openAccountModal(true);
-  updateMyNameUI();
-});
-
-// Always start at the login screen. Existing local identity is not trusted as a login.
-if (userId) { try { socket.emit('presence-logout', { userId, deviceId }); } catch (_) {} }
-userId = '';
-name = '';
-localStorage.removeItem('wa_user_id');
-localStorage.removeItem('wa_name');
-// The user must enter their admin-created name and password again.
-document.body.classList.remove('logged-in');
-openAccountModal(true);
 updateMyNameUI();
+updateGroupNameUI();
+validateSavedLogin().then(ok => {
+  if (ok) {
+    try { socket.connect(); } catch (_) {}
+    refreshContacts();
+  }
+});
 updateGroupNameUI();
 nameSave.addEventListener('click', saveUserName);
 nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveUserName(); });
@@ -2642,7 +2618,6 @@ groupNameClose.addEventListener('click', closeGroupNameModal);
 groupNameModal.addEventListener('click', e => { if (e.target === groupNameModal) closeGroupNameModal(); });
 
 meAvatar.addEventListener('click', openUserNameModal);
-meAccount?.addEventListener('click', (e) => { if (e.target === meAvatar) return; if (userId) openUserNameModal(); });
 meAvatar.setAttribute('title', 'Change your name');
 meAvatar.setAttribute('aria-label', 'Change your name');
 meAvatar.style.cursor = 'pointer';

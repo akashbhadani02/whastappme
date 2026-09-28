@@ -359,47 +359,34 @@ app.put('/api/admin/users/:id', async (req, res) => {
   } catch(e){ res.status(500).json({ok:false,error:'Could not update user'}); }
 });
 
-app.post('/api/users/login', async (req,res)=>{
+app.post('/api/auth/login', async (req,res)=>{
   try {
-    const name=String(req.body?.name||'').trim().slice(0,60);
-    const password=String(req.body?.password||'');
-    if(!name || !password) return res.status(400).json({ok:false,error:'Name and password are required'});
-    const profiles=await getUserProfilesCollection();
-    let candidates=[];
-    if(profiles){
-      candidates=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false}}).project({_id:1,name:1,userPassword:1}).limit(5000).toArray();
+    const name = String(req.body?.name || '').trim().slice(0,60);
+    const password = String(req.body?.password || '');
+    if (!name || !password) return res.status(400).json({ok:false,error:'Name and password are required'});
+    const profiles = await getUserProfilesCollection();
+    let user = null;
+    if (profiles) {
+      user = await profiles.findOne({ name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`, $options:'i' }, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false} });
     } else {
-      candidates=[...fallbackUsers.values()].filter(u=>u.adminCreated===true&&u.enabled!==false&&u.deleted!==true&&!u.deletedAt);
+      const wanted = name.toLowerCase();
+      user = [...fallbackUsers.values()].find(u => u.adminCreated===true && u.deleted!==true && !u.deletedAt && u.enabled!==false && String(u.name||'').trim().toLowerCase()===wanted) || null;
     }
-    const matches=candidates.filter(u=>String(u.name||'').trim().toLowerCase()===name.toLowerCase());
-    if(matches.length===0) return res.status(404).json({ok:false,error:'Name not found. Ask the admin to create your account.'});
-    if(matches.length>1) return res.status(409).json({ok:false,error:'More than one account has this name. Ask the admin to use a unique name.'});
-    const u=matches[0];
-    if(String(u.userPassword||'')!==password) return res.status(401).json({ok:false,error:'Wrong password'});
-    res.json({ok:true,user:{id:String(u._id||u.id),name:String(u.name||name)}});
-  } catch(e){ console.error('Login failed:',e.message); res.status(500).json({ok:false,error:'Could not login right now'}); }
+    if (!user) return res.status(404).json({ok:false,error:'Name not found. Ask admin to create your account.'});
+    if (String(user.userPassword||'') !== password) return res.status(401).json({ok:false,error:'Wrong password'});
+    res.json({ok:true,user:{id:String(user._id||user.id),name:String(user.name||'')}});
+  } catch(e) { console.error('Login failed:',e.message); res.status(500).json({ok:false,error:'Login failed. Please try again.'}); }
 });
 
-app.post('/api/users/resolve-login', async (req,res)=>{
+app.post('/api/auth/validate', async (req,res)=>{
   try {
-    const value=String(req.body?.value||'').trim();
-    if(!value) return res.status(400).json({ok:false,error:'Enter your name or User ID'});
+    const id=String(req.body?.userId||'').trim().toUpperCase();
+    if(!id) return res.status(400).json({ok:false});
     const profiles=await getUserProfilesCollection();
-    let users=[];
-    if(profiles){
-      const normalized=value.toUpperCase();
-      users=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false},$or:[{_id:normalized},{name:value}]}).project({_id:1,name:1}).limit(10).toArray();
-      if(!users.length) users=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false}}).project({_id:1,name:1}).limit(5000).toArray();
-    } else {
-      users=[...fallbackUsers.values()].filter(u=>u.adminCreated===true&&u.enabled!==false&&u.deleted!==true&&!u.deletedAt);
-    }
-    const exactId=users.find(u=>String(u._id||u.id).toUpperCase()===value.toUpperCase());
-    if(exactId) return res.json({ok:true,user:{id:String(exactId._id||exactId.id),name:String(exactId.name||exactId._id||exactId.id)}});
-    const exactName=users.filter(u=>String(u.name||'').trim().toLowerCase()===value.toLowerCase());
-    if(exactName.length===1){const u=exactName[0];return res.json({ok:true,user:{id:String(u._id||u.id),name:String(u.name||u._id||u.id)}});}
-    if(exactName.length>1) return res.status(409).json({ok:false,error:'More than one account has this name. Enter your User ID.'});
-    return res.status(404).json({ok:false,error:'Account not found. Ask the admin to create your account.'});
-  }catch(e){console.error('Resolve login failed:',e.message);res.status(500).json({ok:false,error:'Could not find your account'});}
+    const user=profiles ? await profiles.findOne({_id:id,adminCreated:true,deleted:{$ne:true},deletedAt:{$exists:false},enabled:{$ne:false}}) : fallbackUsers.get(id);
+    if(!user || user.adminCreated!==true || user.deleted===true || user.deletedAt || user.enabled===false) return res.status(401).json({ok:false});
+    res.json({ok:true,user:{id:String(user._id||user.id),name:String(user.name||'')}});
+  } catch(e){ res.status(500).json({ok:false}); }
 });
 
 app.post('/api/users/verify-password', async (req,res)=>{
@@ -412,20 +399,6 @@ app.post('/api/users/verify-password', async (req,res)=>{
     if(String(user.userPassword||'')!==password) return res.status(401).json({ok:false,error:'Wrong password'});
     res.json({ok:true});
   } catch(e){ res.status(500).json({ok:false,error:'Could not verify password'}); }
-});
-
-app.get('/api/direct-chat-id', async (req, res) => {
-  try {
-    const userA = String(req.query?.userId || '').trim().toUpperCase();
-    const userB = String(req.query?.peerUserId || '').trim().toUpperCase();
-    if (!userA || !userB || userA === userB) return res.status(400).json({ok:false,error:'Invalid users'});
-    // Keep the same ID format as the Socket.IO direct-chat room. This endpoint
-    // avoids depending on browser Web Crypto support.
-    res.setHeader('Cache-Control','no-store');
-    res.json({ok:true, chatId: makeDirectChatId(userA, userB)});
-  } catch (e) {
-    res.status(500).json({ok:false,error:'Could not create chat ID'});
-  }
 });
 
 app.get('/api/users', async (req, res) => {
@@ -2157,18 +2130,17 @@ io.on('connection', async (socket) => {
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
-    let displayName = requestedName || socket.userId;
     if (socket.userId) {
       const profiles = await getUserProfilesCollection();
       const profile = profiles ? await profiles.findOne({ _id: socket.userId }) : fallbackUsers.get(socket.userId);
-      displayName = String(profile?.name || requestedName || socket.userId).slice(0,40);
-      fallbackUsers.set(socket.userId, { id: socket.userId, name: displayName, userPassword: profile?.userPassword || fallbackUsers.get(socket.userId)?.userPassword || '', updatedAt: new Date(), adminCreated: profile?.adminCreated !== false, enabled: profile?.enabled !== false });
+      const displayName = String(profile?.name || requestedName || socket.userId).slice(0,40);
+      fallbackUsers.set(socket.userId, { id: socket.userId, name: displayName, updatedAt: new Date(), adminCreated: profile?.adminCreated !== false, enabled: profile?.enabled !== false });
       socket.emit('user-profile', { userId: socket.userId, name: displayName });
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
-    io.emit('user-registered', { userId: socket.userId, name: displayName });
-    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId, name: displayName });
+    io.emit('user-registered', { userId: socket.userId, name: requestedName || socket.userId });
+    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
   });
 
   socket.on('register-admin', (data, ack) => {
@@ -2198,37 +2170,6 @@ io.on('connection', async (socket) => {
       } catch (_) {}
     }
     if (typeof ack === 'function') ack({ ok: true });
-  });
-
-  socket.on('open-direct-chat', async (data, ack) => {
-    const peerUserId = String(data?.peerUserId || '').trim().toUpperCase();
-    const suppliedPassword = String(data?.password || '');
-    if (!socket.userId || !peerUserId || peerUserId === String(socket.userId).toUpperCase()) {
-      return typeof ack === 'function' && ack({ok:false,error:'Invalid chat users.'});
-    }
-    const chatId = makeDirectChatId(socket.userId, peerUserId);
-    try {
-      const profiles = await getUserProfilesCollection();
-      const peer = profiles ? await profiles.findOne({_id:peerUserId}) : fallbackUsers.get(peerUserId);
-      if (!peer || peer.adminCreated !== true || peer.deleted === true || peer.deletedAt || peer.enabled === false) {
-        return typeof ack === 'function' && ack({ok:false,error:'This user is not available.'});
-      }
-      if (String(peer.userPassword || '') !== suppliedPassword) {
-        return typeof ack === 'function' && ack({ok:false,error:'Wrong password.'});
-      }
-      const previous = normalizeGroupId(socket.groupId || '');
-      if (previous && previous !== chatId) socket.leave(`group:${previous}`);
-      socket.groupId = chatId;
-      socket.peerUserId = peerUserId;
-      socket.join(`group:${chatId}`);
-      const history = await loadMessages('', chatId);
-      socket.emit('history', history);
-      emitGroupPresence(chatId);
-      return typeof ack === 'function' && ack({ok:true,chatId,peerUserId,peerName:String(peer.name || peerUserId)});
-    } catch (error) {
-      console.error('open-direct-chat failed:', error.stack || error.message);
-      return typeof ack === 'function' && ack({ok:false,error:'Could not open chat on server.'});
-    }
   });
 
   socket.on('join-group', async (data, ack) => {

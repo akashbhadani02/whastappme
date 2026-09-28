@@ -96,26 +96,5 @@
   <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
-
-  <div class="account-modal hidden" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
-    <div class="account-card">
-      <div class="account-logo">W</div>
-      <h2 id="accountTitle">Login</h2>
-      <p class="account-subtitle">Login with your name and password</p>
-      <label for="accountNameInput">Name</label>
-      <input id="accountNameInput" type="text" maxlength="40" autocomplete="username" placeholder="Enter your name">
-      <label for="accountPasswordInput">Password</label>
-      <input id="accountPasswordInput" type="password" maxlength="120" autocomplete="current-password" placeholder="Enter your password">
-      <div class="account-error" id="accountError"></div>
-      <div class="account-generated" id="accountGenerated"></div>
-      <button class="account-login-btn" id="accountContinueBtn" type="button">Login</button>
-      <div class="account-note">Your account must be created by the admin.</div>
-    </div>
-  </div>
-
-  <div class="app-menu hidden" id="appMenu">
-    <button type="button" id="accountMenuBtn">👤 Account</button>
-    <button type="button" id="logoutBtn">↪ Logout</button>
-  </div>
 </body>
 </html>
