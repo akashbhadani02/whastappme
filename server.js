@@ -32,12 +32,6 @@ const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const DEFAULT_GROUP_ID = 'main';
-const fallbackUsers = new Map();
-function makeDirectChatId(a, b) {
-  const ids = [String(a || '').trim(), String(b || '').trim()].sort();
-  return 'dm-' + crypto.createHash('sha256').update(ids.join(':')).digest('hex').slice(0, 48);
-}
-function isDirectChatId(id) { return /^dm-[a-f0-9]{48}$/.test(String(id || '')); }
 // In-memory fallback keeps group/password management working even when MongoDB
 // is not configured. MongoDB is still used automatically when MONGODB_URI exists.
 const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
@@ -158,6 +152,212 @@ async function getUserProfilesCollection() {
   const db = await getDb();
   return db ? db.collection(USER_PROFILES_COLLECTION_NAME) : null;
 }
+
+// ---------------------------------------------------------------------------
+// Clean account authentication / private-chat layer.
+// The legacy group system remains available for existing features, but user
+// login and 1-to-1 chats use this account layer exclusively.
+// ---------------------------------------------------------------------------
+const AUTH_SECRET = crypto.createHash('sha256')
+  .update(`${MONGODB_URI || 'local'}:${ADMIN_PASSWORD}:account-auth`)
+  .digest();
+
+function authTokenFor(userId) {
+  const payload = Buffer.from(JSON.stringify({
+    userId: String(userId),
+    exp: Date.now() + 30 * 24 * 60 * 60 * 1000
+  })).toString('base64url');
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function userIdFromAuthToken(token) {
+  try {
+    const [payload, sig] = String(token || '').split('.');
+    if (!payload || !sig) return '';
+    const expected = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return '';
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!data?.userId || Number(data.exp) < Date.now()) return '';
+    return String(data.userId);
+  } catch (_) { return ''; }
+}
+
+function requestAuthUserId(req) {
+  const header = String(req.get('Authorization') || '');
+  const token = header.startsWith('Bearer ') ? header.slice(7) : String(req.body?.token || req.query?.token || '');
+  return userIdFromAuthToken(token);
+}
+
+function cleanUserDoc(doc) {
+  if (!doc) return null;
+  return {
+    id: String(doc._id || doc.userId || ''),
+    name: String(doc.name || doc.displayName || '').trim().slice(0, 80),
+    enabled: doc.enabled !== false,
+  };
+}
+
+async function findAccountByName(name, password) {
+  const profiles = await getUserProfilesCollection();
+  if (!profiles) return null;
+  const wanted = String(name || '').trim();
+  if (!wanted || !password) return null;
+  const docs = await profiles.find({
+    $or: [
+      { name: { $regex: `^${wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } },
+      { displayName: { $regex: `^${wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } }
+    ],
+    deleted: { $ne: true },
+    deletedAt: { $exists: false },
+    enabled: { $ne: false }
+  }).limit(10).toArray();
+  for (const doc of docs) {
+    const stored = String(doc.userPassword ?? doc.password ?? doc.pass ?? '');
+    if (stored && stored === String(password)) return doc;
+  }
+  return null;
+}
+
+async function findActiveAccountById(id) {
+  const profiles = await getUserProfilesCollection();
+  if (!profiles || !id) return null;
+  return profiles.findOne({
+    _id: String(id),
+    deleted: { $ne: true },
+    deletedAt: { $exists: false },
+    enabled: { $ne: false }
+  });
+}
+
+function directChatId(a, b) {
+  const ids = [String(a || '').trim(), String(b || '').trim()].sort();
+  return `dm-${crypto.createHash('sha256').update(ids.join(':')).digest('hex').slice(0, 48)}`;
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const password = String(req.body?.password || '');
+    if (!name || !password) return res.status(400).json({ ok: false, error: 'Name and password are required.' });
+    const account = await findAccountByName(name, password);
+    if (!account) return res.status(401).json({ ok: false, error: 'Invalid name or password.' });
+    const user = cleanUserDoc(account);
+    if (!user?.id || !user.name) return res.status(500).json({ ok: false, error: 'User account is incomplete.' });
+    const token = authTokenFor(user.id);
+    res.json({ ok: true, token, user });
+  } catch (error) {
+    console.error('Account login failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Login failed. Check MongoDB connection.' });
+  }
+});
+
+app.get('/api/auth/session', async (req, res) => {
+  try {
+    const userId = requestAuthUserId(req);
+    if (!userId) return res.status(401).json({ ok: false, error: 'Session expired.' });
+    const account = await findActiveAccountById(userId);
+    if (!account) return res.status(401).json({ ok: false, error: 'Account no longer exists.' });
+    res.json({ ok: true, user: cleanUserDoc(account) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Could not restore session.' });
+  }
+});
+
+app.get('/api/auth/users', async (req, res) => {
+  try {
+    const userId = requestAuthUserId(req);
+    if (!userId) return res.status(401).json({ ok: false, error: 'Login required.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok: false, error: 'MongoDB is required for user accounts.' });
+    const docs = await profiles.find({
+      _id: { $ne: userId },
+      deleted: { $ne: true },
+      deletedAt: { $exists: false },
+      enabled: { $ne: false }
+    }, { projection: { _id: 1, name: 1, displayName: 1, enabled: 1 } }).sort({ name: 1, _id: 1 }).toArray();
+    res.json({ ok: true, users: docs.map(cleanUserDoc).filter(x => x.id && x.name) });
+  } catch (error) {
+    console.error('Account list failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Could not load users.' });
+  }
+});
+
+app.post('/api/chat/open', async (req, res) => {
+  try {
+    const meId = requestAuthUserId(req);
+    const peerId = String(req.body?.peerId || '').trim();
+    const password = String(req.body?.password || '');
+    if (!meId) return res.status(401).json({ ok: false, error: 'Login required.' });
+    if (!peerId || peerId === meId) return res.status(400).json({ ok: false, error: 'Invalid chat user.' });
+    const peer = await findActiveAccountById(peerId);
+    if (!peer) return res.status(404).json({ ok: false, error: 'User not found.' });
+    const stored = String(peer.userPassword ?? peer.password ?? peer.pass ?? '');
+    if (!stored || stored !== password) return res.status(403).json({ ok: false, error: 'Wrong user password.' });
+    const chatId = directChatId(meId, peerId);
+    res.json({ ok: true, chatId, peer: cleanUserDoc(peer) });
+  } catch (error) {
+    console.error('Open direct chat failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Could not open chat.' });
+  }
+});
+
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    const userPassword = String(req.body?.userPassword ?? req.body?.passwordForUser ?? '').trim();
+    if (!name || !userPassword) return res.status(400).json({ ok: false, error: 'Name and user password are required.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok: false, error: 'MongoDB is required.' });
+    const duplicate = await profiles.findOne({
+      name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      deleted: { $ne: true },
+      deletedAt: { $exists: false }
+    });
+    if (duplicate) return res.status(409).json({ ok: false, error: 'A user with this name already exists.' });
+    const id = `WA-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    const doc = {
+      _id: id, name, userPassword, adminCreated: true, enabled: true,
+      createdAt: new Date(), updatedAt: new Date()
+    };
+    await profiles.insertOne(doc);
+    res.json({ ok: true, user: cleanUserDoc(doc) });
+  } catch (error) {
+    console.error('Admin user create failed:', error.message);
+    res.status(500).json({ ok: false, error: 'Could not create user.' });
+  }
+});
+
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    if (String(req.query?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok: false, error: 'MongoDB is required.' });
+    const docs = await profiles.find({ deleted: { $ne: true }, deletedAt: { $exists: false } }).sort({ createdAt: -1, name: 1 }).toArray();
+    res.json({ ok: true, users: docs.map(d => ({
+      ...cleanUserDoc(d),
+      password: String(d.userPassword ?? d.password ?? d.pass ?? '')
+    })).filter(x => x.id && x.name) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Could not load users.' });
+  }
+});
+
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok: false, error: 'MongoDB is required.' });
+    const id = String(req.params.id || '').trim();
+    const result = await profiles.updateOne({ _id: id }, { $set: { deleted: true, enabled: false, deletedAt: new Date(), updatedAt: new Date() } });
+    if (!result.matchedCount) return res.status(404).json({ ok: false, error: 'User not found.' });
+    io.emit('user-deleted', { userId: id });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Could not delete user.' });
+  }
+});
 
 async function publishRealtimeEvent(event, payload) {
   if (!MONGODB_URI) return;
@@ -286,160 +486,6 @@ app.post('/api/push/unsubscribe', async (req, res) => {
     if (db) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ endpoint });
     res.json({ ok: true });
   } catch (error) { res.status(500).json({ ok: false }); }
-});
-
-app.post('/api/admin/users', async (req, res) => {
-  try {
-    const password = String(req.body?.password || '');
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
-    const name = String(req.body?.name || '').trim().slice(0, 60);
-    if (!name) return res.status(400).json({ ok:false, error:'Name is required' });
-    const userPassword = String(req.body?.userPassword || '').trim().slice(0, 120);
-    if (!userPassword) return res.status(400).json({ ok:false, error:'User password is required' });
-    const makeId = () => 'WA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
-    const profiles = await getUserProfilesCollection();
-    let userId = makeId();
-    for (let i=0; i<10; i++) {
-      const exists = profiles ? await profiles.findOne({ _id:userId }) : fallbackUsers.get(userId);
-      if (!exists) break;
-      userId = makeId();
-    }
-    const now = new Date();
-    const user = { _id:userId, name, userPassword, createdAt:now, updatedAt:now, adminCreated:true, enabled:true };
-    if (profiles) await profiles.insertOne(user);
-    fallbackUsers.set(userId, { id:userId, name, userPassword, updatedAt:now, adminCreated:true, enabled:true });
-    io.emit('user-registered', { userId, name });
-    res.json({ ok:true, user:{ id:userId, name, userPassword } });
-  } catch (error) {
-    console.error('Admin user creation failed:', error.message);
-    res.status(500).json({ ok:false, error:'Could not create user' });
-  }
-});
-
-app.post('/api/admin/users/list', async (req, res) => {
-  try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
-    const profiles = await getUserProfilesCollection();
-    let users = profiles ? await profiles.find({ adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false} }).sort({name:1,_id:1}).limit(1000).toArray() : [...fallbackUsers.values()].filter(u=>u.adminCreated===true && u.deleted!==true && !u.deletedAt);
-    res.json({ok:true, users:users.map(u=>({id:String(u._id||u.id),name:String(u.name||''),userPassword:String(u.userPassword||''),enabled:u.enabled!==false}))});
-  } catch(e){ res.status(500).json({ok:false,error:'Could not load users'}); }
-});
-
-app.delete('/api/admin/users/:id', async (req, res) => {
-  try {
-    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
-    const id = String(req.params.id || '').trim().toUpperCase();
-    if (!id) return res.status(400).json({ok:false,error:'User ID is required'});
-    const profiles = await getUserProfilesCollection();
-    const now = new Date();
-    if (profiles) {
-      const r = await profiles.updateOne({_id:id}, {$set:{deleted:true, deletedAt:now, enabled:false, updatedAt:now}});
-      if (!r.matchedCount) return res.status(404).json({ok:false,error:'User not found'});
-    }
-    const old = fallbackUsers.get(id);
-    if (old) fallbackUsers.set(id,{...old,id,deleted:true,deletedAt:now,enabled:false,updatedAt:now});
-    io.emit('user-deleted',{userId:id});
-    res.json({ok:true,userId:id});
-  } catch(e) { console.error('Admin user delete failed:',e.message); res.status(500).json({ok:false,error:'Could not delete user'}); }
-});
-
-app.put('/api/admin/users/:id', async (req, res) => {
-  try {
-    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
-    const id=String(req.params.id||'').trim().toUpperCase();
-    const name=String(req.body?.name||'').trim().slice(0,60);
-    const userPassword=String(req.body?.userPassword||'').trim().slice(0,120);
-    if(!id || !name || !userPassword) return res.status(400).json({ok:false,error:'Name and password are required'});
-    const profiles=await getUserProfilesCollection();
-    const update={name,userPassword,updatedAt:new Date()};
-    if(profiles){ const r=await profiles.updateOne({_id:id},{$set:update}); if(!r.matchedCount) return res.status(404).json({ok:false,error:'User not found'}); }
-    const old=fallbackUsers.get(id)||{id}; fallbackUsers.set(id,{...old,id,name,userPassword,updatedAt:new Date(),enabled:old.enabled!==false,adminCreated:true});
-    io.emit('user-renamed',{userId:id,name});
-    res.json({ok:true,user:{id,name,userPassword}});
-  } catch(e){ res.status(500).json({ok:false,error:'Could not update user'}); }
-});
-
-app.post('/api/auth/login', async (req,res)=>{
-  try {
-    const name = String(req.body?.name || '').trim().slice(0,60);
-    const password = String(req.body?.password || '');
-    if (!name || !password) return res.status(400).json({ok:false,error:'Name and password are required'});
-    const wanted = name.toLowerCase();
-    let user = null;
-    let profiles = null;
-    try { profiles = await getUserProfilesCollection(); } catch (_) { profiles = null; }
-    if (profiles) {
-      const safe = name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-      user = await profiles.findOne({
-        $and: [
-          { $or: [
-            { name: { $regex: `^${safe}$`, $options:'i' } },
-            { displayName: { $regex: `^${safe}$`, $options:'i' } }
-          ] },
-          { adminCreated:true },
-          { deleted: { $ne:true } },
-          { deletedAt: { $exists:false } },
-          { enabled: { $ne:false } }
-        ]
-      });
-    }
-    if (!user) {
-      user = [...fallbackUsers.values()].find(u =>
-        u.deleted!==true && !u.deletedAt && u.enabled!==false &&
-        u.adminCreated===true &&
-        (String(u.name||'').trim().toLowerCase()===wanted || String(u.displayName||'').trim().toLowerCase()===wanted)
-      ) || null;
-    }
-    if (!user) return res.status(404).json({ok:false,error:'Name not found. Please use the exact name created by Admin.'});
-    const storedPassword = String(user.userPassword ?? user.password ?? '');
-    if (storedPassword !== password) return res.status(401).json({ok:false,error:'Wrong password'});
-    const resolvedId = String(user._id || user.id || '').trim().toUpperCase();
-    const resolvedName = String(user.name || user.displayName || name).trim();
-    if (!resolvedId) return res.status(500).json({ok:false,error:'Account ID is missing. Ask Admin to edit/save this user.'});
-    fallbackUsers.set(resolvedId, { id:resolvedId, name:resolvedName, userPassword:storedPassword, updatedAt:new Date(), adminCreated:true, enabled:true });
-    res.json({ok:true,user:{id:resolvedId,name:resolvedName}});
-  } catch(e) { console.error('Login failed:',e); res.status(500).json({ok:false,error:'Login failed: '+String(e.message||e)}); }
-});
-app.post('/api/auth/validate', async (req,res)=>{
-  try {
-    const id=String(req.body?.userId||'').trim().toUpperCase();
-    if(!id) return res.status(400).json({ok:false});
-    const profiles=await getUserProfilesCollection();
-    const user=profiles ? await profiles.findOne({_id:id,adminCreated:true,deleted:{$ne:true},deletedAt:{$exists:false},enabled:{$ne:false}}) : fallbackUsers.get(id);
-    if(!user || user.adminCreated!==true || user.deleted===true || user.deletedAt || user.enabled===false) return res.status(401).json({ok:false});
-    res.json({ok:true,user:{id:String(user._id||user.id),name:String(user.name||'')}});
-  } catch(e){ res.status(500).json({ok:false}); }
-});
-
-app.post('/api/users/verify-password', async (req,res)=>{
-  try {
-    const userId=String(req.body?.userId||'').trim().toUpperCase();
-    const password=String(req.body?.password||'');
-    const profiles=await getUserProfilesCollection();
-    const user=profiles ? await profiles.findOne({_id:userId}) : fallbackUsers.get(userId);
-    if(!user || user.adminCreated !== true || user.deleted === true || user.deletedAt || user.enabled===false) return res.status(404).json({ok:false,error:'User not found'});
-    if(String(user.userPassword||'')!==password) return res.status(401).json({ok:false,error:'Wrong password'});
-    res.json({ok:true});
-  } catch(e){ res.status(500).json({ok:false,error:'Could not verify password'}); }
-});
-
-app.get('/api/users', async (req, res) => {
-  try {
-    const exclude = String(req.query?.exclude || '').trim();
-    const profiles = await getUserProfilesCollection();
-    let users = [];
-    if (profiles) {
-      const activeFilter = exclude ? { _id: { $ne: exclude }, adminCreated: true, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } } : { adminCreated: true, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } };
-      users = await profiles.find(activeFilter).project({ _id: 1, name: 1, updatedAt: 1, enabled: 1 }).sort({ name: 1, _id: 1 }).limit(500).toArray();
-    } else {
-      users = [...fallbackUsers.values()].filter(u => u.adminCreated === true && u.enabled !== false && u.deleted !== true && !u.deletedAt && (!exclude || String(u.id) !== exclude));
-    }
-    res.setHeader('Cache-Control','no-store');
-    res.json({ ok:true, users: users.map(u => ({ id:String(u._id || u.id), name:String(u.name || u._id || u.id).slice(0,60) })) });
-  } catch (error) {
-    console.error('Failed to load users:', error.message);
-    res.json({ ok:true, users:[] });
-  }
 });
 
 app.get('/api/groups', async (req, res) => {
@@ -1609,7 +1655,7 @@ app.post('/api/messages', async (req, res) => {
 // application-level maximum video size.
 app.post('/api/media/start', async (req, res) => {
   try {
-    const { uploadId, name, mime, type, size, groupId, userId, recipientUserId } = req.body || {};
+    const { uploadId, name, mime, type, size, groupId, userId } = req.body || {};
     if (!uploadId || !name || !mime || !type) return res.status(400).json({ ok:false, error:'Invalid upload' });
     const db = await getDb();
     if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable. Configure MONGODB_URI.' });
@@ -1621,7 +1667,7 @@ app.post('/api/media/start', async (req, res) => {
     await uploads.deleteMany({ uploadId: String(uploadId) });
     await uploads.insertOne({
       uploadId: String(uploadId), name: String(name), mime: String(mime), type: String(type),
-      size: Number(size || 0), groupId: normalizeGroupId(groupId), userId: String(userId || ''), recipientUserId: String(recipientUserId || ''),
+      size: Number(size || 0), groupId: normalizeGroupId(groupId), userId: String(userId || ''),
       received: 0, chunks: 0, createdAt: new Date()
     });
     res.json({ ok:true });
@@ -1706,7 +1752,7 @@ app.post('/api/media/end', async (req, res) => {
         id: crypto.randomUUID(), groupId: session.groupId, userId: session.userId, user: String(req.body?.user || ''),
         type: session.type, mime: session.mime, mediaId: String(stream.id), fileName: session.name, fileSize: session.size,
         time: String(req.body?.time || new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})),
-        createdAt: new Date().toISOString(), deliveredTo: [], readBy: [], ...(isDirectChatId(session.groupId) && session.recipientUserId ? {recipientUserId:String(session.recipientUserId)} : {})
+        createdAt: new Date().toISOString(), deliveredTo: [], readBy: []
       };
       const saved = await broadcastSaved('media', msg);
       return res.json({ ok:true, message:saved });
@@ -1823,16 +1869,11 @@ async function sendPushToOtherUsers(msg) {
     if (!db) return;
     const senderUserId = String(msg.userId || '').trim();
     const gid = normalizeGroupId(msg.groupId);
-    let allowedUsers = new Set();
-    if (isDirectChatId(gid) && msg.recipientUserId) {
-      allowedUsers.add(String(msg.recipientUserId).trim());
-    } else {
-      // Push only to users who have actually entered this group on at least one
-      // device. This prevents a Group A message from notifying a Group B-only user.
-      const accessDocs = await db.collection('notification_access')
-        .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
-      allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
-    }
+    // Push only to users who have actually entered this group on at least one
+    // device. This prevents a Group A message from notifying a Group B-only user.
+    const accessDocs = await db.collection('notification_access')
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+    const allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
     if (senderUserId) allowedUsers.delete(senderUserId);
     if (!allowedUsers.size) return;
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
@@ -1841,10 +1882,6 @@ async function sendPushToOtherUsers(msg) {
     // Show only the group name in the notification. Never expose the actual
     // message text, sender name, or message preview in the push payload.
     let groupName = String(msg.groupName || '').trim();
-    if (!groupName && isDirectChatId(gid) && msg.recipientUserId) {
-      const peer = await db.collection(USER_PROFILES_COLLECTION_NAME).findOne({ _id: String(msg.userId || '') }, { projection:{name:1} });
-      groupName = String(peer?.name || 'New message').trim();
-    }
     if (!groupName) {
       try {
         const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne({
@@ -1885,24 +1922,16 @@ async function sendNativeRealtimeNotification(msg) {
     const gid = normalizeGroupId(msg.groupId);
     const senderUserId = String(msg.userId || '').trim();
 
-    // Direct chats notify only the intended peer. Groups retain the existing
-    // password/join-based notification access model.
-    let allowedUsers = new Set();
-    if (isDirectChatId(gid) && msg.recipientUserId) {
-      allowedUsers.add(String(msg.recipientUserId).trim());
-    } else {
-      const accessDocs = await db.collection('notification_access')
-        .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
-      allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
-    }
+    // Only users who have actually joined this group are eligible.
+    const accessDocs = await db.collection('notification_access')
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+    const allowedUsers = new Set(
+      accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean)
+    );
     if (senderUserId) allowedUsers.delete(senderUserId);
     if (!allowedUsers.size) return;
 
     let groupName = String(msg.groupName || '').trim();
-    if (!groupName && isDirectChatId(gid)) {
-      const peer = await db.collection(USER_PROFILES_COLLECTION_NAME).findOne({ _id: senderUserId }, { projection:{name:1} });
-      groupName = String(peer?.name || 'New message').trim();
-    }
     if (!groupName) {
       const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne(
         { _id: gid }, { projection: { name: 1 } }
@@ -1948,11 +1977,9 @@ async function broadcastSaved(event, msg) {
   // (or on the group-list screen) to avoid double-counting.
   if (event === 'message' || event === 'media') {
     const senderId = String(saved.userId || '').trim();
-    const directRecipient = isDirectChatId(gid) ? String(saved.recipientUserId || '') : '';
     for (const target of io.sockets.sockets.values()) {
       const targetUserId = String(target.userId || '').trim();
       if (!targetUserId || targetUserId === senderId) continue;
-      if (directRecipient && targetUserId !== directRecipient) continue;
       if (String(target.groupId || '') !== gid) {
         target.emit('unread-message', {
           id: String(saved.id),
@@ -2132,89 +2159,34 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId || '' });
   });
 
-  socket.on('login-account', async (data, ack) => {
-    const loginName = String(data?.name || '').trim().slice(0, 60);
-    const loginPassword = String(data?.password || '');
-    if (!loginName || !loginPassword) { if (typeof ack === 'function') ack({ok:false,error:'Name and password are required.'}); return; }
-    try {
-      const profiles = await getUserProfilesCollection();
-      let profile = null;
-      if (profiles) {
-        const escaped = loginName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        profile = await profiles.findOne({name: {$regex:`^${escaped}$`, $options:'i'}, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false}});
-      } else {
-        const wanted = loginName.toLowerCase();
-        profile = [...fallbackUsers.values()].find(u => u.adminCreated===true && u.deleted!==true && !u.deletedAt && u.enabled!==false && String(u.name||'').trim().toLowerCase()===wanted) || null;
-      }
-      if (!profile) { if (typeof ack === 'function') ack({ok:false,error:'Name not found. Ask admin to create your account.'}); return; }
-      if (String(profile.userPassword || '') !== loginPassword) { if (typeof ack === 'function') ack({ok:false,error:'Wrong password.'}); return; }
-      const resolvedId = String(profile._id || profile.id || '').trim().toUpperCase();
-      const resolvedName = String(profile.name || loginName).trim();
-      if (!resolvedId) { if (typeof ack === 'function') ack({ok:false,error:'This account has no User ID. Ask admin to recreate it.'}); return; }
-      socket.userId = resolvedId;
-      socket.callDeviceId = String(data?.deviceId || '').slice(0,160);
-      fallbackUsers.set(resolvedId,{id:resolvedId,name:resolvedName,updatedAt:new Date(),adminCreated:true,enabled:true});
-      socket.emit('user-profile',{userId:resolvedId,name:resolvedName});
-      io.emit('user-registered',{userId:resolvedId,name:resolvedName});
-      if (typeof ack === 'function') ack({ok:true,user:{id:resolvedId,name:resolvedName}});
-    } catch (error) {
-      console.error('Socket account login failed:', error.message);
-      if (typeof ack === 'function') ack({ok:false,error:'Login failed. Please try again.'});
-    }
-  });
-
-  socket.on('resume-account', async (data, ack) => {
-    const requestedId = String(data?.userId || '').trim().toUpperCase();
-    if (!requestedId) { if (typeof ack === 'function') ack({ok:false,error:'Account session is missing.'}); return; }
-    try {
-      const profiles = await getUserProfilesCollection();
-      const profile = profiles ? await profiles.findOne({ _id: requestedId, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false} }) : fallbackUsers.get(requestedId);
-      if (!profile || profile.adminCreated !== true || profile.deleted === true || profile.deletedAt || profile.enabled === false) {
-        if (typeof ack === 'function') ack({ok:false,error:'Account session is no longer valid.'});
-        return;
-      }
-      const resolvedName = String(profile.name || profile.displayName || requestedId).trim();
-      socket.userId = requestedId;
-      socket.callDeviceId = String(data?.deviceId || '').slice(0,160);
-      fallbackUsers.set(requestedId,{id:requestedId,name:resolvedName,updatedAt:new Date(),adminCreated:true,enabled:true});
-      socket.emit('user-profile',{userId:requestedId,name:resolvedName});
-      if (typeof ack === 'function') ack({ok:true,user:{id:requestedId,name:resolvedName}});
-    } catch (error) {
-      console.error('Account resume failed:', error.message);
-      if (typeof ack === 'function') ack({ok:false,error:'Could not restore account session.'});
-    }
-  });
-
   socket.on('register-user', async (data, ack) => {
     const previousUserId = String(socket.userId || '');
-    const requestedUserId = String(data?.userId || '').trim().toUpperCase();
-    if (!requestedUserId) { if (typeof ack === 'function') ack({ ok:false, error:'User ID is required.' }); return; }
-    try {
-      const profiles = await getUserProfilesCollection();
-      let profile = profiles ? await profiles.findOne({ _id: requestedUserId }) : fallbackUsers.get(requestedUserId);
-      if (!profile) { if (typeof ack === 'function') ack({ ok:false, error:'User ID not found. Ask the admin to create your account.' }); return; }
-      if (profile.adminCreated !== true) { if (typeof ack === 'function') ack({ ok:false, error:'This user was not created by the admin.' }); return; }
-      if (profile.deleted === true || profile.deletedAt) { if (typeof ack === 'function') ack({ ok:false, error:'This user account was deleted.' }); return; }
-      if (profile.enabled === false) { if (typeof ack === 'function') ack({ ok:false, error:'This user account is disabled.' }); return; }
-    } catch (error) {
-      console.error('User authorization failed:', error.message);
-      if (typeof ack === 'function') ack({ ok:false, error:'Could not verify User ID.' });
-      return;
-    }
-    socket.userId = requestedUserId;
+    socket.userId = data && data.userId ? String(data.userId) : '';
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
     if (socket.userId) {
-      const profiles = await getUserProfilesCollection();
-      const profile = profiles ? await profiles.findOne({ _id: socket.userId }) : fallbackUsers.get(socket.userId);
-      const displayName = String(profile?.name || requestedName || socket.userId).slice(0,40);
-      fallbackUsers.set(socket.userId, { id: socket.userId, name: displayName, updatedAt: new Date(), adminCreated: profile?.adminCreated !== false, enabled: profile?.enabled !== false });
-      socket.emit('user-profile', { userId: socket.userId, name: displayName });
+      try {
+        const profiles = await getUserProfilesCollection();
+        if (profiles) {
+          const existing = await profiles.findOne({ _id: socket.userId });
+          if (existing?.name) {
+            socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
+          } else if (requestedName) {
+            await profiles.updateOne(
+              { _id: socket.userId },
+              { $set: { name: requestedName, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { upsert: true }
+            );
+            socket.emit('user-profile', { userId: socket.userId, name: requestedName });
+          }
+        }
+      } catch (error) {
+        console.error('Failed to sync user profile:', error.message);
+      }
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
-    io.emit('user-registered', { userId: socket.userId, name: requestedName || socket.userId });
     if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
   });
 
@@ -2250,35 +2222,39 @@ io.on('connection', async (socket) => {
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
     const suppliedPassword = String(data?.password || '');
-    const peerUserId = String(data?.peerUserId || '').trim();
-    // Direct chats are password-free and can only be joined by the two users
-    // encoded by the client-provided peer ID. They reuse the existing room
-    // transport so delivery/read receipts/calls remain realtime and isolated.
-    if (isDirectChatId(groupId)) {
-      if (!socket.userId || !peerUserId || peerUserId === socket.userId || makeDirectChatId(socket.userId, peerUserId) !== groupId) {
-        return typeof ack === 'function' && ack({ ok:false, error:'Invalid direct chat.' });
-      }
+
+    // Direct 1-to-1 chat authorization. The client first calls /api/chat/open
+    // (which verifies the peer password) and then joins this deterministic room.
+    if (groupId.startsWith('dm-')) {
       try {
-        const profiles = await getUserProfilesCollection();
-        const peer = profiles ? await profiles.findOne({ _id: peerUserId }) : fallbackUsers.get(peerUserId);
-        if (!peer || peer.adminCreated !== true || peer.deleted === true || peer.deletedAt || peer.enabled === false) return typeof ack === 'function' && ack({ok:false,error:'User not found.'});
-        if (String(suppliedPassword || '') !== String(peer.userPassword || '')) return typeof ack === 'function' && ack({ok:false,error:'Wrong password.'});
-      } catch (_) { return typeof ack === 'function' && ack({ok:false,error:'Could not verify password.'}); }
-      const previousGroupId = socket.groupId;
-      if (previousGroupId && normalizeGroupId(previousGroupId) !== groupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
-      socket.groupId = groupId;
-      socket.peerUserId = peerUserId;
-      socket.join(`group:${groupId}`);
-      emitGroupPresence(groupId);
-      try {
+        const meId = String(socket.userId || '').trim();
+        const peerId = String(data?.peerUserId || '').trim();
+        if (!meId || !peerId || meId === peerId || directChatId(meId, peerId) !== groupId) {
+          return typeof ack === 'function' && ack({ ok: false, error: 'Invalid private chat.' });
+        }
+        const me = await findActiveAccountById(meId);
+        const peer = await findActiveAccountById(peerId);
+        if (!me || !peer) return typeof ack === 'function' && ack({ ok: false, error: 'User account not found.' });
+        const peerPassword = String(peer.userPassword ?? peer.password ?? peer.pass ?? '');
+        if (!peerPassword || peerPassword !== suppliedPassword) {
+          return typeof ack === 'function' && ack({ ok: false, error: 'Wrong user password.' });
+        }
+        const previousGroupId = socket.groupId;
+        if (previousGroupId && normalizeGroupId(previousGroupId) !== groupId) socket.leave(`group:${normalizeGroupId(previousGroupId)}`);
+        socket.groupId = groupId;
+        socket.peerUserId = peerId;
+        socket.join(`group:${groupId}`);
         const history = await loadMessages('', groupId);
         socket.emit('history', history);
-        if (typeof ack === 'function') ack({ ok:true, groupId, peerUserId });
-      } catch (_) {
-        socket.emit('history', []);
-        if (typeof ack === 'function') ack({ ok:false });
+        return typeof ack === 'function' && ack({
+          ok: true, groupId, direct: true,
+          peer: cleanUserDoc(peer),
+          history
+        });
+      } catch (error) {
+        console.error('Private chat join failed:', error.message);
+        return typeof ack === 'function' && ack({ ok: false, error: 'Could not open private chat.' });
       }
-      return;
     }
     // Joining a group socket room is also the server-side authorization step.
     // A client must prove the group's password before it can receive/send data.
@@ -2338,7 +2314,6 @@ io.on('connection', async (socket) => {
       return;
     }
     msg.groupId = normalizeGroupId(socket.groupId);
-    if (isDirectChatId(msg.groupId) && socket.peerUserId) msg.recipientUserId = String(socket.peerUserId);
     // Prefer the registered socket identity over a client-supplied value.
     if (socket.userId) msg.userId = String(socket.userId);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -2406,8 +2381,7 @@ io.on('connection', async (socket) => {
         id: meta.id, groupId: normalizeGroupId(meta.groupId || socket.groupId), senderId: meta.senderId, userId: meta.userId, user: meta.user,
         type: meta.type, mime: meta.mime, mediaId: String(upload.fileId),
         fileName: meta.name, fileSize: Number(meta.size || 0), time: meta.time,
-        createdAt: meta.createdAt || new Date().toISOString(), deliveredTo: [], readBy: [],
-        ...(isDirectChatId(normalizeGroupId(meta.groupId || socket.groupId)) && socket.peerUserId ? { recipientUserId:String(socket.peerUserId) } : {})
+        createdAt: meta.createdAt || new Date().toISOString(), deliveredTo: [], readBy: []
       };
       const saved = await broadcastSaved('media', msg);
       if (typeof ack === 'function') ack({ ok: true, message: saved });
@@ -2447,7 +2421,6 @@ io.on('connection', async (socket) => {
 
     try {
       const profiles = await getUserProfilesCollection();
-      fallbackUsers.set(requestedUserId, { id: requestedUserId, name: nextName, updatedAt: new Date() });
       if (profiles) {
         await profiles.updateOne(
           { _id: requestedUserId },
