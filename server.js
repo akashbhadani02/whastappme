@@ -359,9 +359,10 @@ app.get('/api/users', async (req, res) => {
     const profiles = await getUserProfilesCollection();
     let users = [];
     if (profiles) {
-      users = await profiles.find(exclude ? { _id: { $ne: exclude } } : {}).project({ _id: 1, name: 1, updatedAt: 1 }).sort({ name: 1, _id: 1 }).limit(500).toArray();
+      const activeFilter = exclude ? { _id: { $ne: exclude }, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } } : { enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } };
+      users = await profiles.find(activeFilter).project({ _id: 1, name: 1, updatedAt: 1, enabled: 1 }).sort({ name: 1, _id: 1 }).limit(500).toArray();
     } else {
-      users = [...fallbackUsers.values()].filter(u => !exclude || String(u.id) !== exclude);
+      users = [...fallbackUsers.values()].filter(u => u.enabled !== false && u.deleted !== true && !u.deletedAt && (!exclude || String(u.id) !== exclude));
     }
     res.setHeader('Cache-Control','no-store');
     res.json({ ok:true, users: users.map(u => ({ id:String(u._id || u.id), name:String(u.name || u._id || u.id).slice(0,60) })) });
