@@ -33,10 +33,6 @@ function syncAndroidNotificationIdentity() {
 }
 syncAndroidNotificationIdentity();
 let name = localStorage.getItem('wa_name') || '';
-let authToken = localStorage.getItem('wa_auth_token') || '';
-let authReady = false;
-let privateUsers = [];
-let activePeer = null;
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
@@ -1083,7 +1079,7 @@ function showAdminMediaPopup(item, isRecording=false){
   adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
   adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
   adminMediaPopupPreview.innerHTML='';
-  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(String(PASSWORD).trim())}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
+  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
   if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
   else if(type==='video') { const el=document.createElement('video'); el.src=url; el.controls=true; el.autoplay=false; el.playsInline=true; adminMediaPopupPreview.appendChild(el); }
   else if(type==='audio') { const el=document.createElement('audio'); el.src=url; el.controls=true; adminMediaPopupPreview.appendChild(el); }
@@ -1134,13 +1130,7 @@ socket.on('history', history => {
   }
 });
 
-socket.on('connect', () => {
-  if (authReady && userId) {
-    socket.emit('register-user', {userId, name, deviceId}, () => {});
-    refreshAllUnreadCounts().catch(() => {});
-    loadPrivateUsers().catch(() => {});
-  }
-});
+socket.on('connect', () => { if (userId) refreshAllUnreadCounts().catch(() => {}); });
 
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
@@ -1478,27 +1468,8 @@ async function joinGroup(groupId, openAfter=true) {
   if (openAfter) openChat();
 }
 
-// Account authentication controls the private chat list. Legacy group list is not auto-opened.
-if (authReady) loadPrivateUsers();
+loadGroups();
 
-socket.on('user-deleted', data => {
-  const deletedId = String(data?.userId || '');
-  if (!deletedId) return;
-  if (deletedId === String(userId || '')) {
-    clearAuthSession();
-    return;
-  }
-  privateUsers = privateUsers.filter(u => String(u.id) !== deletedId);
-  if (activePeer && String(activePeer.id) === deletedId) {
-    activePeer = null;
-    currentGroupId = '';
-    if (messageArea) messageArea.innerHTML = '';
-    composer?.classList.add('hidden');
-    groupName = '';
-    updateGroupNameUI();
-  }
-  renderPrivateUsers();
-});
 socket.on('user-profile', data => {
   if (!data || String(data.userId || '') !== String(userId || '') || !data.name) return;
   name = String(data.name).trim().slice(0, 40);
@@ -1859,7 +1830,7 @@ async function loadAdminCallRecordings(groupId = '') {
         const when = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
         const size = item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
         const duration = formatDuration(item.durationMs);
-        const url = `/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(String(PASSWORD).trim())}`;
+        const url = `/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
         const safeName = clean(item.feedName || 'Participant', 60);
 
         card.innerHTML = `
@@ -1890,7 +1861,7 @@ async function loadAdminCallRecordings(groupId = '') {
         card.querySelector('.admin-view-recording-btn').addEventListener('click', openView);
         card.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
           if(!confirm('Delete this call recording?')) return;
-          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:adminSessionPassword || PASSWORD})});
+          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
           const dd=await rr.json(); if(dd.ok) loadAdminCallRecordings(groupId); else showToast(dd.error||'Delete failed');
         });
         grid.appendChild(card);
@@ -2006,7 +1977,7 @@ async function renderAdminRecycleGroupFilters(items) {
   try {
     const r = await fetch('/api/admin/groups', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:adminSessionPassword || PASSWORD}), cache:'no-store'
+      body:JSON.stringify({password:PASSWORD}), cache:'no-store'
     });
     const d = await r.json();
     if (d.ok && Array.isArray(d.groups)) {
@@ -2220,7 +2191,7 @@ document.querySelector('#adminAbcClearBtn')?.addEventListener('click', async () 
   try {
     const r = await fetch('/api/admin/abc-clear-messages', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:adminSessionPassword || PASSWORD})
+      body:JSON.stringify({password:PASSWORD})
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'ABC cleanup failed');
@@ -2272,7 +2243,7 @@ adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
 adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
 adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
 adminCallRecordingsDownloadAll?.addEventListener('click', () => {
-  const url = `/api/admin/call-recordings/download-all?password=${encodeURIComponent(String(PASSWORD).trim())}`;
+  const url = `/api/admin/call-recordings/download-all?password=${encodeURIComponent(PASSWORD)}`;
   window.location.href = url;
 });
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
@@ -2298,9 +2269,7 @@ const nameHelp = document.querySelector('#nameHelp');
 const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
-const accountPasswordInput = document.querySelector('#accountPasswordInput');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
-const accountAdminBtn = document.querySelector('#accountAdminBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
 
@@ -2308,362 +2277,34 @@ function normalizeUserId(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 40);
 }
 
-function setLoginVisible(visible) {
-  if (!accountModal) return;
-  accountModal.classList.toggle('hidden', !visible);
-  accountModal.style.display = visible ? 'flex' : 'none';
-  document.body.classList.toggle('login-locked', visible);
-  if (visible) {
-    setTimeout(() => accountNameInput?.focus(), 50);
-  }
+function openAccountModal(force = false) {
+  if (!force && userId && name) return;
+  accountNameInput.value = name || '';
+  accountError.textContent = '';
+  accountGenerated.style.display = 'none';
+  accountGenerated.textContent = '';
+  accountModal.classList.remove('hidden');
+  setTimeout(() => accountNameInput.focus(), 50);
 }
 
-function saveAuthSession(data) {
-  authToken = String(data?.token || '');
-  userId = String(data?.user?.id || '');
-  name = String(data?.user?.name || '');
-  if (!authToken || !userId || !name) throw new Error('Incomplete login response.');
-  localStorage.setItem('wa_auth_token', authToken);
+function finishAccountLogin() {
+  const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
+  if (!nextName) { accountError.textContent = 'Enter your name'; return; }
+  if (!userId) userId = generateUserId();
+  userId = normalizeUserId(userId);
+  name = nextName;
   localStorage.setItem('wa_user_id', userId);
   localStorage.setItem('wa_name', name);
   syncAndroidNotificationIdentity();
-  authReady = true;
+  accountModal.classList.add('hidden');
   updateMyNameUI();
-  setLoginVisible(false);
+  socket.emit('register-user', { userId, name, deviceId });
+  socket.emit('presence-login', { userId, deviceId });
+  if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
 }
 
-function clearAuthSession() {
-  authToken = '';
-  authReady = false;
-  userId = '';
-  name = '';
-  activePeer = null;
-  privateUsers = [];
-  localStorage.removeItem('wa_auth_token');
-  localStorage.removeItem('wa_user_id');
-  localStorage.removeItem('wa_name');
-  localStorage.removeItem('wa_group_id');
-  localStorage.removeItem('wa_group_name');
-  currentGroupId = '';
-  messages.clear();
-  if (messageArea) messageArea.innerHTML = '';
-  composer?.classList.add('hidden');
-  app?.classList.add('group-locked');
-  setLoginVisible(true);
-  renderPrivateUsers();
-}
-
-async function loginAccount() {
-  const loginName = String(accountNameInput?.value || '').trim();
-  const password = String(accountPasswordInput?.value || '');
-  accountError.textContent = '';
-  if (!loginName || !password) {
-    accountError.textContent = 'Enter name and password.';
-    return;
-  }
-  accountContinueBtn.disabled = true;
-  accountContinueBtn.textContent = 'Logging in…';
-  try {
-    const response = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({name: loginName, password}),
-      cache: 'no-store'
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Invalid name or password.');
-    saveAuthSession(data);
-    accountPasswordInput.value = '';
-    // Register this authenticated account on the existing Socket.IO connection.
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Realtime connection timeout.')), 8000);
-      const done = result => {
-        clearTimeout(timer);
-        if (!result?.ok) reject(new Error(result?.error || 'Could not connect account.'));
-        else resolve();
-      };
-      if (socket.connected) socket.emit('register-user', {userId, name, deviceId}, done);
-      else {
-        const onConnect = () => { socket.emit('register-user', {userId, name, deviceId}, done); };
-        socket.once('connect', onConnect);
-        socket.once('connect_error', () => { clearTimeout(timer); reject(new Error('Realtime server connection failed.')); });
-      }
-    });
-    await loadPrivateUsers();
-    showToast(`Welcome, ${name}`);
-  } catch (error) {
-    accountError.textContent = error?.message || 'Login failed.';
-    authReady = false;
-    setLoginVisible(true);
-  } finally {
-    accountContinueBtn.disabled = false;
-    accountContinueBtn.textContent = 'Login';
-  }
-}
-
-async function restoreAccountSession() {
-  if (!authToken) {
-    setLoginVisible(true);
-    return false;
-  }
-  try {
-    const response = await fetch('/api/auth/session', {
-      headers: {Authorization: `Bearer ${authToken}`},
-      cache: 'no-store'
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Session expired.');
-    saveAuthSession({token: authToken, user: data.user});
-    if (socket.connected) {
-      await new Promise(resolve => socket.emit('register-user', {userId, name, deviceId}, () => resolve()));
-    }
-    await loadPrivateUsers();
-    return true;
-  } catch (_) {
-    clearAuthSession();
-    return false;
-  }
-}
-
-function renderPrivateUsers() {
-  if (!chatList) return;
-  chatList.innerHTML = '';
-  if (!authReady) return;
-  privateUsers.forEach(user => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'chat-item' + (activePeer?.id === user.id ? ' active' : '');
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar group-avatar';
-    avatar.textContent = firstCharacter(user.name);
-    const summary = document.createElement('div');
-    summary.className = 'chat-summary';
-    const line = document.createElement('div');
-    line.className = 'chat-line';
-    const strong = document.createElement('strong');
-    strong.textContent = user.name;
-    line.appendChild(strong);
-    const preview = document.createElement('div');
-    preview.className = 'chat-line preview';
-    const span = document.createElement('span');
-    span.textContent = '🔒 Private chat';
-    preview.appendChild(span);
-    summary.append(line, preview);
-    button.append(avatar, summary);
-    button.addEventListener('click', () => openPrivateChat(user));
-    chatList.appendChild(button);
-  });
-}
-
-async function loadPrivateUsers() {
-  if (!authToken || !authReady) return;
-  try {
-    const response = await fetch('/api/auth/users', {
-      headers: {Authorization: `Bearer ${authToken}`},
-      cache: 'no-store'
-    });
-    const data = await response.json().catch(() => ({}));
-    if (response.status === 401) return clearAuthSession();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load users.');
-    privateUsers = Array.isArray(data.users) ? data.users : [];
-    renderPrivateUsers();
-  } catch (error) {
-    showToast(error?.message || 'Could not load users.');
-  }
-}
-
-async function openPrivateChat(user) {
-  if (!authReady || !user?.id) return;
-  const password = prompt(`Enter ${user.name}'s password to open chat:`);
-  if (password === null) return;
-  if (!password) { showToast('Password required.'); return; }
-  try {
-    const response = await fetch('/api/chat/open', {
-      method:'POST',
-      headers:{'Content-Type':'application/json', Authorization:`Bearer ${authToken}`},
-      body:JSON.stringify({peerId:user.id,password}),
-      cache:'no-store'
-    });
-    const data = await response.json().catch(() => ({}));
-    if (response.status === 401) return clearAuthSession();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not open chat.');
-    activePeer = data.peer;
-    currentGroupId = data.chatId;
-    groupName = data.peer.name;
-    composer?.classList.remove('hidden');
-    app?.classList.remove('group-locked');
-    messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
-    if (messageArea) messageArea.innerHTML = '';
-    updateGroupNameUI();
-    renderPrivateUsers();
-    if (!socket.connected) await new Promise(resolve => socket.once('connect', resolve));
-    socket.emit('join-group', {
-      groupId: data.chatId,
-      peerUserId: data.peer.id,
-      password
-    }, result => {
-      if (!result?.ok) showToast(result?.error || 'Could not join private chat.');
-      else scrollToBottom();
-    });
-  } catch (error) {
-    showToast(error?.message || 'Could not open chat.');
-  }
-}
-
-async function logoutAccount() {
-  clearAuthSession();
-  socket.emit('presence-login', {userId:''});
-  showToast('Logged out');
-}
-
-function openAccountModal(force = false) {
-  if (!force && authReady && userId && name) return;
-  accountNameInput.value = '';
-  if (accountPasswordInput) accountPasswordInput.value = '';
-  accountError.textContent = '';
-  setLoginVisible(true);
-}
-
-accountContinueBtn?.addEventListener('click', loginAccount);
-accountAdminBtn?.addEventListener('click', () => {
-  accountError.textContent = '';
-  accountModal?.classList.add('hidden');
-  accountModal.style.display = 'none';
-  adminVerifyPassword.value = '';
-  adminVerifyError.textContent = '';
-  adminVerifyModal?.classList.remove('hidden');
-  setTimeout(() => adminVerifyPassword?.focus(), 50);
-});
-accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') loginAccount(); });
-accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') loginAccount(); });
-
-
-const adminVerifyModal = document.querySelector('#adminVerifyModal');
-const adminVerifyClose = document.querySelector('#adminVerifyClose');
-const adminVerifyPassword = document.querySelector('#adminVerifyPassword');
-const adminVerifyBtn = document.querySelector('#adminVerifyBtn');
-const adminVerifyError = document.querySelector('#adminVerifyError');
-let adminPanelVerified = false;
-let adminSessionPassword = '';
-
-async function verifyAndOpenAdminPanel() {
-  const password = String(adminVerifyPassword?.value || '').trim();
-  if (!password) { if (adminVerifyError) adminVerifyError.textContent = 'Enter the Admin password.'; return; }
-  if (adminVerifyBtn) adminVerifyBtn.disabled = true;
-  try {
-    const r = await fetch('/api/admin/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password}) });
-    const d = await r.json().catch(()=>({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || 'Invalid admin password.');
-    adminPanelVerified = true;
-    adminSessionPassword = password;
-    adminVerifyModal?.classList.add('hidden');
-    adminUsersModal?.classList.remove('hidden');
-    if (adminVerifyPassword) adminVerifyPassword.value = '';
-    if (adminVerifyError) adminVerifyError.textContent = '';
-    loadAdminUsers();
-  } catch (e) {
-    if (adminVerifyError) adminVerifyError.textContent = e.message || 'Admin verification failed.';
-  } finally { if (adminVerifyBtn) adminVerifyBtn.disabled = false; }
-}
-
-const adminUsersBtn = document.querySelector('#adminUsersBtn');
-const adminUsersModal = document.querySelector('#adminUsersModal');
-const adminUsersClose = document.querySelector('#adminUsersClose');
-const adminUserNameInput = document.querySelector('#adminUserNameInput');
-const adminUserPasswordInput = document.querySelector('#adminUserPasswordInput');
-const adminUserCreateBtn = document.querySelector('#adminUserCreateBtn');
-const adminUsersList = document.querySelector('#adminUsersList');
-const adminUsersError = document.querySelector('#adminUsersError');
-const logoutBtn = document.querySelector('#logoutBtn');
-
-function renderAdminUsers(list) {
-  if (!adminUsersList) return;
-  adminUsersList.innerHTML = '';
-  (Array.isArray(list) ? list : []).forEach(user => {
-    const row = document.createElement('div');
-    row.className = 'admin-user-row';
-    const meta = document.createElement('div');
-    meta.className = 'admin-user-meta';
-    const n = document.createElement('div');
-    n.className = 'admin-user-name';
-    n.textContent = user.name;
-    const p = document.createElement('div');
-    p.className = 'admin-user-pass';
-    p.textContent = `Password: ${user.password || '—'} · ID: ${user.id}`;
-    meta.append(n,p);
-    const del = document.createElement('button');
-    del.className = 'mini-btn admin-delete-btn';
-    del.textContent = 'Delete';
-    del.addEventListener('click', async () => {
-      if (!confirm(`Delete ${user.name}?`)) return;
-      const r = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
-        method:'DELETE', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({password:adminSessionPassword || PASSWORD})
-      });
-      const d = await r.json().catch(()=>({}));
-      if (!r.ok || !d.ok) return showToast(d.error || 'Delete failed');
-      loadAdminUsers();
-      loadPrivateUsers();
-    });
-    row.append(meta,del);
-    adminUsersList.appendChild(row);
-  });
-}
-
-async function loadAdminUsers() {
-  if (!adminUsersList || !adminPanelVerified) return;
-  adminUsersError.textContent = 'Loading…';
-  try {
-    const r = await fetch(`/api/admin/users?password=${encodeURIComponent(String(PASSWORD).trim())}`, {cache:'no-store'});
-    const d = await r.json().catch(()=>({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || 'Unauthorized');
-    adminUsersError.textContent = '';
-    renderAdminUsers(d.users || []);
-  } catch (e) {
-    adminUsersError.textContent = e.message || 'Could not load users.';
-  }
-}
-
-adminUsersBtn?.addEventListener('click', () => {
-  appMenu?.classList.add('hidden');
-  if (adminPanelVerified) { adminUsersModal?.classList.remove('hidden'); loadAdminUsers(); }
-  else { adminVerifyError.textContent = ''; adminVerifyPassword.value = ''; adminVerifyModal?.classList.remove('hidden'); setTimeout(() => adminVerifyPassword?.focus(), 50); }
-});
-adminVerifyBtn?.addEventListener('click', verifyAndOpenAdminPanel);
-adminVerifyPassword?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenAdminPanel(); });
-adminVerifyClose?.addEventListener('click', () => adminVerifyModal?.classList.add('hidden'));
-adminVerifyModal?.addEventListener('click', e => { if (e.target === adminVerifyModal) adminVerifyModal.classList.add('hidden'); });
-adminUsersClose?.addEventListener('click', () => adminUsersModal?.classList.add('hidden'));
-adminUsersModal?.addEventListener('click', e => { if (e.target === adminUsersModal) adminUsersModal.classList.add('hidden'); });
-adminUserCreateBtn?.addEventListener('click', async () => {
-  if (!adminPanelVerified) { adminUsersModal?.classList.add('hidden'); return; }
-  const uname = String(adminUserNameInput?.value || '').trim();
-  const upass = String(adminUserPasswordInput?.value || '').trim();
-  if (!uname || !upass) { adminUsersError.textContent = 'Enter user name and password.'; return; }
-  adminUserCreateBtn.disabled = true;
-  try {
-    const r = await fetch('/api/admin/users', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:adminSessionPassword || PASSWORD,name:uname,userPassword:upass})
-    });
-    const d = await r.json().catch(()=>({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || 'Could not create user.');
-    adminUserNameInput.value = '';
-    adminUserPasswordInput.value = '';
-    adminUsersError.textContent = '';
-    await loadAdminUsers();
-    await loadPrivateUsers();
-    showToast(`User ${uname} created`);
-  } catch (e) {
-    adminUsersError.textContent = e.message || 'Could not create user.';
-  } finally {
-    adminUserCreateBtn.disabled = false;
-  }
-});
-logoutBtn?.addEventListener('click', () => {
-  appMenu?.classList.add('hidden');
-  logoutAccount();
-});
+accountContinueBtn?.addEventListener('click', finishAccountLogin);
+accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');
@@ -2768,10 +2409,11 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
+if (!userId || !name) {
+  openAccountModal(true);
+}
 updateMyNameUI();
 updateGroupNameUI();
-setLoginVisible(!authToken);
-restoreAccountSession().catch(() => setLoginVisible(true));
 nameSave.addEventListener('click', saveUserName);
 nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveUserName(); });
 nameClose.addEventListener('click', closeNameModal);

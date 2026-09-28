@@ -285,10 +285,3 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 .recycle-chat-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .recycle-chat-empty{padding:30px;text-align:center;color:#68737a}
 @media(max-width:600px){.recycle-chat-view{max-height:68vh}.recycle-chat-bubble{max-width:88%}.recycle-chat-body{padding:8px}.recycle-chat-media img,.recycle-chat-media video{max-height:220px}}
-
-/* Keep the app completely behind the login screen. */
-body.login-locked > .app-shell{visibility:hidden!important;pointer-events:none!important;}
-body.login-locked{overflow:hidden!important;}
-#accountModal{z-index:100000!important;background:#fff!important;}
-#accountModal .modal-card{z-index:100001!important;}
-#adminVerifyModal,#adminUsersModal{z-index:100010!important;}
