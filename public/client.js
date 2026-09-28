@@ -2421,23 +2421,28 @@ function openAccountModal(force = false) {
   setTimeout(() => accountNameInput.focus(), 50);
 }
 
-function finishAccountLogin() {
-  const enteredId = normalizeUserId(accountNameInput.value);
-  if (!enteredId) { accountError.textContent = 'Enter your User ID'; return; }
+async function finishAccountLogin() {
+  const entered = String(accountNameInput.value || '').trim();
+  if (!entered) { accountError.textContent = 'Enter your name or User ID'; return; }
   if (!socket.connected) { accountError.textContent = 'Connecting to chat server…'; return; }
   accountError.textContent = '';
-  socket.emit('register-user', { userId: enteredId, deviceId }, response => {
-    if (!response?.ok) { accountError.textContent = response?.error || 'User ID not found'; return; }
-    userId = String(response.userId || enteredId);
-    name = String(response.name || response.userName || '').trim();
-    if (!name) name = userId;
+  try {
+    const rr = await fetch('/api/users/resolve-login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:entered}),cache:'no-store'});
+    const resolved = await rr.json().catch(()=>({}));
+    if (!rr.ok || !resolved.ok || !resolved.user?.id) { accountError.textContent = resolved.error || 'Account not found. Ask the admin to create your account.'; return; }
+    const resolvedId = String(resolved.user.id).trim().toUpperCase();
+    const reg = await new Promise(resolve => socket.emit('register-user', { userId: resolvedId, name:String(resolved.user.name||''), deviceId }, resolve));
+    if (!reg?.ok) { localStorage.removeItem('wa_user_id'); localStorage.removeItem('wa_name'); userId=''; name=''; accountError.textContent = reg?.error || 'Could not open your account'; return; }
+    userId = String(reg.userId || resolvedId).trim().toUpperCase();
+    name = String(reg.name || resolved.user.name || userId).trim();
     localStorage.setItem('wa_user_id', userId);
+    localStorage.setItem('wa_name', name);
     socket.emit('presence-login', { userId, deviceId });
     accountModal.classList.add('hidden');
     updateMyNameUI();
     refreshContacts();
-    showToast('Logged in as ' + userId);
-  });
+    showToast('Logged in as ' + name);
+  } catch (e) { accountError.textContent = e?.message || 'Could not connect to chat server'; }
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);

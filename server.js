@@ -359,6 +359,28 @@ app.put('/api/admin/users/:id', async (req, res) => {
   } catch(e){ res.status(500).json({ok:false,error:'Could not update user'}); }
 });
 
+app.post('/api/users/resolve-login', async (req,res)=>{
+  try {
+    const value=String(req.body?.value||'').trim();
+    if(!value) return res.status(400).json({ok:false,error:'Enter your name or User ID'});
+    const profiles=await getUserProfilesCollection();
+    let users=[];
+    if(profiles){
+      const normalized=value.toUpperCase();
+      users=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false},$or:[{_id:normalized},{name:value}]}).project({_id:1,name:1}).limit(10).toArray();
+      if(!users.length) users=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false}}).project({_id:1,name:1}).limit(5000).toArray();
+    } else {
+      users=[...fallbackUsers.values()].filter(u=>u.adminCreated===true&&u.enabled!==false&&u.deleted!==true&&!u.deletedAt);
+    }
+    const exactId=users.find(u=>String(u._id||u.id).toUpperCase()===value.toUpperCase());
+    if(exactId) return res.json({ok:true,user:{id:String(exactId._id||exactId.id),name:String(exactId.name||exactId._id||exactId.id)}});
+    const exactName=users.filter(u=>String(u.name||'').trim().toLowerCase()===value.toLowerCase());
+    if(exactName.length===1){const u=exactName[0];return res.json({ok:true,user:{id:String(u._id||u.id),name:String(u.name||u._id||u.id)}});}
+    if(exactName.length>1) return res.status(409).json({ok:false,error:'More than one account has this name. Enter your User ID.'});
+    return res.status(404).json({ok:false,error:'Account not found. Ask the admin to create your account.'});
+  }catch(e){console.error('Resolve login failed:',e.message);res.status(500).json({ok:false,error:'Could not find your account'});}
+});
+
 app.post('/api/users/verify-password', async (req,res)=>{
   try {
     const userId=String(req.body?.userId||'').trim().toUpperCase();
