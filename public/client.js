@@ -1415,6 +1415,9 @@ function makeClientDirectChatId(peerId) {
 }
 const directChatIds = new Map();
 async function refreshContacts() {
+  if (!userId || localStorage.getItem('wa_logged_in') !== '1') {
+    contacts = []; groups = []; renderGroupList(); return;
+  }
   try {
     const r=await fetch(`/api/users?exclude=${encodeURIComponent(userId||'')}`,{cache:'no-store'}); const d=await r.json();
     contacts=Array.isArray(d.users)?d.users:[];
@@ -1505,8 +1508,7 @@ async function joinGroup(groupId, openAfter=true) {
   const target=groups.find(g=>g.id===groupId); if(target?.peerUserId){ const u=contacts.find(x=>String(x.id)===String(target.peerUserId)); if(u) return openDirectChat(u); }
 }
 function openGroup(group){ if(group?.peerUserId){ const u=contacts.find(x=>String(x.id)===String(group.peerUserId)); if(u) openDirectChat(u); } }
-loadGroups();
-refreshContacts();
+// Contacts are loaded only after a successful login.
 
 socket.on('user-registered', data => {
   if (!data?.userId || String(data.userId) === String(userId)) return;
@@ -2462,6 +2464,23 @@ async function finishAccountLogin() {
     localStorage.setItem('wa_name', name);
     localStorage.setItem('wa_logged_in', '1');
     try { if (!socket.connected) socket.connect(); } catch (_) {}
+    const connected = await waitForSocketConnection(10000);
+    if (!connected) {
+      localStorage.removeItem('wa_user_id');
+      localStorage.removeItem('wa_name');
+      localStorage.removeItem('wa_logged_in');
+      userId = ''; name = '';
+      accountError.textContent = 'Chat server is not connected. Please try Login again.';
+      return;
+    }
+    try { await ensureSocketUserRegistered(); } catch (e) {
+      localStorage.removeItem('wa_user_id');
+      localStorage.removeItem('wa_name');
+      localStorage.removeItem('wa_logged_in');
+      userId = ''; name = '';
+      accountError.textContent = e.message || 'Could not connect this account.';
+      return;
+    }
     closeAccountModalAfterLogin();
     updateMyNameUI();
     await refreshContacts();
@@ -2637,11 +2656,14 @@ function saveGroupName() {
 
 updateMyNameUI();
 updateGroupNameUI();
-openAccountModal(true);
-validateSavedLogin().then(ok => {
+validateSavedLogin().then(async ok => {
   if (ok) {
     try { socket.connect(); } catch (_) {}
-    refreshContacts();
+    const connected = await waitForSocketConnection(10000);
+    if (connected) {
+      try { await ensureSocketUserRegistered(); } catch (_) {}
+      await refreshContacts();
+    }
   }
 });
 updateGroupNameUI();
