@@ -1083,7 +1083,7 @@ function showAdminMediaPopup(item, isRecording=false){
   adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
   adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
   adminMediaPopupPreview.innerHTML='';
-  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
+  const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(String(PASSWORD).trim())}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
   if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
   else if(type==='video') { const el=document.createElement('video'); el.src=url; el.controls=true; el.autoplay=false; el.playsInline=true; adminMediaPopupPreview.appendChild(el); }
   else if(type==='audio') { const el=document.createElement('audio'); el.src=url; el.controls=true; adminMediaPopupPreview.appendChild(el); }
@@ -1859,7 +1859,7 @@ async function loadAdminCallRecordings(groupId = '') {
         const when = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
         const size = item.size ? `${Math.max(1,item.size/1024/1024).toFixed(1)} MB` : '';
         const duration = formatDuration(item.durationMs);
-        const url = `/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(PASSWORD)}`;
+        const url = `/api/admin/call-recordings/${encodeURIComponent(item.fileId)}?password=${encodeURIComponent(String(PASSWORD).trim())}`;
         const safeName = clean(item.feedName || 'Participant', 60);
 
         card.innerHTML = `
@@ -2272,7 +2272,7 @@ adminMediaViewClose?.addEventListener('click', closeAdminMediaPopup);
 adminMediaViewModal?.addEventListener('click', e => { if (e.target === adminMediaViewModal) closeAdminMediaPopup(); });
 adminCallRecordingsRefresh?.addEventListener('click', () => loadAdminCallRecordings());
 adminCallRecordingsDownloadAll?.addEventListener('click', () => {
-  const url = `/api/admin/call-recordings/download-all?password=${encodeURIComponent(PASSWORD)}`;
+  const url = `/api/admin/call-recordings/download-all?password=${encodeURIComponent(String(PASSWORD).trim())}`;
   window.location.href = url;
 });
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
@@ -2546,7 +2546,7 @@ const adminVerifyError = document.querySelector('#adminVerifyError');
 let adminPanelVerified = false;
 
 async function verifyAndOpenAdminPanel() {
-  const password = String(adminVerifyPassword?.value || '');
+  const password = String(adminVerifyPassword?.value || '').trim();
   if (!password) { if (adminVerifyError) adminVerifyError.textContent = 'Enter the Admin password.'; return; }
   if (adminVerifyBtn) adminVerifyBtn.disabled = true;
   try {
@@ -2612,7 +2612,7 @@ async function loadAdminUsers() {
   if (!adminUsersList || !adminPanelVerified) return;
   adminUsersError.textContent = 'Loading…';
   try {
-    const r = await fetch(`/api/admin/users?password=${encodeURIComponent(PASSWORD)}`, {cache:'no-store'});
+    const r = await fetch(`/api/admin/users?password=${encodeURIComponent(String(PASSWORD).trim())}`, {cache:'no-store'});
     const d = await r.json().catch(()=>({}));
     if (!r.ok || !d.ok) throw new Error(d.error || 'Unauthorized');
     adminUsersError.textContent = '';

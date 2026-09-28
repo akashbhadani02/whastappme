@@ -30,6 +30,7 @@ const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = 'deoxy';
+const ADMIN_PASSWORD_NORMALIZED = 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const DEFAULT_GROUP_ID = 'main';
 // In-memory fallback keeps group/password management working even when MongoDB
@@ -304,8 +305,8 @@ app.post('/api/chat/open', async (req, res) => {
 
 app.post('/api/admin/verify', async (req, res) => {
   try {
-    const password = String(req.body?.password || '');
-    if (!password || password !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: 'Invalid admin password.' });
+    const password = String(req.body?.password ?? '').trim();
+    if (!password || password !== ADMIN_PASSWORD_NORMALIZED) return res.status(401).json({ ok: false, error: 'Invalid admin password.' });
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'Admin verification failed.' });
