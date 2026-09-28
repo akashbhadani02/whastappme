@@ -364,20 +364,42 @@ app.post('/api/auth/login', async (req,res)=>{
     const name = String(req.body?.name || '').trim().slice(0,60);
     const password = String(req.body?.password || '');
     if (!name || !password) return res.status(400).json({ok:false,error:'Name and password are required'});
-    const profiles = await getUserProfilesCollection();
+    const wanted = name.toLowerCase();
     let user = null;
+    let profiles = null;
+    try { profiles = await getUserProfilesCollection(); } catch (_) { profiles = null; }
     if (profiles) {
-      user = await profiles.findOne({ name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`, $options:'i' }, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false} });
-    } else {
-      const wanted = name.toLowerCase();
-      user = [...fallbackUsers.values()].find(u => u.adminCreated===true && u.deleted!==true && !u.deletedAt && u.enabled!==false && String(u.name||'').trim().toLowerCase()===wanted) || null;
+      const safe = name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      user = await profiles.findOne({
+        $and: [
+          { $or: [
+            { name: { $regex: `^${safe}$`, $options:'i' } },
+            { displayName: { $regex: `^${safe}$`, $options:'i' } }
+          ] },
+          { $or: [ { adminCreated:true }, { adminCreated:{ $exists:false } } ] },
+          { deleted: { $ne:true } },
+          { deletedAt: { $exists:false } },
+          { enabled: { $ne:false } }
+        ]
+      });
     }
-    if (!user) return res.status(404).json({ok:false,error:'Name not found. Ask admin to create your account.'});
-    if (String(user.userPassword||'') !== password) return res.status(401).json({ok:false,error:'Wrong password'});
-    res.json({ok:true,user:{id:String(user._id||user.id),name:String(user.name||'')}});
-  } catch(e) { console.error('Login failed:',e.message); res.status(500).json({ok:false,error:'Login failed. Please try again.'}); }
+    if (!user) {
+      user = [...fallbackUsers.values()].find(u =>
+        u.deleted!==true && !u.deletedAt && u.enabled!==false &&
+        (u.adminCreated===true || u.adminCreated===undefined) &&
+        (String(u.name||'').trim().toLowerCase()===wanted || String(u.displayName||'').trim().toLowerCase()===wanted)
+      ) || null;
+    }
+    if (!user) return res.status(404).json({ok:false,error:'Name not found. Please use the exact name created by Admin.'});
+    const storedPassword = String(user.userPassword ?? user.password ?? '');
+    if (storedPassword !== password) return res.status(401).json({ok:false,error:'Wrong password'});
+    const resolvedId = String(user._id || user.id || '').trim().toUpperCase();
+    const resolvedName = String(user.name || user.displayName || name).trim();
+    if (!resolvedId) return res.status(500).json({ok:false,error:'Account ID is missing. Ask Admin to edit/save this user.'});
+    fallbackUsers.set(resolvedId, { id:resolvedId, name:resolvedName, userPassword:storedPassword, updatedAt:new Date(), adminCreated:true, enabled:true });
+    res.json({ok:true,user:{id:resolvedId,name:resolvedName}});
+  } catch(e) { console.error('Login failed:',e); res.status(500).json({ok:false,error:'Login failed: '+String(e.message||e)}); }
 });
-
 app.post('/api/auth/validate', async (req,res)=>{
   try {
     const id=String(req.body?.userId||'').trim().toUpperCase();

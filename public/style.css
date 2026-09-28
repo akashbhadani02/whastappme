@@ -296,5 +296,5 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 #accountModal{z-index:999999!important;pointer-events:auto!important}
 #accountModal .modal-card{pointer-events:auto!important;position:relative;z-index:1000000}
 #accountContinueBtn{pointer-events:auto!important;cursor:pointer!important}
-.app-shell.login-locked{pointer-events:none!important}
+.app-shell.login-locked{pointer-events:auto!important}
 .app-shell.login-locked #accountModal{pointer-events:auto!important}

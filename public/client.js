@@ -2388,6 +2388,7 @@ const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
 const accountPasswordInput = document.querySelector('#accountPasswordInput');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
+const accountLoginForm = document.querySelector('#accountLoginForm');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
 
@@ -2501,6 +2502,7 @@ async function validateSavedLogin() {
 
 // Login handlers are attached immediately and also through delegated submit/click
 // so re-login works even after the socket was disconnected by Logout.
+accountLoginForm?.addEventListener('submit', (e) => { e.preventDefault(); finishAccountLogin(); });
 accountContinueBtn?.addEventListener('click', (e) => { e.preventDefault(); finishAccountLogin(); });
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); accountPasswordInput.focus(); } });
 accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); finishAccountLogin(); } });
@@ -2635,6 +2637,7 @@ function saveGroupName() {
 
 updateMyNameUI();
 updateGroupNameUI();
+openAccountModal(true);
 validateSavedLogin().then(ok => {
   if (ok) {
     try { socket.connect(); } catch (_) {}
