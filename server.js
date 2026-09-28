@@ -290,8 +290,13 @@ app.get('/api/users', async (req, res) => {
     const me = String(req.query?.userId || '').trim();
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.json({ ok: true, users: [] });
-    const docs = await profiles.find(me ? { _id: { $ne: me } } : {}, {
-      projection: { _id: 1, name: 1, updatedAt: 1 }
+    // Private-chat directory contains ONLY active private users created via
+    // New Private Chat. Normal/group accounts must never appear here.
+    const query = me
+      ? { kind:'private_user', _id: { $ne: me } }
+      : { kind:'private_user' };
+    const docs = await profiles.find(query, {
+      projection: { _id: 1, name: 1, kind: 1, updatedAt: 1 }
     }).sort({ name: 1 }).limit(500).toArray();
     res.json({
       ok: true,
@@ -473,9 +478,13 @@ app.post('/api/admin/private-chats', async (req, res) => {
     }
 
     const ids = [...byUser.keys()];
-    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids } }, { projection:{ _id:1, name:1, createdAt:1, updatedAt:1 } }).toArray() : [];
+    // Admin's Private Users section is ONLY for active private-user accounts.
+    // The creator/normal account is a participant of the conversation but is
+    // not itself a private user and must not appear in this list.
+    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids }, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1 } }).toArray() : [];
     const userMap = new Map(userDocs.map(u => [String(u._id), u]));
-    const users = ids.map(id => {
+    const activePrivateIds = new Set(userDocs.map(u => String(u._id)));
+    const users = ids.filter(id => activePrivateIds.has(id)).map(id => {
       const u = userMap.get(id);
       const row = byUser.get(id);
       return {
