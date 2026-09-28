@@ -347,7 +347,7 @@ app.post('/api/users/verify-password', async (req,res)=>{
     const password=String(req.body?.password||'');
     const profiles=await getUserProfilesCollection();
     const user=profiles ? await profiles.findOne({_id:userId}) : fallbackUsers.get(userId);
-    if(!user || user.enabled===false) return res.status(404).json({ok:false,error:'User not found'});
+    if(!user || user.adminCreated !== true || user.deleted === true || user.deletedAt || user.enabled===false) return res.status(404).json({ok:false,error:'User not found'});
     if(String(user.userPassword||'')!==password) return res.status(401).json({ok:false,error:'Wrong password'});
     res.json({ok:true});
   } catch(e){ res.status(500).json({ok:false,error:'Could not verify password'}); }
@@ -359,10 +359,10 @@ app.get('/api/users', async (req, res) => {
     const profiles = await getUserProfilesCollection();
     let users = [];
     if (profiles) {
-      const activeFilter = exclude ? { _id: { $ne: exclude }, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } } : { enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } };
+      const activeFilter = exclude ? { _id: { $ne: exclude }, adminCreated: true, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } } : { adminCreated: true, enabled: { $ne: false }, deleted: { $ne: true }, deletedAt: { $exists: false } };
       users = await profiles.find(activeFilter).project({ _id: 1, name: 1, updatedAt: 1, enabled: 1 }).sort({ name: 1, _id: 1 }).limit(500).toArray();
     } else {
-      users = [...fallbackUsers.values()].filter(u => u.enabled !== false && u.deleted !== true && !u.deletedAt && (!exclude || String(u.id) !== exclude));
+      users = [...fallbackUsers.values()].filter(u => u.adminCreated === true && u.enabled !== false && u.deleted !== true && !u.deletedAt && (!exclude || String(u.id) !== exclude));
     }
     res.setHeader('Cache-Control','no-store');
     res.json({ ok:true, users: users.map(u => ({ id:String(u._id || u.id), name:String(u.name || u._id || u.id).slice(0,60) })) });
@@ -2070,6 +2070,8 @@ io.on('connection', async (socket) => {
       const profiles = await getUserProfilesCollection();
       let profile = profiles ? await profiles.findOne({ _id: requestedUserId }) : fallbackUsers.get(requestedUserId);
       if (!profile) { if (typeof ack === 'function') ack({ ok:false, error:'User ID not found. Ask the admin to create your account.' }); return; }
+      if (profile.adminCreated !== true) { if (typeof ack === 'function') ack({ ok:false, error:'This user was not created by the admin.' }); return; }
+      if (profile.deleted === true || profile.deletedAt) { if (typeof ack === 'function') ack({ ok:false, error:'This user account was deleted.' }); return; }
       if (profile.enabled === false) { if (typeof ack === 'function') ack({ ok:false, error:'This user account is disabled.' }); return; }
     } catch (error) {
       console.error('User authorization failed:', error.message);
