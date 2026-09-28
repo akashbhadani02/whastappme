@@ -2114,16 +2114,17 @@ io.on('connection', async (socket) => {
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
+    let displayName = requestedName || socket.userId;
     if (socket.userId) {
       const profiles = await getUserProfilesCollection();
       const profile = profiles ? await profiles.findOne({ _id: socket.userId }) : fallbackUsers.get(socket.userId);
-      const displayName = String(profile?.name || requestedName || socket.userId).slice(0,40);
-      fallbackUsers.set(socket.userId, { id: socket.userId, name: displayName, updatedAt: new Date(), adminCreated: profile?.adminCreated !== false, enabled: profile?.enabled !== false });
+      displayName = String(profile?.name || requestedName || socket.userId).slice(0,40);
+      fallbackUsers.set(socket.userId, { id: socket.userId, name: displayName, userPassword: profile?.userPassword || fallbackUsers.get(socket.userId)?.userPassword || '', updatedAt: new Date(), adminCreated: profile?.adminCreated !== false, enabled: profile?.enabled !== false });
       socket.emit('user-profile', { userId: socket.userId, name: displayName });
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
-    io.emit('user-registered', { userId: socket.userId, name: requestedName || socket.userId });
+    io.emit('user-registered', { userId: socket.userId, name: displayName });
     if (typeof ack === 'function') ack({ ok: true, userId: socket.userId, name: displayName });
   });
 
