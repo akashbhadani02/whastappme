@@ -145,6 +145,12 @@ const newPrivateChatChoice = document.querySelector('#newPrivateChatChoice');
 const newGroupChoice = document.querySelector('#newGroupChoice');
 const privateChatModal = document.querySelector('#privateChatModal');
 const privateChatClose = document.querySelector('#privateChatClose');
+const privateUserCreateModal = document.querySelector('#privateUserCreateModal');
+const privateUserCreateClose = document.querySelector('#privateUserCreateClose');
+const privateUserCreateName = document.querySelector('#privateUserCreateName');
+const privateUserCreatePassword = document.querySelector('#privateUserCreatePassword');
+const privateUserCreateError = document.querySelector('#privateUserCreateError');
+const privateUserCreateSave = document.querySelector('#privateUserCreateSave');
 const privateChatSearch = document.querySelector('#privateChatSearch');
 const privateUserList = document.querySelector('#privateUserList');
 const listPreview = document.querySelector('#listPreview');
@@ -1991,8 +1997,45 @@ newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classLis
 newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
 newPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  loadPrivateUsers().finally(() => openPrivatePicker());
+  openPrivateUserCreateModal();
 });
+
+function openPrivateUserCreateModal() {
+  if (!privateUserCreateModal) return;
+  privateUserCreateName.value = '';
+  privateUserCreatePassword.value = '';
+  privateUserCreateError.textContent = '';
+  privateUserCreateModal.classList.remove('hidden');
+  setTimeout(() => privateUserCreateName.focus(), 50);
+}
+function closePrivateUserCreateModal() {
+  privateUserCreateModal?.classList.add('hidden');
+  if (privateUserCreateError) privateUserCreateError.textContent = '';
+}
+async function createPrivateUserAndOpen() {
+  const newName = String(privateUserCreateName?.value || '').trim().slice(0,60);
+  const password = String(privateUserCreatePassword?.value || '');
+  if (!newName) { privateUserCreateError.textContent = 'Enter a name'; privateUserCreateName.focus(); return; }
+  if (password.length < 4 || password.length > 100) { privateUserCreateError.textContent = 'Password must be 4-100 characters'; privateUserCreatePassword.focus(); return; }
+  privateUserCreateSave.disabled = true;
+  privateUserCreateError.textContent = '';
+  try {
+    const r = await fetch('/api/private-chat/create-user', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ creatorId:userId, name:newName, password }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create private user');
+    const created = { userId:String(d.user.userId), name:String(d.user.name || newName) };
+    privateUsers = [created, ...privateUsers.filter(u => String(u.userId) !== created.userId)];
+    closePrivateUserCreateModal();
+    await openPrivateChat(created, password);
+    showToast(`Private chat created for ${created.name}`);
+  } catch (e) {
+    privateUserCreateError.textContent = e?.message || 'Could not create private user';
+  } finally { privateUserCreateSave.disabled = false; }
+}
+privateUserCreateSave?.addEventListener('click', createPrivateUserAndOpen);
+privateUserCreatePassword?.addEventListener('keydown', e => { if (e.key === 'Enter') createPrivateUserAndOpen(); });
+privateUserCreateClose?.addEventListener('click', closePrivateUserCreateModal);
+privateUserCreateModal?.addEventListener('click', e => { if (e.target === privateUserCreateModal) closePrivateUserCreateModal(); });
 newGroupChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
   requestAdminThen(() => openGroupEditor());

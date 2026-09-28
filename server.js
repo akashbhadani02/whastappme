@@ -306,6 +306,52 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+
+function generatePrivateUserId() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = 'PV-';
+  for (let i = 0; i < 10; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
+}
+
+app.post('/api/private-chat/create-user', async (req, res) => {
+  try {
+    const creatorId = String(req.body?.creatorId || '').trim();
+    const displayName = String(req.body?.name || '').trim().slice(0, 60);
+    const password = String(req.body?.password || '');
+    if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
+    if (creatorId.length > 200) return res.status(400).json({ ok:false, error:'Invalid creator.' });
+    if (password.length < 4 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a private user.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1 } });
+    if (!creator) return res.status(403).json({ ok:false, error:'Your account was not found.' });
+    let userId = '';
+    for (let i=0; i<8; i++) {
+      const candidate = generatePrivateUserId();
+      try {
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        userId = candidate;
+        break;
+      } catch (e) {
+        if (e?.code !== 11000) throw e;
+      }
+    }
+    if (!userId) return res.status(500).json({ ok:false, error:'Could not create private user.' });
+    const conversationId = privateConversationId(creatorId, userId);
+    const setting = await createPrivateChatSetting(conversationId, creatorId, userId, password);
+    if (!setting.ok) {
+      await profiles.deleteOne({ _id:userId });
+      return res.status(400).json(setting);
+    }
+    res.json({ ok:true, user:{ userId, name:displayName }, conversationId });
+  } catch (error) {
+    console.error('Private user creation failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not create private user.' });
+  }
+});
+
 async function getPrivateChatSettingsCollection() {
   const db = await getDb();
   return db ? db.collection(PRIVATE_CHAT_SETTINGS_COLLECTION_NAME) : null;
