@@ -139,6 +139,10 @@ const passwordText = document.querySelector('#passwordText');
 const passwordError = document.querySelector('#passwordError');
 const toast = document.querySelector('#toast');
 const chatList = document.querySelector('#chatList');
+const newChatChoiceModal = document.querySelector('#newChatChoiceModal');
+const newChatChoiceClose = document.querySelector('#newChatChoiceClose');
+const newPrivateChatChoice = document.querySelector('#newPrivateChatChoice');
+const newGroupChoice = document.querySelector('#newGroupChoice');
 const privateChatModal = document.querySelector('#privateChatModal');
 const privateChatClose = document.querySelector('#privateChatClose');
 const privateChatSearch = document.querySelector('#privateChatSearch');
@@ -1981,7 +1985,17 @@ window.addEventListener('popstate', () => {
   }
 });
 document.querySelector('#newChatBtn').addEventListener('click', () => {
+  newChatChoiceModal?.classList.remove('hidden');
+});
+newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classList.add('hidden'));
+newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
+newPrivateChatChoice?.addEventListener('click', () => {
+  newChatChoiceModal?.classList.add('hidden');
   loadPrivateUsers().finally(() => openPrivatePicker());
+});
+newGroupChoice?.addEventListener('click', () => {
+  newChatChoiceModal?.classList.add('hidden');
+  requestAdminThen(() => openGroupEditor());
 });
 privateChatClose?.addEventListener('click', () => privateChatModal?.classList.add('hidden'));
 privateChatModal?.addEventListener('click', e => { if (e.target === privateChatModal) privateChatModal.classList.add('hidden'); });
