@@ -371,6 +371,20 @@ app.post('/api/users/verify-password', async (req,res)=>{
   } catch(e){ res.status(500).json({ok:false,error:'Could not verify password'}); }
 });
 
+app.get('/api/direct-chat-id', async (req, res) => {
+  try {
+    const userA = String(req.query?.userId || '').trim().toUpperCase();
+    const userB = String(req.query?.peerUserId || '').trim().toUpperCase();
+    if (!userA || !userB || userA === userB) return res.status(400).json({ok:false,error:'Invalid users'});
+    // Keep the same ID format as the Socket.IO direct-chat room. This endpoint
+    // avoids depending on browser Web Crypto support.
+    res.setHeader('Cache-Control','no-store');
+    res.json({ok:true, chatId: makeDirectChatId(userA, userB)});
+  } catch (e) {
+    res.status(500).json({ok:false,error:'Could not create chat ID'});
+  }
+});
+
 app.get('/api/users', async (req, res) => {
   try {
     const exclude = String(req.query?.exclude || '').trim();

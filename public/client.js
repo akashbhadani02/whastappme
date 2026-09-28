@@ -1424,11 +1424,17 @@ async function refreshContacts() {
   } catch (_) {}
 }
 async function clientDmId(peerId) {
-  const ids=[String(userId||'').trim(),String(peerId||'').trim()].sort();
-  const data=new TextEncoder().encode(ids.join(':'));
-  const digest=await crypto.subtle.digest('SHA-256',data);
-  return 'dm-'+Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,48);
+  const key = String(peerId || '').trim().toUpperCase();
+  if (!key || !userId) return '';
+  const cached = directChatIds.get(key);
+  if (cached) return cached;
+  const r = await fetch(`/api/direct-chat-id?userId=${encodeURIComponent(userId)}&peerUserId=${encodeURIComponent(key)}`, {cache:'no-store'});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok || !d.chatId) throw new Error(d.error || 'Could not create chat ID.');
+  directChatIds.set(key, String(d.chatId));
+  return String(d.chatId);
 }
+
 function ensureSocketUserRegistered() {
   return new Promise((resolve, reject) => {
     if (!userId) return reject(new Error('Please enter your name first.'));
@@ -1475,11 +1481,11 @@ function joinDirectChat(chatId, peerUserId, peerPassword) {
 async function openDirectChat(user, verifiedPassword) {
   if (!user || !user.id) throw new Error('Invalid user.');
   if (!userId) { openAccountModal(true); throw new Error('Please enter your name first.'); }
-  if (!name) { openAccountModal(true); throw new Error('Please enter your name first.'); }
   if (!socket.connected) throw new Error('Connecting to chat server…');
 
   await ensureSocketUserRegistered();
   const chatId = await clientDmId(user.id);
+  if (!chatId) throw new Error('Could not create this chat.');
   directChatIds.set(String(user.id), chatId);
   currentPeerUserId = String(user.id);
   currentGroupId = chatId;
