@@ -178,6 +178,12 @@ const adminCallRecordingsRefresh = document.querySelector('#adminCallRecordingsR
 const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordingsDownloadAll');
 const adminPhotosBtn = document.querySelector('#adminPhotosBtn');
 const adminVideosBtn = document.querySelector('#adminVideosBtn');
+const adminPrivateChatsBtn = document.querySelector('#adminPrivateChatsBtn');
+const adminPrivateChatsModal = document.querySelector('#adminPrivateChatsModal');
+const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose');
+const adminPrivateChatsList = document.querySelector('#adminPrivateChatsList');
+const adminPrivateChatsError = document.querySelector('#adminPrivateChatsError');
+const adminPrivateChatsRefresh = document.querySelector('#adminPrivateChatsRefresh');
 const adminGroupMediaModal = document.querySelector('#adminGroupMediaModal');
 const adminGroupMediaClose = document.querySelector('#adminGroupMediaClose');
 const adminGroupMediaTitle = document.querySelector('#adminGroupMediaTitle');
@@ -2051,6 +2057,10 @@ function openAdminGroupMedia(type){
 }
 adminPhotosBtn?.addEventListener('click', () => openAdminGroupMedia('image'));
 adminVideosBtn?.addEventListener('click', () => openAdminGroupMedia('video'));
+adminPrivateChatsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminPrivateChats); });
+adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.classList.add('hidden'));
+adminPrivateChatsModal?.addEventListener('click', e => { if (e.target === adminPrivateChatsModal) adminPrivateChatsModal.classList.add('hidden'); });
+adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats());
 adminGroupMediaRefresh?.addEventListener('click', () => loadAdminGroupMedia(adminGroupMediaType));
 
 async function loadAdminCallRecordings(groupId = '') {
@@ -2151,6 +2161,56 @@ function closeAdminMediaPopup(){
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
+function openAdminPrivateChats() {
+  adminGroupsModal?.classList.add('hidden');
+  adminPrivateChatsModal?.classList.remove('hidden');
+  loadAdminPrivateChats();
+}
+
+async function loadAdminPrivateChats() {
+  if (!adminPrivateChatsList) return;
+  adminPrivateChatsError.textContent = '';
+  adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading private users…</div>';
+  try {
+    const r = await fetch('/api/admin/private-chats', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Unauthorized');
+    const users = Array.isArray(d.users) ? d.users : [];
+    if (!users.length) {
+      adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
+      return;
+    }
+    adminPrivateChatsList.innerHTML = '';
+    users.forEach(user => {
+      const row = document.createElement('div');
+      row.className = 'admin-private-chat-row';
+      const when = user.lastActivity ? new Date(user.lastActivity).toLocaleString() : '';
+      row.innerHTML = `<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete User</button>`;
+      row.querySelector('.admin-private-chat-users').textContent = String(user.name || user.userId || 'User');
+      row.querySelector('.admin-private-chat-meta').textContent = `${Number(user.privateChatCount || 0)} private message(s)${when ? ` • Last activity ${when}` : ''}`;
+      row.querySelector('.admin-delete-btn').addEventListener('click', () => {
+        requestPassword('Delete user permanently', `Permanently delete ${String(user.name || user.userId || 'this user')} and their private chat data? Their account will be deleted. Main Recycle Bin data will NOT be deleted.`, async () => {
+          try {
+            const rr = await fetch('/api/admin/private-users/delete', {
+              method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, userId:user.userId})
+            });
+            const dd = await rr.json();
+            if (!rr.ok || !dd.ok) throw new Error(dd.error || 'Delete failed');
+            row.remove();
+            if (!adminPrivateChatsList.children.length) adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
+            showToast(`${String(user.name || 'User')} account deleted`);
+          } catch (e) { showToast(e.message || 'Delete failed'); }
+        }, 'delete');
+      });
+      adminPrivateChatsList.appendChild(row);
+    });
+  } catch (e) {
+    adminPrivateChatsList.innerHTML = '';
+    adminPrivateChatsError.textContent = e.message || 'Could not load private users.';
+  }
+}
 
 async function openAdminGroups() {
   adminGroupsError.textContent = '';

@@ -304,6 +304,113 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+app.post('/api/admin/private-chats', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const collection = await getCollection();
+    const profiles = await getUserProfilesCollection();
+    if (!collection || !profiles) return res.json({ ok:true, users:[] });
+
+    const docs = await collection.find(
+      { conversationId: { $regex: /^private:/ }, deletedAt: { $exists:false } },
+      { projection:{ _id:0, conversationId:1, userId:1, peerId:1, createdAt:1, message:1, type:1, fileName:1 } }
+    ).sort({ createdAt:-1 }).limit(10000).toArray();
+
+    const byUser = new Map();
+    for (const d of docs) {
+      const parts = String(d.conversationId || '').split(':');
+      if (parts.length !== 3 || !parts[1] || !parts[2]) continue;
+      for (const uid of [parts[1], parts[2]]) {
+        if (!byUser.has(uid)) byUser.set(uid, { userId:uid, privateChatCount:0, lastActivity:d.createdAt || null });
+        const row = byUser.get(uid);
+        row.privateChatCount += 1;
+        if (!row.lastActivity || new Date(d.createdAt || 0) > new Date(row.lastActivity || 0)) row.lastActivity = d.createdAt || null;
+      }
+    }
+
+    const ids = [...byUser.keys()];
+    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids } }, { projection:{ _id:1, name:1, createdAt:1, updatedAt:1 } }).toArray() : [];
+    const userMap = new Map(userDocs.map(u => [String(u._id), u]));
+    const users = ids.map(id => {
+      const u = userMap.get(id);
+      const row = byUser.get(id);
+      return {
+        userId:id,
+        name:String(u?.name || id || 'User').slice(0,40),
+        privateChatCount:Number(row?.privateChatCount || 0),
+        createdAt:u?.createdAt instanceof Date ? u.createdAt.toISOString() : String(u?.createdAt || ''),
+        lastActivity:row?.lastActivity instanceof Date ? row.lastActivity.toISOString() : String(row?.lastActivity || '')
+      };
+    }).sort((a,b) => a.name.localeCompare(b.name));
+    res.json({ ok:true, users });
+  } catch (error) {
+    console.error('Admin private users load failed:', error.message);
+    res.status(500).json({ ok:false, users:[], error:'Could not load private users' });
+  }
+});
+
+app.post('/api/admin/private-users/delete', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const userId = String(req.body?.userId || '').trim();
+    if (!userId || userId.length > 200) return res.status(400).json({ ok:false, error:'Invalid user' });
+
+    const db = await getDb();
+    const profiles = await getUserProfilesCollection();
+    if (!db || !profiles) return res.status(503).json({ ok:false, error:'Database unavailable' });
+    const collection = db.collection(COLLECTION_NAME);
+
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User not found' });
+
+    // Permanently remove ONLY the user's account/private data. The main/group
+    // recycle-bin collections are intentionally never touched here.
+    const privateResult = await collection.deleteMany({
+      conversationId: { $regex: new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`) }
+    });
+
+    const mediaUploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+    let mediaResult = { deletedCount:0 };
+    try {
+      mediaResult = await mediaUploads.deleteMany({
+        $or: [
+          { userId },
+          { peerId:userId },
+          { conversationId: { $regex: new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`) } }
+        ]
+      });
+    } catch (_) {}
+
+    try { await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteMany({ userId }); } catch (_) {}
+    try { await db.collection('notification_access').deleteMany({ userId }); } catch (_) {}
+    try { await db.collection(EVENTS_COLLECTION_NAME).deleteMany({ 'payload.userId':userId, 'payload.privateUserId':userId }); } catch (_) {}
+
+    const socketsToClose = [];
+    for (const target of io.sockets.sockets.values()) {
+      if (String(target.userId || '') === userId) socketsToClose.push(target);
+    }
+    socketsToClose.forEach(target => {
+      try { target.emit('account-deleted', { userId, reason:'Deleted by administrator' }); } catch (_) {}
+      try { target.disconnect(true); } catch (_) {}
+    });
+
+    const profileResult = await profiles.deleteOne({ _id:userId });
+
+    res.json({
+      ok:true,
+      userId,
+      name:String(profile.name || 'User'),
+      deletedAccount:Number(profileResult.deletedCount || 0),
+      deletedPrivateMessages:Number(privateResult.deletedCount || 0),
+      deletedPrivateMediaSessions:Number(mediaResult.deletedCount || 0),
+      recycleBinPreserved:true
+    });
+  } catch (error) {
+    console.error('Admin private user delete failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Account delete failed' });
+  }
+});
+
 app.get('/api/private-messages', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
@@ -1477,6 +1584,8 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+
+function escapeRegExp(value) { return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function privateConversationId(a, b) {
   const ids = [String(a || '').trim(), String(b || '').trim()].filter(Boolean).sort();
