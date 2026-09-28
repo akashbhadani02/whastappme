@@ -2437,7 +2437,7 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = userId || '';
+  accountNameInput.value = name || '';
   if (accountPasswordInput) accountPasswordInput.value = '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
@@ -2449,7 +2449,7 @@ function openAccountModal(force = false) {
 async function finishAccountLogin() {
   const entered = String(accountNameInput.value || '').trim();
   const password = String(accountPasswordInput?.value || '');
-  if (!entered) { accountError.textContent = 'Enter your name or User ID'; return; }
+  if (!entered) { accountError.textContent = 'Enter your name'; return; }
   if (!password) { accountError.textContent = 'Enter your password'; return; }
   if (!socket.connected) { accountError.textContent = 'Connecting to chat server…'; return; }
   accountError.textContent = '';
@@ -2604,9 +2604,14 @@ logoutBtn?.addEventListener('click', () => {
   updateMyNameUI();
 });
 
-if (!userId || !name) {
-  openAccountModal(true);
-}
+// Always start at the login screen. Existing local identity is not trusted as a login.
+if (userId) { try { socket.emit('presence-logout', { userId, deviceId }); } catch (_) {} }
+userId = '';
+name = '';
+localStorage.removeItem('wa_user_id');
+localStorage.removeItem('wa_name');
+// The user must enter their admin-created name and password again.
+openAccountModal(true);
 updateMyNameUI();
 updateGroupNameUI();
 nameSave.addEventListener('click', saveUserName);
