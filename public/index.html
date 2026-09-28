@@ -20,7 +20,7 @@
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
-      <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button><button id="adminGroupsBtn" type="button">🔐 Passwords / Groups</button></div>
+      <div class="app-menu hidden" id="appMenu"><button id="installAppBtn" type="button">📲 Install WhatsApp</button><button id="adminGroupsBtn" type="button">🔐 Admin</button></div>
       <div class="search-wrap">
         <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">
@@ -29,10 +29,10 @@
         <button class="filter active">All</button>
         <button class="filter">Unread</button>
         <button class="filter">Favourites</button>
-        <button class="filter">Groups</button>
+        
       </div>
       <div class="chat-list" id="chatList"></div>
-      <button class="new-group-btn" id="newGroupBtn" type="button">＋ New group</button>
+      
       <div class="chat-list" id="legacyChatList" hidden>
         <button class="chat-item active" data-chat="main">
           <div class="avatar group-avatar" id="groupAvatarList">W</div>
@@ -48,7 +48,7 @@
     <section class="chat-panel">
       <header class="chat-header">
         <button class="back-btn" id="backBtn" aria-label="Back">‹</button>
-        <div class="avatar group-avatar" id="groupAvatarHeader">W</div>
+        <div class="avatar" id="groupAvatarHeader">W</div>
         <div class="contact-info">
           <strong id="groupNameHeader">WhatsApp</strong>
           <span id="onlineStatus" class="offline">offline</span>
@@ -107,14 +107,25 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="newChatModal" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
+    <div class="modal-card new-chat-card">
+      <button class="modal-close" id="newChatClose" aria-label="Close">×</button>
+      <h3 id="newChatTitle">New chat</h3>
+      <p>Select a registered user to start a private chat.</p>
+      <div class="new-chat-search"><span>⌕</span><input id="newChatSearch" type="search" autocomplete="off" placeholder="Search by name or User ID"></div>
+      <div id="newChatUsers" class="new-chat-users"></div>
+      <div class="password-error" id="newChatError"></div>
+    </div>
+  </div>
+
   <div class="modal hidden" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
     <div class="modal-card">
       <div class="lock-icon">👤</div>
       <h3 id="accountTitle">WhatsApp Account</h3>
-      <p id="accountHelp">Enter your name to start. Your User ID will be generated automatically.</p>
-      <input id="accountNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
+      <p id="accountHelp">Enter the User ID created for you by the administrator.</p>
+      <input id="accountNameInput" type="text" maxlength="40" autocomplete="off" placeholder="User ID">
       <div class="password-error" id="accountError"></div>
-      <button class="primary-btn" id="accountContinueBtn">Continue</button>
+      <button class="primary-btn" id="accountContinueBtn">Login</button>
       <div id="accountGenerated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
     </div>
   </div>
@@ -125,6 +136,7 @@
       <div class="lock-icon">👤</div>
       <h3 id="nameTitle">Change your name</h3>
       <p id="nameHelp">Choose the name other users will see.</p>
+      <div id="myUserIdBox" style="margin:10px 0;padding:10px;border-radius:10px;background:#f0f2f5;font-size:13px">Your User ID: <strong id="myUserIdValue"></strong><button type="button" id="copyUserIdBtn" style="margin-left:8px;border:0;background:transparent;cursor:pointer">Copy</button></div>
       <input id="nameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
@@ -160,11 +172,27 @@
       <button class="modal-close" id="adminGroupsClose" aria-label="Close">×</button>
       <div class="lock-icon">🔐</div>
       <h3>Password / Groups</h3>
-      <p>Admin can see and edit every group password.</p>
+      <p>Admin can manage groups and create user accounts.</p>
       <div class="admin-main-recycle-row"><button class="mini-btn" id="adminMainRecycleFromGroupsBtn">♻️ Main Recycle Bin</button><button class="mini-btn admin-delete-btn" id="adminAbcClearBtn">ABC</button><button class="mini-btn" id="adminCallRecordingsBtn">🎙️ Call Recordings</button><button class="mini-btn" id="adminPhotosBtn">📷 Photos</button><button class="mini-btn" id="adminVideosBtn">🎥 Videos</button></div>
       <div id="adminGroupsList" class="admin-groups-list"></div>
       <div class="password-error" id="adminGroupsError"></div>
-      <button class="primary-btn" id="adminNewGroupBtn">＋ Add new group</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary-btn" id="adminNewUserBtn">＋ Add new user</button><button class="primary-btn" id="adminNewGroupBtn">＋ Add new group</button></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="adminUserModal" role="dialog" aria-modal="true" aria-labelledby="adminUserTitle">
+    <div class="modal-card admin-card">
+      <button class="modal-close" id="adminUserClose" aria-label="Close">×</button>
+      <div class="lock-icon">👤</div>
+      <h3 id="adminUserTitle">Add new user</h3>
+      <p>Only the administrator can create accounts. A User ID will be generated automatically.</p>
+      <input id="adminUserNameInput" type="text" maxlength="60" autocomplete="off" placeholder="User name">
+      <input id="adminUserPasswordInput" type="text" maxlength="120" autocomplete="off" placeholder="User password">
+      <div class="password-error" id="adminUserError"></div>
+      <div id="adminUserCreated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
+      <button class="primary-btn" id="adminCreateUserBtn">Create user</button>
+      <h4 style="margin:20px 0 8px">Users & passwords</h4>
+      <div id="adminUsersList" class="admin-groups-list"></div>
     </div>
   </div>
 

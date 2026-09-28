@@ -33,9 +33,11 @@ function syncAndroidNotificationIdentity() {
 }
 syncAndroidNotificationIdentity();
 let name = localStorage.getItem('wa_name') || '';
-let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
-let currentGroupId = localStorage.getItem('wa_group_id') || '';
+let groupName = localStorage.getItem('wa_chat_name') || '';
+let currentGroupId = localStorage.getItem('wa_chat_id') || '';
 let groups = [];
+let contacts = [];
+let currentPeerUserId = localStorage.getItem('wa_peer_user_id') || '';
 let groupPasswordTarget = null;
 const unreadCounts = {};
 function getUnreadCount(groupId){ return Math.max(0, Number(unreadCounts[String(groupId)] || 0)); }
@@ -134,6 +136,11 @@ const passwordText = document.querySelector('#passwordText');
 const passwordError = document.querySelector('#passwordError');
 const toast = document.querySelector('#toast');
 const chatList = document.querySelector('#chatList');
+const newChatModal = document.querySelector('#newChatModal');
+const newChatClose = document.querySelector('#newChatClose');
+const newChatSearch = document.querySelector('#newChatSearch');
+const newChatUsers = document.querySelector('#newChatUsers');
+const newChatError = document.querySelector('#newChatError');
 const listPreview = document.querySelector('#listPreview');
 const listTime = document.querySelector('#listTime');
 const onlineStatus = document.querySelector('#onlineStatus');
@@ -151,6 +158,15 @@ const adminGroupsClose = document.querySelector('#adminGroupsClose');
 const adminGroupsList = document.querySelector('#adminGroupsList');
 const adminGroupsError = document.querySelector('#adminGroupsError');
 const adminNewGroupBtn = document.querySelector('#adminNewGroupBtn');
+const adminNewUserBtn = document.querySelector('#adminNewUserBtn');
+const adminUserModal = document.querySelector('#adminUserModal');
+const adminUserClose = document.querySelector('#adminUserClose');
+const adminUserNameInput = document.querySelector('#adminUserNameInput');
+const adminUserPasswordInput = document.querySelector('#adminUserPasswordInput');
+const adminUsersList = document.querySelector('#adminUsersList');
+const adminCreateUserBtn = document.querySelector('#adminCreateUserBtn');
+const adminUserError = document.querySelector('#adminUserError');
+const adminUserCreated = document.querySelector('#adminUserCreated');
 const adminRecycleModal = document.querySelector('#adminRecycleModal');
 const adminRecycleClose = document.querySelector('#adminRecycleClose');
 const adminRecycleTitle = document.querySelector('#adminRecycleTitle');
@@ -189,6 +205,7 @@ const adminMediaPopupPreview = document.querySelector('#adminMediaPopupPreview')
 const adminMediaPopupActions = document.querySelector('#adminMediaPopupActions');
 const adminMediaPopupIcon = document.querySelector('#adminMediaPopupIcon');
 let adminUnlocked = false;
+let pendingUserPasswordTarget = null;
 let adminRecycleGroupId = '';
 let adminRecycleGroupName = '';
 const groupPasswordModal = document.querySelector('#groupPasswordModal');
@@ -419,26 +436,46 @@ function requestPassword(title, text, action, passwordType = 'admin') {
   setTimeout(() => passwordInput.focus(), 50);
 }
 
+function requestUserPassword(user, action) {
+  pendingUserPasswordTarget = user ? { id:String(user.id), action } : null;
+  pendingAction = null;
+  pendingPasswordType = 'user';
+  passwordTitle.textContent = `${user?.name || 'User'} password`;
+  passwordText.textContent = 'Enter this user password to open the chat.';
+  passwordInput.value = '';
+  passwordError.textContent = '';
+  passwordModal.style.zIndex = '100000';
+  passwordModal.classList.remove('hidden');
+  setTimeout(() => passwordInput.focus(), 50);
+}
+
 function closePassword() {
   passwordModal.classList.add('hidden');
   pendingAction = null;
   pendingPasswordType = 'admin';
+  pendingUserPasswordTarget = null;
 }
 
-passwordSubmit.addEventListener('click', () => {
-  const expectedPassword = pendingPasswordType === 'download' ? DOWNLOAD_PASSWORD : PASSWORD;
-  if (passwordInput.value !== expectedPassword) {
-    passwordError.textContent = 'Wrong password';
-    passwordInput.select();
+passwordSubmit.addEventListener('click', async () => {
+  if (pendingPasswordType === 'user' && pendingUserPasswordTarget) {
+    const target = pendingUserPasswordTarget;
+    passwordError.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/users/verify-password', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:target.id,password:passwordInput.value})});
+      const d = await r.json();
+      if (!r.ok || !d.ok) { passwordError.textContent = d.error || 'Wrong password'; passwordInput.select(); return; }
+      pendingVerifiedUserPassword = passwordInput.value;
+      closePassword();
+      if (target.action) target.action();
+    } catch (_) { passwordError.textContent = 'Could not verify password'; }
     return;
   }
+  const expectedPassword = pendingPasswordType === 'download' ? DOWNLOAD_PASSWORD : PASSWORD;
+  if (passwordInput.value !== expectedPassword) { passwordError.textContent = 'Wrong password'; passwordInput.select(); return; }
   const action = pendingAction;
   const wasAdminPassword = pendingPasswordType === 'admin';
   closePassword();
-  if (wasAdminPassword) {
-    adminUnlocked = true;
-    try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
-  }
+  if (wasAdminPassword) { adminUnlocked = true; try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {} }
   if (action) action();
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
@@ -692,7 +729,7 @@ function deleteForMe(ids){ const backup=ids.map(id=>messages.get(id)).filter(Boo
 function showUndoToast(text){ toast.innerHTML=''; const span=document.createElement('span');span.textContent=text;const b=document.createElement('button');b.textContent='UNDO';b.className='toast-undo';b.onclick=undoLastDelete;toast.append(span,b);toast.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>{toast.classList.remove('show');lastDeleteBackup=null;},5000); }
 function undoLastDelete(){ const backup=lastDeleteBackup; if(!backup || backup.groupId!==currentGroupId || backup.expires<Date.now()){showToast('Undo expired');return;} backup.messages.forEach(msg=>{deletedIds.delete(String(msg.id)); deletedForMeIds.delete(String(msg.id)); renderMessage(msg,msg.userId===userId?'outgoing':'incoming');}); saveMessageFlags(); saveLocalMessageHistory(); lastDeleteBackup=null; toast.classList.remove('show'); showToast('Messages restored'); }
 function openForward(msg){ forwardMessage=msg; if(!forwardGroups) return; forwardGroups.innerHTML=''; groups.forEach(g=>{const b=document.createElement('button');b.className='chat-item';b.innerHTML=`<div class="avatar group-avatar">${(g.name||'G').slice(0,1).toUpperCase()}</div><div class="chat-summary"><strong>${g.name||'Group'}</strong></div>`;b.onclick=()=>forwardToGroup(g);forwardGroups.appendChild(b);}); forwardModal?.classList.remove('hidden'); }
-async function forwardToGroup(group){ if(!forwardMessage) return; const target=group.id; const msg={id:id(),groupId:target,senderId:socketId,userId,user:name,message:forwardMessage.message||'',time:now(),type:forwardMessage.type||'text',createdAt:new Date().toISOString(),deliveredTo:[],readBy:[],forwarded:true,...(forwardMessage.mediaId?{mediaId:forwardMessage.mediaId,mime:forwardMessage.mime,fileName:forwardMessage.fileName}:{}),...(forwardMessage.data?{data:forwardMessage.data}: {})}; if(target===currentGroupId) renderMessage(msg,'outgoing'); try{const r=await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg),cache:'no-store'}); if(!r.ok) throw new Error(); showToast(`Forwarded to ${group.name}`);}catch(_){showToast('Forward failed');} forwardModal?.classList.add('hidden');forwardMessage=null; }
+async function forwardToGroup(group){ if(!forwardMessage) return; const target=group.id; const msg={id:id(),groupId:target,recipientUserId:group?.peerUserId||'',senderId:socketId,userId,user:name,message:forwardMessage.message||'',time:now(),type:forwardMessage.type||'text',createdAt:new Date().toISOString(),deliveredTo:[],readBy:[],forwarded:true,...(forwardMessage.mediaId?{mediaId:forwardMessage.mediaId,mime:forwardMessage.mime,fileName:forwardMessage.fileName}:{}),...(forwardMessage.data?{data:forwardMessage.data}: {})}; if(target===currentGroupId) renderMessage(msg,'outgoing'); try{const r=await fetch('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg),cache:'no-store'}); if(!r.ok) throw new Error(); showToast(`Forwarded to ${group.name}`);}catch(_){showToast('Forward failed');} forwardModal?.classList.add('hidden');forwardMessage=null; }
 forwardClose?.addEventListener('click',()=>forwardModal?.classList.add('hidden'));
 forwardModal?.addEventListener('click',e=>{if(e.target===forwardModal)forwardModal.classList.add('hidden');});
 chatSearchBtn?.addEventListener('click',()=>{const q=(prompt('Search messages in this chat')||'').trim().toLowerCase();if(!q)return;const found=[...messages.values()].find(m=>(m.message||'').toLowerCase().includes(q));if(found){const el=document.querySelector(`.message[data-id="${CSS.escape(found.id)}"]`);el?.scrollIntoView({behavior:'smooth',block:'center'});el?.classList.add('search-hit');setTimeout(()=>el?.classList.remove('search-hit'),1800);}else showToast('No matching message');});
@@ -945,7 +982,7 @@ async function uploadMedia(file) {
   const ui = makeUploadBubble(file, type);
   try {
     const uploadId = id();
-    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const meta = { uploadId, groupId: currentGroupId, recipientUserId: currentPeerUserId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
     if (ui.status) ui.status.textContent = type === 'video' ? '📤 Uploading video… 0%' : type === 'image' ? '📤 Uploading photo… 0%' : type === 'audio' ? '📤 Uploading audio… 0%' : '📤 Uploading… 0%';
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
@@ -1299,176 +1336,189 @@ socket.on('group-updated', data => {
   if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
 });
 
-async function loadGroups() {
-  try {
-    const response = await fetch('/api/groups', { cache: 'no-store' });
-    const data = await response.json();
-    groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
-    // Never restore an unlocked group automatically. Every time a group is opened
-    // (including after leaving it or reopening it later), its password is required.
-    const saved = groups.find(g => g.id === currentGroupId);
-    const selected = saved || groups[0];
-    currentGroupId = '';
-    app?.classList.add('group-locked');
-    composer?.classList.add('hidden');
-    messageArea.innerHTML = '';
-    messages.clear();
-    deletedIds.clear();
-    starredIds.clear();
-    pinnedIds.clear();
-    deletedForMeIds.clear();
-    lastRenderedDate = '';
-    if (selected) {
-      groupName = selected.name;
-      localStorage.setItem('wa_group_name', groupName);
-      updateGroupNameUI();
-    } else {
-      groupName = '';
-      localStorage.removeItem('wa_group_id');
-      localStorage.removeItem('wa_group_name');
-      updateGroupNameUI();
-    }
-    renderGroupList();
-    refreshAllUnreadCounts().catch(() => {});
-  } catch (_) {
-    groups = [];
-    currentGroupId = '';
-    renderGroupList();
-    updateGroupNameUI();
+function renderNewChatUsers() {
+  if (!newChatUsers) return;
+  const q = String(newChatSearch?.value || '').trim().toLowerCase();
+  const list = contacts.filter(u => !q || String(u.name||'').toLowerCase().includes(q) || String(u.id||'').toLowerCase().includes(q));
+  newChatUsers.innerHTML = '';
+  if (!list.length) {
+    newChatUsers.innerHTML = '<div class="new-chat-empty">No users found</div>';
+    return;
   }
+  list.forEach(user => {
+    const row=document.createElement('div'); row.className='new-chat-user';
+    const avatar=document.createElement('div'); avatar.className='avatar'; avatar.textContent=firstCharacter(user.name,'U');
+    const info=document.createElement('div'); info.className='new-chat-user-info';
+    const uname=document.createElement('div'); uname.className='new-chat-user-name'; uname.textContent=user.name || user.id;
+    const uid=document.createElement('div'); uid.className='new-chat-user-id'; uid.textContent='User ID: '+user.id;
+    info.append(uname,uid);
+    const btn=document.createElement('button'); btn.className='new-chat-start'; btn.type='button'; btn.textContent='Chat';
+    btn.addEventListener('click',()=>startNewChatWithUser(user));
+    row.append(avatar,info,btn); newChatUsers.appendChild(row);
+  });
+}
+async function openNewChatModal() {
+  if (!newChatModal) return;
+  newChatError.textContent='';
+  newChatSearch.value='';
+  newChatModal.classList.remove('hidden');
+  await refreshContacts();
+  renderNewChatUsers();
+  setTimeout(()=>newChatSearch?.focus(),50);
+}
+function closeNewChatModal(){ newChatModal?.classList.add('hidden'); }
+let pendingVerifiedUserPassword = '';
+async function startNewChatWithUser(user){
+  if (!user?.id) return;
+  closeNewChatModal();
+  requestUserPassword(user, async () => {
+    try { await openDirectChat(user, pendingVerifiedUserPassword); showToast(`${user.name || user.id} chat opened`); }
+    catch (_) { showToast('Unable to open this chat. Please try again.'); }
+  });
 }
 
+async function loadGroups() {
+  try {
+    const r = await fetch(`/api/users?exclude=${encodeURIComponent(userId || '')}`, { cache:'no-store' });
+    const d = await r.json();
+    contacts = Array.isArray(d.users) ? d.users : [];
+    groups = contacts.map(u => ({ id:u.id, name:u.name, type:'user' }));
+    renderGroupList();
+    await refreshAllUnreadCounts();
+  } catch (_) {
+    contacts = []; groups = []; renderGroupList();
+  }
+}
 function renderGroupList() {
   if (!chatList) return;
   chatList.innerHTML = '';
-  groups.forEach(group => {
+  const q = String(document.querySelector('#searchInput')?.value || '').trim().toLowerCase();
+  const list = contacts.filter(u => !q || String(u.name||'').toLowerCase().includes(q) || String(u.id||'').toLowerCase().includes(q));
+  list.forEach(user => {
+    const chatId = makeClientDirectChatId(user.id);
     const button = document.createElement('button');
-    button.className = 'chat-item' + (group.id === currentGroupId ? ' active' : '');
-    button.type = 'button';
-    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
-    const summary = document.createElement('div'); summary.className = 'chat-summary';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
-    summary.querySelector('strong').textContent = group.name;
-    const badge = summary.querySelector('.group-unread-badge');
-    const unread = getUnreadCount(group.id);
-    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
-    button.append(avatar, summary);
-    button.addEventListener('click', () => openGroup(group));
-    chatList.appendChild(button);
+    button.className = 'chat-item' + (chatId === currentGroupId ? ' active' : '');
+    const avatar = document.createElement('div'); avatar.className='avatar'; avatar.textContent=firstCharacter(user.name, 'U');
+    const summary=document.createElement('div'); summary.className='chat-summary';
+    const unread=getUnreadCount(chatId);
+    summary.innerHTML=`<div class="chat-line"><strong></strong><span></span></div><div class="chat-line preview"><span>Tap to chat</span><span class="group-unread-badge"></span></div>`;
+    summary.querySelector('strong').textContent=user.name || user.id;
+    summary.querySelector('.group-unread-badge').textContent=unread>0?(unread>99?'99+':String(unread)):'';
+    if(unread>0) summary.querySelector('.group-unread-badge').style.display='inline-flex';
+    button.append(avatar,summary); button.addEventListener('click',()=>requestUserPassword(user, async()=>{ try{ await openDirectChat(user,pendingVerifiedUserPassword); }catch(_){ showToast('Unable to open this chat.'); } })); chatList.appendChild(button);
+  });
+}
+function makeClientDirectChatId(peerId) {
+  // Must match server's sha256 based ID; use a deterministic async-free fallback
+  // generated by a tiny pure JS SHA-256 implementation loaded below.
+  return directChatIds.get(String(peerId||'')) || '';
+}
+const directChatIds = new Map();
+async function refreshContacts() {
+  try {
+    const r=await fetch(`/api/users?exclude=${encodeURIComponent(userId||'')}`,{cache:'no-store'}); const d=await r.json();
+    contacts=Array.isArray(d.users)?d.users:[];
+    for (const u of contacts) directChatIds.set(String(u.id), await clientDmId(u.id));
+    groups=contacts.map(u=>({id:directChatIds.get(String(u.id)),name:u.name,type:'user',peerUserId:u.id}));
+    renderGroupList(); await refreshAllUnreadCounts();
+  } catch (_) {}
+}
+async function clientDmId(peerId) {
+  const ids=[String(userId||'').trim(),String(peerId||'').trim()].sort();
+  const data=new TextEncoder().encode(ids.join(':'));
+  const digest=await crypto.subtle.digest('SHA-256',data);
+  return 'dm-'+Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,48);
+}
+function ensureSocketUserRegistered() {
+  return new Promise((resolve, reject) => {
+    if (!userId) return reject(new Error('Please enter your name first.'));
+    if (!socket.connected) return reject(new Error('Connecting to chat server…'));
+    let done = false;
+    const finish = (ok, err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (ok) resolve(); else reject(new Error(err || 'Unable to connect to chat server.'));
+    };
+    const timer = setTimeout(() => finish(false, 'Chat connection timed out.'), 8000);
+    socket.emit('register-user', { userId, name, deviceId }, response => {
+      if (response?.ok) finish(true);
+      else finish(false, response?.error || 'User registration failed.');
+    });
   });
 }
 
-async function openGroup(group) {
-  if (!group) return;
-
-  // Do not ask repeatedly inside the same tab. Once this tab has successfully
-  // verified a group's password, switching away and back can reuse that
-  // verification. sessionStorage is intentionally used instead of localStorage
-  // so closing the tab/browser session forces a fresh password next time.
-  const cachedPassword = group.id === 'main' ? '' : getVerifiedGroupPassword(group.id);
-  if (group.id === 'main' || cachedPassword) {
-    await joinGroup(group.id, true);
-    return;
-  }
-
-  groupPasswordTarget = group;
-  groupPasswordTitle.textContent = `Open ${group.name}`;
-  groupPasswordHelp.textContent = "Enter this group's password to open it.";
-  groupPasswordInput.value = ''; groupPasswordError.textContent = '';
-  groupPasswordModal.classList.remove('hidden');
-  setTimeout(() => groupPasswordInput.focus(), 50);
-}
-
-async function verifyAndOpenGroup() {
-  const group = groupPasswordTarget;
-  if (!group) return;
-  const password = groupPasswordInput.value;
-  if (!password) { groupPasswordError.textContent = 'Enter the group password'; return; }
-
-  // Prevent double-clicks and remove the feeling that the app is stuck.
-  groupPasswordSubmit.disabled = true;
-  const oldLabel = groupPasswordSubmit.textContent;
-  groupPasswordSubmit.textContent = 'Opening…';
-  groupPasswordError.textContent = '';
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
-  try {
-    const response = await fetch('/api/groups/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId: group.id, password }),
-      cache: 'no-store',
-      signal: controller.signal
+function joinDirectChat(chatId, peerUserId, peerPassword) {
+  return new Promise((resolve, reject) => {
+    if (!socket.connected) return reject(new Error('Chat server is not connected.'));
+    let done = false;
+    const finish = (ok, err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (ok) resolve(); else reject(new Error(err || 'Unable to open chat.'));
+    };
+    const timer = setTimeout(() => finish(false, 'Unable to open chat. Please check your connection.'), 8000);
+    socket.emit('join-group', { groupId: chatId, peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
+      if (response?.ok) finish(true);
+      else finish(false, response?.error || 'Unable to open chat.');
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      groupPasswordError.textContent = response.status === 404 ? 'Group not found' : 'Wrong group password';
-      groupPasswordInput.select();
-      return;
-    }
-
-    groupPasswordModal.classList.add('hidden');
-    setVerifiedGroupPassword(group.id, password);
-    groupPasswordTarget = null;
-
-    // Open the UI immediately. Message history loads in the background so a
-    // slow MongoDB/network connection cannot make the password screen spin.
-    await joinGroup(group.id, true);
-  } catch (error) {
-    groupPasswordError.textContent = error?.name === 'AbortError'
-      ? 'Server is taking too long. Please try again.'
-      : 'Could not verify password';
-  } finally {
-    clearTimeout(timeout);
-    groupPasswordSubmit.disabled = false;
-    groupPasswordSubmit.textContent = oldLabel;
-  }
+  });
 }
 
-async function joinGroup(groupId, openAfter=true) {
-  const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
-  currentGroupId = groupId || 'main';
-  // Optimistically clear while opening, then reconcile against the persisted
-  // User-ID readBy state after the history/read receipts arrive.
-  setUnreadCount(currentGroupId, 0);
+async function openDirectChat(user, verifiedPassword) {
+  if (!user || !user.id) throw new Error('Invalid user.');
+  if (!userId) { openAccountModal(true); throw new Error('Please enter your name first.'); }
+  if (!name) { openAccountModal(true); throw new Error('Please enter your name first.'); }
+  if (!socket.connected) throw new Error('Connecting to chat server…');
+
+  await ensureSocketUserRegistered();
+  const chatId = await clientDmId(user.id);
+  directChatIds.set(String(user.id), chatId);
+  currentPeerUserId = String(user.id);
+  currentGroupId = chatId;
+  groupName = String(user.name || user.id);
+  localStorage.setItem('wa_chat_id', chatId);
+  localStorage.setItem('wa_chat_name', groupName);
+  localStorage.setItem('wa_peer_user_id', currentPeerUserId);
+
+  await joinDirectChat(chatId, currentPeerUserId, verifiedPassword);
+
+  setUnreadCount(chatId, 0);
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  groupName = group.name || 'WhatsApp';
-  app?.classList.remove('group-locked');
   composer?.classList.remove('hidden');
-  localStorage.setItem('wa_group_id', currentGroupId);
-  localStorage.setItem('wa_group_name', groupName);
-  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+  app?.classList.remove('group-locked');
+  messages.clear();
+  deletedIds.clear();
+  readSent.clear();
+  lastRenderedDate = '';
+  lastSyncAt = '';
   messageArea.innerHTML = '';
-  updateGroupNameUI(); renderGroupList();
+  updateGroupNameUI();
+  renderGroupList();
   loadLocalMessageHistory();
-  await new Promise(resolve => {
-    if (!socket.connected) { resolve(); return; }
-    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '') }, () => {
-      // Persist notification authorization server-side after the password-protected
-      // group join succeeds. This lets the native background service receive only
-      // notifications from groups this User ID has actually entered.
-      if (userId) {
-        fetch('/api/notifications/access', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, groupId: currentGroupId })
-        }).catch(() => {});
-      }
-      socket.emit('presence-login', { userId, deviceId }, () => {
-        socket.emit('presence-ping', { groupId: currentGroupId });
-        resolve();
-      });
-    });
-  });
-  // Never block opening the chat on history synchronization.
-  // The chat becomes usable immediately; history is reconciled in the background.
-  syncMessages().catch(() => {});
-  if (openAfter) openChat();
+  await syncMessages();
+  openChat();
 }
-
+async function joinGroup(groupId, openAfter=true) {
+  const target=groups.find(g=>g.id===groupId); if(target?.peerUserId){ const u=contacts.find(x=>String(x.id)===String(target.peerUserId)); if(u) return openDirectChat(u); }
+}
+function openGroup(group){ if(group?.peerUserId){ const u=contacts.find(x=>String(x.id)===String(group.peerUserId)); if(u) openDirectChat(u); } }
 loadGroups();
+refreshContacts();
+
+socket.on('user-registered', data => {
+  if (!data?.userId || String(data.userId) === String(userId)) return;
+  refreshContacts();
+});
+socket.on('user-renamed', data => {
+  if (!data?.userId) return;
+  const u=contacts.find(x=>String(x.id)===String(data.userId));
+  if(u) u.name=String(data.name||u.name);
+  refreshContacts();
+  if(String(data.userId)===String(currentPeerUserId)){ groupName=String(data.name||groupName); updateGroupNameUI(); }
+});
 
 socket.on('user-profile', data => {
   if (!data || String(data.userId || '') !== String(userId || '') || !data.name) return;
@@ -1573,24 +1623,27 @@ socket.on('last-seen-updated', data => {
   setOnlineStatus(false);
 });
 
-socket.on('connect', () => {
+socket.on('connect', async () => {
   // A reconnect may have happened before a previous read receipt reached the
   // server. Allow visible messages to be sent again so blue ticks cannot get
   // stuck after a temporary network drop.
   readSent.clear();
-  // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, name, deviceId });
-  // Reconcile all group badges immediately on every login/reconnect. Counts are
-  // user-level, so the same User ID sees the same seen/unseen state on all devices.
-  if (userId) refreshAllUnreadCounts().catch(() => {});
-  // Do not join/poll an empty group during startup. The group is joined only
-  // after its password has been successfully verified.
-  if (!currentGroupId) return;
+
+  let registered = false;
+  if (userId) {
+    try {
+      await ensureSocketUserRegistered();
+      registered = true;
+      refreshAllUnreadCounts().catch(() => {});
+    } catch (_) {}
+  }
+  if (!currentGroupId || !registered) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
-    password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '')
+    peerUserId: currentPeerUserId,
+    password: ''
   }, () => {
     if (userId) {
       fetch('/api/notifications/access', {
@@ -1641,6 +1694,7 @@ function scrollToBottom(){ messageArea.scrollTop=messageArea.scrollHeight; }
 function updatePreview(text){ listPreview.textContent=text; listTime.textContent=now(); }
 
 
+document.querySelector('#searchInput')?.addEventListener('input', renderGroupList);
 document.querySelectorAll('.filter').forEach(btn => btn.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); const mode=btn.textContent.trim().toLowerCase(); document.querySelectorAll('.message').forEach(el=>{const m=messages.get(el.dataset.id);let show=true;if(mode==='favourites') show=starredIds.has(el.dataset.id)||!!m?.starred;if(mode==='groups') show=true;el.style.display=show?'':'none';}); }));
 function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(currentGroupId) setUnreadCount(currentGroupId, 0); if(push && window.innerWidth<=760) history.pushState({chat:true}, '', '#chat'); setTimeout(() => { scrollToBottom(); markVisibleMessagesRead(); }, 50); }
 function closeChat(){
@@ -1651,7 +1705,7 @@ function closeChat(){
     const leavingGroupId = currentGroupId;
     if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
-    localStorage.removeItem('wa_group_id');
+    localStorage.removeItem('wa_chat_id'); localStorage.removeItem('wa_peer_user_id');
     otherGroupMemberOnline = false;
     setOnlineStatus('offline');
     renderGroupList();
@@ -1666,15 +1720,18 @@ window.addEventListener('popstate', () => {
     const leavingGroupId = currentGroupId;
     if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
-    localStorage.removeItem('wa_group_id');
+    localStorage.removeItem('wa_chat_id'); localStorage.removeItem('wa_peer_user_id');
     otherGroupMemberOnline = false;
     setOnlineStatus('offline');
     renderGroupList();
   }
 });
-document.querySelector('#newChatBtn').addEventListener('click', () => showToast('Use + New group to create a group'));
-newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
-document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
+document.querySelector('#newChatBtn').addEventListener('click', openNewChatModal);
+newChatClose?.addEventListener('click', closeNewChatModal);
+newChatModal?.addEventListener('click', e => { if(e.target === newChatModal) closeNewChatModal(); });
+newChatSearch?.addEventListener('input', renderNewChatUsers);
+document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status'));
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeNewChatModal(); }); 
 async function requestAdminThen(action) {
   requestPassword('Admin password', 'Enter the admin password to manage groups and passwords.', async () => {
     try { await action(); } catch (_) { showToast('Admin action failed'); }
@@ -1900,6 +1957,7 @@ async function openAdminGroups() {
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || 'unauthorized');
     renderAdminGroups(data.groups || []);
+    await loadAdminUsers();
     adminGroupsModal.classList.remove('hidden');
   } catch (_) { adminGroupsError.textContent = 'Admin access failed'; }
 }
@@ -1945,7 +2003,7 @@ function renderAdminGroups(list) {
             localStorage.setItem('wa_group_id', fallback.id);
             localStorage.setItem('wa_group_name', fallback.name);
           } else {
-            localStorage.removeItem('wa_group_id');
+            localStorage.removeItem('wa_chat_id'); localStorage.removeItem('wa_peer_user_id');
             localStorage.removeItem('wa_group_name');
           }
           messageArea.innerHTML = '';
@@ -2248,6 +2306,50 @@ adminCallRecordingsDownloadAll?.addEventListener('click', () => {
 });
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
+async function loadAdminUsers(){
+  if(!adminUsersList || !adminUnlocked) return;
+  try{
+    const r=await fetch('/api/admin/users/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD}),cache:'no-store'});
+    const d=await r.json(); if(!d.ok) throw new Error(d.error||'Failed');
+    adminUsersList.innerHTML='';
+    (d.users||[]).forEach(u=>{
+      const row=document.createElement('div'); row.className='admin-group-row';
+      row.innerHTML='<div class="admin-group-name"></div><input class="admin-password-input user-admin-name" maxlength="60"><div class="admin-password-wrap"><input type="text" class="admin-password-input user-admin-password" maxlength="120"><button type="button" class="mini-btn user-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-save-btn user-save-btn">Save</button></div>';
+      row.querySelector('.admin-group-name').textContent=u.id;
+      row.querySelector('.user-admin-name').value=u.name||''; row.querySelector('.user-admin-password').value=u.userPassword||'';
+      row.querySelector('.user-copy-btn').onclick=async()=>{try{await navigator.clipboard.writeText(row.querySelector('.user-admin-password').value);showToast('Password copied')}catch(_){}};
+      row.querySelector('.user-save-btn').onclick=async()=>{
+        try{const rr=await fetch('/api/admin/users/'+encodeURIComponent(u.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminPassword:PASSWORD,name:row.querySelector('.user-admin-name').value.trim(),userPassword:row.querySelector('.user-admin-password').value.trim()})}); const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Update failed'); showToast('User updated'); refreshContacts();}
+        catch(e){showToast(e.message||'Update failed');}
+      };
+      adminUsersList.appendChild(row);
+    });
+  }catch(e){ adminUsersList.innerHTML='<div class="password-error">Could not load users</div>'; }
+}
+
+adminNewUserBtn?.addEventListener('click', () => {
+  if (!adminUnlocked) { requestPassword('Admin access', 'Enter the admin password to create a user.', () => adminUserModal?.classList.remove('hidden')); return; }
+  adminUserError.textContent=''; adminUserCreated.style.display='none'; adminUserCreated.textContent=''; adminUserNameInput.value=''; adminUserPasswordInput.value=''; loadAdminUsers(); adminUserModal?.classList.remove('hidden'); setTimeout(()=>adminUserNameInput?.focus(),50);
+});
+adminUserClose?.addEventListener('click', () => adminUserModal?.classList.add('hidden'));
+adminUserModal?.addEventListener('click', e => { if (e.target === adminUserModal) adminUserModal.classList.add('hidden'); });
+adminCreateUserBtn?.addEventListener('click', async () => {
+  const nameValue=String(adminUserNameInput?.value||'').trim();
+  const userPasswordValue=String(adminUserPasswordInput?.value||'').trim();
+  if(!nameValue){ adminUserError.textContent='Enter user name'; return; }
+  if(!userPasswordValue){ adminUserError.textContent='Enter user password'; return; }
+  adminUserError.textContent='Creating…';
+  try {
+    const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,name:nameValue,userPassword:userPasswordValue})});
+    const d=await r.json();
+    if(!r.ok||!d.ok) throw new Error(d.error||'Could not create user');
+    adminUserError.textContent=''; adminUserCreated.style.display='block'; adminUserCreated.textContent='User ID: '+d.user.id+' • Password: '+d.user.userPassword;
+    try{await navigator.clipboard.writeText(d.user.id);}catch(_){}
+    refreshContacts();
+    loadAdminUsers();
+    showToast('User created: '+d.user.id);
+  } catch(e){ adminUserError.textContent=e.message||'Could not create user'; }
+});
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
 groupPasswordSubmit?.addEventListener('click', verifyAndOpenGroup);
 groupPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenGroup(); });
@@ -2266,6 +2368,8 @@ const nameClose = document.querySelector('#nameClose');
 const nameError = document.querySelector('#nameError');
 const nameTitle = document.querySelector('#nameTitle');
 const nameHelp = document.querySelector('#nameHelp');
+const myUserIdValue = document.querySelector('#myUserIdValue');
+const copyUserIdBtn = document.querySelector('#copyUserIdBtn');
 const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
@@ -2279,7 +2383,7 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = name || '';
+  accountNameInput.value = userId || '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
@@ -2288,19 +2392,21 @@ function openAccountModal(force = false) {
 }
 
 function finishAccountLogin() {
-  const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
-  if (!nextName) { accountError.textContent = 'Enter your name'; return; }
-  if (!userId) userId = generateUserId();
-  userId = normalizeUserId(userId);
-  name = nextName;
-  localStorage.setItem('wa_user_id', userId);
-  localStorage.setItem('wa_name', name);
-  syncAndroidNotificationIdentity();
-  accountModal.classList.add('hidden');
-  updateMyNameUI();
-  socket.emit('register-user', { userId, name, deviceId });
-  socket.emit('presence-login', { userId, deviceId });
-  if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
+  const enteredId = normalizeUserId(accountNameInput.value);
+  if (!enteredId) { accountError.textContent = 'Enter your User ID'; return; }
+  if (!socket.connected) { accountError.textContent = 'Connecting to chat server…'; return; }
+  accountError.textContent = '';
+  socket.emit('register-user', { userId: enteredId, deviceId }, response => {
+    if (!response?.ok) { accountError.textContent = response?.error || 'User ID not found'; return; }
+    userId = String(response.userId || enteredId);
+    name = '';
+    localStorage.setItem('wa_user_id', userId);
+    socket.emit('presence-login', { userId, deviceId });
+    accountModal.classList.add('hidden');
+    updateMyNameUI();
+    refreshContacts();
+    showToast('Logged in as ' + userId);
+  });
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
@@ -2331,6 +2437,7 @@ function updateGroupNameUI() {
 
 function openUserNameModal() {
   nameInput.value = name;
+  if (myUserIdValue) myUserIdValue.textContent = userId || 'Generating…';
   nameTitle.textContent = 'Change your name';
   nameHelp.textContent = 'Choose the name other users will see.';
   nameInput.placeholder = 'Your name';
@@ -2343,6 +2450,11 @@ function closeNameModal() {
   nameModal.classList.add('hidden');
   nameError.textContent = '';
 }
+
+copyUserIdBtn?.addEventListener('click', async () => {
+  if (!userId) return;
+  try { await navigator.clipboard.writeText(userId); showToast('User ID copied'); } catch (_) { showToast('User ID: ' + userId); }
+});
 
 function openGroupNameModal() {
   groupNameInput.value = groupName;
