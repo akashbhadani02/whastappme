@@ -2405,14 +2405,24 @@ function openAccountModal(force = false) {
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
-  accountModal.classList.remove('hidden');
-  document.querySelector('.app-shell')?.classList.add('login-locked');
+  showAccountModalForLogin();
   setTimeout(() => accountNameInput.focus(), 50);
 }
 
 function closeAccountModalAfterLogin() {
+  if (!accountModal) return;
   accountModal.classList.add('hidden');
+  accountModal.style.display = 'none';
   document.querySelector('.app-shell')?.classList.remove('login-locked');
+  document.body.classList.remove('login-required');
+}
+
+function showAccountModalForLogin() {
+  if (!accountModal) return;
+  accountModal.style.display = '';
+  accountModal.classList.remove('hidden');
+  document.querySelector('.app-shell')?.classList.add('login-locked');
+  document.body.classList.add('login-required');
 }
 
 async function waitForSocketConnection(timeoutMs = 10000) {
@@ -2481,10 +2491,11 @@ async function finishAccountLogin() {
       accountError.textContent = e.message || 'Could not connect this account.';
       return;
     }
-    closeAccountModalAfterLogin();
     updateMyNameUI();
     await refreshContacts();
     await refreshAllUnreadCounts();
+    // Login is complete: force the login layer closed only after all startup work.
+    closeAccountModalAfterLogin();
     showToast('Logged in as ' + name);
   } catch (e) {
     accountError.textContent = 'Server connection failed. Please try again.';
