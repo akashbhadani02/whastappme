@@ -2423,6 +2423,10 @@ const copyUserIdBtn = document.querySelector('#copyUserIdBtn');
 const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
+const accountPasswordInput = document.querySelector('#accountPasswordInput');
+const meAccountName = document.querySelector('#meAccountName');
+const meAccountId = document.querySelector('#meAccountId');
+const meAccount = document.querySelector('#meAccount');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
@@ -2434,6 +2438,7 @@ function normalizeUserId(value) {
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
   accountNameInput.value = userId || '';
+  if (accountPasswordInput) accountPasswordInput.value = '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
@@ -2443,7 +2448,9 @@ function openAccountModal(force = false) {
 
 async function finishAccountLogin() {
   const entered = String(accountNameInput.value || '').trim();
+  const password = String(accountPasswordInput?.value || '');
   if (!entered) { accountError.textContent = 'Enter your name or User ID'; return; }
+  if (!password) { accountError.textContent = 'Enter your password'; return; }
   if (!socket.connected) { accountError.textContent = 'Connecting to chat server…'; return; }
   accountError.textContent = '';
   try {
@@ -2451,6 +2458,9 @@ async function finishAccountLogin() {
     const resolved = await rr.json().catch(()=>({}));
     if (!rr.ok || !resolved.ok || !resolved.user?.id) { accountError.textContent = resolved.error || 'Account not found. Ask the admin to create your account.'; return; }
     const resolvedId = String(resolved.user.id).trim().toUpperCase();
+    const vr = await fetch('/api/users/verify-password', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:resolvedId,password}),cache:'no-store'});
+    const vd = await vr.json().catch(()=>({}));
+    if (!vr.ok || !vd.ok) { accountError.textContent = vd.error || 'Wrong password'; return; }
     const reg = await new Promise(resolve => socket.emit('register-user', { userId: resolvedId, name:String(resolved.user.name||''), deviceId }, resolve));
     if (!reg?.ok) { localStorage.removeItem('wa_user_id'); localStorage.removeItem('wa_name'); userId=''; name=''; accountError.textContent = reg?.error || 'Could not open your account'; return; }
     userId = String(reg.userId || resolvedId).trim().toUpperCase();
@@ -2467,6 +2477,7 @@ async function finishAccountLogin() {
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');
@@ -2481,6 +2492,8 @@ function firstCharacter(value, fallback = 'W') {
 
 function updateMyNameUI() {
   if (meAvatar) meAvatar.textContent = firstCharacter(name);
+  if (meAccountName) meAccountName.textContent = name || 'Not logged in';
+  if (meAccountId) meAccountId.textContent = userId ? ('ID: ' + userId) : 'Login required';
 }
 
 function updateGroupNameUI() {
@@ -2577,6 +2590,20 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
+
+const logoutBtn = document.querySelector('#logoutBtn');
+logoutBtn?.addEventListener('click', () => {
+  if (userId) socket.emit('presence-logout', { userId, deviceId });
+  localStorage.removeItem('wa_user_id');
+  localStorage.removeItem('wa_name');
+  userId = ''; name = ''; currentGroupId = ''; currentPeerUserId = '';
+  if (accountPasswordInput) accountPasswordInput.value = '';
+  if (typeof closeCurrentChat === 'function') { try { closeCurrentChat(); } catch (_) {} }
+  document.querySelector('#appMenu')?.classList.add('hidden');
+  openAccountModal(true);
+  updateMyNameUI();
+});
+
 if (!userId || !name) {
   openAccountModal(true);
 }
@@ -2592,6 +2619,7 @@ groupNameClose.addEventListener('click', closeGroupNameModal);
 groupNameModal.addEventListener('click', e => { if (e.target === groupNameModal) closeGroupNameModal(); });
 
 meAvatar.addEventListener('click', openUserNameModal);
+meAccount?.addEventListener('click', (e) => { if (e.target === meAvatar) return; openUserNameModal(); });
 meAvatar.setAttribute('title', 'Change your name');
 meAvatar.setAttribute('aria-label', 'Change your name');
 meAvatar.style.cursor = 'pointer';

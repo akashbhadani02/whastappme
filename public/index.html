@@ -13,7 +13,10 @@
   <main class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-top">
-        <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
+        <div class="me-account" id="meAccount" title="Logged-in account">
+          <button class="avatar me-avatar" id="profileAvatar" type="button" title="Account" aria-label="Account">W</button>
+          <div class="me-account-text"><strong id="meAccountName">Not logged in</strong><span id="meAccountId">Login required</span></div>
+        </div>
         <div class="top-actions">
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
           <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
@@ -119,11 +122,12 @@
   </div>
 
   <div class="modal hidden" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
-    <div class="modal-card">
-      <div class="lock-icon">👤</div>
-      <h3 id="accountTitle">WhatsApp Account</h3>
-      <p id="accountHelp">Enter the User ID created for you by the administrator.</p>
-      <input id="accountNameInput" type="text" maxlength="40" autocomplete="off" placeholder="User ID">
+    <div class="modal-card login-card">
+      <div class="lock-icon">🔐</div>
+      <h3 id="accountTitle">Login to WhatsApp</h3>
+      <p id="accountHelp">Enter the User ID (or account name) and password created by the administrator.</p>
+      <input id="accountNameInput" type="text" maxlength="40" autocomplete="username" placeholder="User ID or Name">
+      <input id="accountPasswordInput" type="password" maxlength="120" autocomplete="current-password" placeholder="Password" style="margin-top:10px">
       <div class="password-error" id="accountError"></div>
       <button class="primary-btn" id="accountContinueBtn">Login</button>
       <div id="accountGenerated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
