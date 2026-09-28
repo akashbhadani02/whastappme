@@ -2443,32 +2443,31 @@ function socketAccountLogin(loginName, loginPassword) {
 }
 
 async function finishAccountLogin() {
-  const enteredName = String(accountNameInput.value || '').trim();
-  const enteredPassword = String(accountPasswordInput.value || '');
-  if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput.focus(); return; }
-  if (!enteredPassword) { accountError.textContent = 'Enter your password'; accountPasswordInput.focus(); return; }
+  const enteredName = String(accountNameInput?.value || '').trim();
+  const enteredPassword = String(accountPasswordInput?.value || '');
+  if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput?.focus(); return; }
+  if (!enteredPassword) { accountError.textContent = 'Enter your password'; accountPasswordInput?.focus(); return; }
   accountContinueBtn.disabled = true;
   accountContinueBtn.textContent = 'Logging in…';
   accountError.textContent = '';
   try {
-    const connected = await waitForSocketConnection();
-    if (!connected) { accountError.textContent = 'Server connection failed. Start the server and try again.'; return; }
-    const response = await socketAccountLogin(enteredName, enteredPassword);
-    if (!response?.ok) { accountError.textContent = response?.error || 'Login failed'; return; }
+    const r = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:enteredName,password:enteredPassword}), cache:'no-store' });
+    const response = await r.json().catch(() => ({ok:false,error:'Invalid server response'}));
+    if (!r.ok || !response?.ok) { accountError.textContent = response?.error || 'Login failed'; return; }
     userId = String(response.user?.id || '').trim().toUpperCase();
     name = String(response.user?.name || enteredName).trim();
     if (!userId) { accountError.textContent = 'Login failed: account ID missing'; return; }
     localStorage.setItem('wa_user_id', userId);
     localStorage.setItem('wa_name', name);
     localStorage.setItem('wa_logged_in', '1');
-    socket.emit('presence-login', { userId, deviceId });
+    try { if (!socket.connected) socket.connect(); } catch (_) {}
     closeAccountModalAfterLogin();
     updateMyNameUI();
     await refreshContacts();
     await refreshAllUnreadCounts();
     showToast('Logged in as ' + name);
   } catch (e) {
-    accountError.textContent = 'Login failed. Please try again.';
+    accountError.textContent = 'Server connection failed. Please try again.';
   } finally {
     accountContinueBtn.disabled = false;
     accountContinueBtn.textContent = 'Login';
@@ -2500,9 +2499,16 @@ async function validateSavedLogin() {
   }
 }
 
-accountContinueBtn?.addEventListener('click', finishAccountLogin);
-accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') accountPasswordInput.focus(); });
-accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+// Login handlers are attached immediately and also through delegated submit/click
+// so re-login works even after the socket was disconnected by Logout.
+accountContinueBtn?.addEventListener('click', (e) => { e.preventDefault(); finishAccountLogin(); });
+accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); accountPasswordInput.focus(); } });
+accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); finishAccountLogin(); } });
+accountModal?.addEventListener('click', e => { if (e.target === accountModal) e.stopPropagation(); });
+document.addEventListener('click', e => {
+  const btn = e.target?.closest?.('#accountContinueBtn');
+  if (btn) { e.preventDefault(); e.stopPropagation(); if (!btn.disabled) finishAccountLogin(); }
+}, true);
 
 const logoutBtn = document.querySelector('#logoutBtn');
 logoutBtn?.addEventListener('click', () => {
