@@ -184,6 +184,7 @@ const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose')
 const adminPrivateChatsList = document.querySelector('#adminPrivateChatsList');
 const adminPrivateChatsError = document.querySelector('#adminPrivateChatsError');
 const adminPrivateChatsRefresh = document.querySelector('#adminPrivateChatsRefresh');
+const adminPrivatePassword = document.querySelector('#adminPrivatePassword');
 const adminDeleteAllUsersBtn = document.querySelector('#adminDeleteAllUsersBtn');
 const adminDeleteAllGroupsBtn = document.querySelector('#adminDeleteAllGroupsBtn');
 const adminGroupMediaModal = document.querySelector('#adminGroupMediaModal');
@@ -446,15 +447,34 @@ function closePassword() {
   pendingPasswordType = 'admin';
 }
 
-passwordSubmit.addEventListener('click', () => {
-  const expectedPassword = pendingPasswordType === 'download' ? DOWNLOAD_PASSWORD : PASSWORD;
-  if (passwordInput.value !== expectedPassword) {
-    passwordError.textContent = 'Wrong password';
-    passwordInput.select();
-    return;
+passwordSubmit.addEventListener('click', async () => {
+  const supplied = passwordInput.value;
+  let valid = false;
+  if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
+  else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
+  else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify') {
+    try {
+      const peerId = String(window.pendingPrivatePeerId || '');
+      const endpoint = pendingPasswordType === 'private-setup' ? '/api/private-chat/set-password' : '/api/private-chat/verify';
+      const r = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId, peerId, password:supplied})});
+      const d = await r.json().catch(() => ({}));
+      valid = !!d.ok;
+      if (!valid && d.needsSetup && pendingPasswordType === 'private-verify') {
+        pendingPasswordType = 'private-setup';
+        passwordTitle.textContent = 'Set private chat password';
+        passwordText.textContent = 'Set a password for this private chat. Share it with the other person.';
+        passwordInput.value = '';
+        passwordError.textContent = '';
+        setTimeout(() => passwordInput.focus(), 40);
+        return;
+      }
+    } catch (_) { valid = false; }
   }
+  if (!valid) { passwordError.textContent = 'Wrong password'; passwordInput.select(); return; }
   const action = pendingAction;
   const wasAdminPassword = pendingPasswordType === 'admin';
+  const wasPrivatePassword = pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify';
+  if (wasPrivatePassword) window.privatePasswordForOpen = supplied;
   closePassword();
   if (wasAdminPassword) {
     adminUnlocked = true;
@@ -1552,8 +1572,33 @@ function renderPrivateUserList(filter='') {
   });
 }
 
-async function openPrivateChat(user) {
+async function openPrivateChat(user, suppliedPassword='') {
   if (!user || !user.userId || String(user.userId) === String(userId)) return;
+  let password = suppliedPassword;
+  if (!password) {
+    try {
+      const r = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
+      const d = await r.json().catch(() => ({}));
+      if (!d.exists) {
+        window.pendingPrivatePeerId = String(user.userId);
+        requestPassword('Set private chat password', 'Set a password for this private chat. Share it with the other person.', () => openPrivateChat(user, '__SET_BY_MODAL__'), 'private-setup');
+        return;
+      }
+    } catch (_) {
+      showToast('Could not check private chat password');
+      return;
+    }
+    window.pendingPrivatePeerId = String(user.userId);
+    requestPassword('Private chat password', 'Enter the password set for this private chat.', () => openPrivateChat(user, '__VERIFY_BY_MODAL__'), 'private-verify');
+    return;
+  }
+  if (password === '__SET_BY_MODAL__' || password === '__VERIFY_BY_MODAL__') {
+    password = window.privatePasswordForOpen || '';
+    window.privatePasswordForOpen = '';
+  }
+  if (!password) return;
+  window.privateChatPasswords = window.privateChatPasswords || {};
+  window.privateChatPasswords[String(user.userId)] = password;
   activeChatType = 'private';
   currentPrivateUser = user;
   privateUnreadCounts[user.userId] = 0;
@@ -1566,7 +1611,7 @@ async function openPrivateChat(user) {
   let privateSocketReady = false;
   try {
     if (socket.connected) {
-      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId }, result => {
+      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId, password }, result => {
         privateSocketReady = !!result?.ok;
         resolve();
       }));
@@ -1574,7 +1619,7 @@ async function openPrivateChat(user) {
   } catch (_) {}
   if (!privateSocketReady) {
     try {
-      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
+      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
       const d = await r.json().catch(() => ({}));
       if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
     } catch (_) {}
@@ -1582,6 +1627,7 @@ async function openPrivateChat(user) {
   openChat();
   requestAnimationFrame(() => scrollToBottom());
 }
+
 
 function updatePrivateHeader() {
   if (!currentPrivateUser) return;
@@ -2210,6 +2256,13 @@ async function loadAdminPrivateChats() {
   adminPrivateChatsError.textContent = '';
   adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading private users…</div>';
   try {
+    let privatePasswordSettings = [];
+    if (adminPrivatePassword) {
+      const pr = await fetch('/api/admin/private-password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})});
+      const pd = await pr.json().catch(() => ({}));
+      privatePasswordSettings = Array.isArray(pd.passwords) ? pd.passwords : [];
+      adminPrivatePassword.textContent = privatePasswordSettings.length ? 'Shown per private chat below' : 'No private chat passwords set';
+    }
     const r = await fetch('/api/admin/private-chats', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})
     });
@@ -2225,9 +2278,11 @@ async function loadAdminPrivateChats() {
       const row = document.createElement('div');
       row.className = 'admin-private-chat-row';
       const when = user.lastActivity ? new Date(user.lastActivity).toLocaleString() : '';
-      row.innerHTML = `<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete User</button>`;
+      row.innerHTML = `<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete User</button>`;
       row.querySelector('.admin-private-chat-users').textContent = String(user.name || user.userId || 'User');
       row.querySelector('.admin-private-chat-meta').textContent = `${Number(user.privateChatCount || 0)} private message(s)${when ? ` • Last activity ${when}` : ''}`;
+      const passwordsForUser = privatePasswordSettings.filter(x => String(x.userA) === String(user.userId) || String(x.userB) === String(user.userId));
+      row.querySelector('.admin-private-chat-password').textContent = passwordsForUser.length ? passwordsForUser.map(x => `🔑 ${x.password}`).join('  •  ') : '🔑 No password set';
       row.querySelector('.admin-delete-btn').addEventListener('click', () => {
         requestPassword('Delete user permanently', `Permanently delete ${String(user.name || user.userId || 'this user')} and their private chat data? Their account will be deleted. Main Recycle Bin data will NOT be deleted.`, async () => {
           try {

@@ -31,10 +31,12 @@ const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
+const PRIVATE_CHAT_SETTINGS_COLLECTION_NAME = 'private_chat_settings';
 const DEFAULT_GROUP_ID = 'main';
 // In-memory fallback keeps group/password management working even when MongoDB
 // is not configured. MongoDB is still used automatically when MONGODB_URI exists.
 const fallbackGroups = new Map([[DEFAULT_GROUP_ID, { _id: DEFAULT_GROUP_ID, name: 'WhatsApp', password: ADMIN_PASSWORD, createdAt: new Date() }]]);
+const fallbackPrivateChatSettings = new Map();
 // WebRTC group-call signaling state. The server relays signaling only; media stays peer-to-peer.
 const activeCalls = new Map();
 function callRoom(groupId) { return `call:${normalizeGroupId(groupId)}`; }
@@ -304,6 +306,75 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+async function getPrivateChatSettingsCollection() {
+  const db = await getDb();
+  return db ? db.collection(PRIVATE_CHAT_SETTINGS_COLLECTION_NAME) : null;
+}
+
+async function getPrivateChatSetting(conversationId) {
+  if (!conversationId) return null;
+  const collection = await getPrivateChatSettingsCollection();
+  if (!collection) return fallbackPrivateChatSettings.get(String(conversationId)) || null;
+  return collection.findOne({ _id: String(conversationId) });
+}
+
+async function createPrivateChatSetting(conversationId, userA, userB, password) {
+  const clean = String(password || '');
+  if (!conversationId || !clean || clean.length < 4 || clean.length > 100) return { ok:false, error:'Password must be 4-100 characters.' };
+  const collection = await getPrivateChatSettingsCollection();
+  const document = { _id:String(conversationId), userA:String(userA), userB:String(userB), password:clean, createdAt:new Date() };
+  if (!collection) {
+    if (fallbackPrivateChatSettings.has(String(conversationId))) return { ok:false, exists:true, error:'Private chat password is already set.' };
+    fallbackPrivateChatSettings.set(String(conversationId), document);
+    return { ok:true, created:true, password:clean };
+  }
+  const existing = await collection.findOne({ _id:String(conversationId) });
+  if (existing) return { ok:false, exists:true, error:'Private chat password is already set.' };
+  await collection.insertOne(document);
+  return { ok:true, created:true, password:clean };
+}
+
+app.get('/api/private-chat/access', async (req, res) => {
+  try {
+    const conversationId = privateConversationId(req.query?.userId, req.query?.peerId);
+    if (!conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
+    const setting = await getPrivateChatSetting(conversationId);
+    res.json({ ok:true, exists:!!setting });
+  } catch (_) { res.status(500).json({ ok:false, error:'Could not check private chat' }); }
+});
+
+app.post('/api/private-chat/set-password', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const peerId = String(req.body?.peerId || '').trim();
+    const password = String(req.body?.password || '');
+    const conversationId = privateConversationId(userId, peerId);
+    if (!userId || !peerId || userId === peerId || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
+    const result = await createPrivateChatSetting(conversationId, userId, peerId, password);
+    if (!result.ok) return res.status(result.exists ? 409 : 400).json(result);
+    res.json({ ok:true, conversationId });
+  } catch (error) { res.status(500).json({ ok:false, error:'Could not set private chat password' }); }
+});
+
+app.post('/api/private-chat/verify', async (req, res) => {
+  try {
+    const conversationId = privateConversationId(req.body?.userId, req.body?.peerId);
+    const password = String(req.body?.password || '');
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting) return res.status(404).json({ ok:false, needsSetup:true, error:'Private chat password is not set.' });
+    res.json({ ok:String(setting.password || '') === password });
+  } catch (_) { res.status(500).json({ ok:false, error:'Could not verify private chat password' }); }
+});
+
+app.post('/api/admin/private-password', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const collection = await getPrivateChatSettingsCollection();
+    const settings = collection ? await collection.find({}, { projection:{ _id:1, userA:1, userB:1, password:1 } }).toArray() : Array.from(fallbackPrivateChatSettings.values());
+    res.json({ ok:true, passwords:settings.map(x => ({ conversationId:String(x._id), userA:String(x.userA), userB:String(x.userB), password:String(x.password || '') })) });
+  } catch (_) { res.status(500).json({ ok:false, error:'Could not load private chat passwords' }); }
+});
+
 app.post('/api/admin/private-chats', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
@@ -497,7 +568,10 @@ app.get('/api/private-messages', async (req, res) => {
     const me = String(req.query?.userId || '').trim();
     const peer = String(req.query?.peerId || '').trim();
     const conversationId = privateConversationId(me, peer);
+    const password = String(req.query?.password || '');
     if (!me || !peer || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, messages:[], error:'Private chat password required.' });
     const messages = await loadPrivateMessages(conversationId, req.query?.after || '');
     res.json({ ok:true, messages });
   } catch (error) {
@@ -512,9 +586,13 @@ app.post('/api/private-messages', async (req, res) => {
     const sender = String(msg.userId || '').trim();
     const peer = String(msg.peerId || '').trim();
     const conversationId = privateConversationId(sender, peer);
+    const password = String(msg.password || '');
+    delete msg.password;
     if (!sender || !peer || sender === peer || !msg.id || !String(msg.message || '').trim() || !conversationId) {
       return res.status(400).json({ ok:false, error:'Invalid private message' });
     }
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, error:'Private chat password required.' });
     msg.conversationId = conversationId;
     msg.message = String(msg.message).trim().slice(0, 5000);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -2358,14 +2436,19 @@ io.on('connection', async (socket) => {
   socket.on('join-private', async (data, ack) => {
     const me = String(socket.userId || '').trim();
     const peer = String(data?.peerId || '').trim();
+    const suppliedPassword = String(data?.password || '');
     const conversationId = privateConversationId(me, peer);
     if (!me || !peer || !conversationId) {
       return typeof ack === 'function' && ack({ ok:false, error:'Private chat authorization failed.' });
     }
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting) return typeof ack === 'function' && ack({ ok:false, needsSetup:true, error:'Private chat password is not set.' });
+    if (String(setting.password || '') !== suppliedPassword) return typeof ack === 'function' && ack({ ok:false, error:'Wrong private chat password.' });
     if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
       socket.leave(`private:${socket.privateConversationId}`);
     }
     socket.privateConversationId = conversationId;
+    socket.privateAuthorizedPrivateChat = conversationId;
     socket.join(`private:${conversationId}`);
     try {
       const history = await loadPrivateMessages(conversationId);
@@ -2388,6 +2471,9 @@ io.on('connection', async (socket) => {
     const sender = String(socket.userId || '').trim();
     const peer = String(msg?.peerId || '').trim();
     const conversationId = privateConversationId(sender, peer);
+    if (socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Private chat password required.' });
+    }
     if (!sender || !peer || sender === peer || !conversationId || !msg?.id || !String(msg.message || '').trim()) {
       return typeof ack === 'function' && ack({ ok:false, error:'Private chat is not ready' });
     }

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#075e54">
+<link rel="stylesheet" href="/private-admin-extra.css">
 </head>
 <body>
   <main class="app-shell">
@@ -173,6 +174,7 @@
       <button class="modal-close" id="adminPrivateChatsClose" aria-label="Close">×</button>
       <div class="lock-icon">💬</div>
       <h3>Private Chats</h3>
+      <div class="admin-private-password-box">🔑 Private chat passwords: <strong id="adminPrivatePassword">Loading…</strong></div>
       <p>Private users only. Delete permanently removes the account and its private chat data. Main Recycle Bin data is never removed by this action.</p>
       <div id="adminPrivateChatsList" class="admin-groups-list"></div>
       <div class="password-error" id="adminPrivateChatsError"></div>
