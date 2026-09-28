@@ -2275,7 +2275,9 @@ async function loadAdminPrivateChats() {
       const pr = await fetch('/api/admin/private-password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})});
       const pd = await pr.json().catch(() => ({}));
       privatePasswordSettings = Array.isArray(pd.passwords) ? pd.passwords : [];
-      adminPrivatePassword.textContent = privatePasswordSettings.length ? 'Shown per private chat below' : 'No private chat passwords set';
+      adminPrivatePassword.textContent = privatePasswordSettings.length
+        ? privatePasswordSettings.map(x => `${x.userAName || x.userA} ↔ ${x.userBName || x.userB}: ${x.password}`).join('  •  ')
+        : 'No private chat passwords set';
     }
     const r = await fetch('/api/admin/private-chats', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})
@@ -2283,11 +2285,33 @@ async function loadAdminPrivateChats() {
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || 'Unauthorized');
     const users = Array.isArray(d.users) ? d.users : [];
-    if (!users.length) {
+    const chats = Array.isArray(d.chats) ? d.chats : privatePasswordSettings;
+    if (!users.length && !chats.length) {
       adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
       return;
     }
     adminPrivateChatsList.innerHTML = '';
+    if (chats.length) {
+      const heading = document.createElement('div');
+      heading.className = 'admin-group-row';
+      heading.textContent = `🔐 Private chat passwords (${chats.length})`;
+      adminPrivateChatsList.appendChild(heading);
+      chats.forEach(chat => {
+        const row = document.createElement('div');
+        row.className = 'admin-private-chat-row';
+        row.innerHTML = '<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div>';
+        row.querySelector('.admin-private-chat-users').textContent = `${chat.userAName || chat.userA || 'User'} ↔ ${chat.userBName || chat.userB || 'User'}`;
+        row.querySelector('.admin-private-chat-meta').textContent = chat.createdAt ? `Created ${new Date(chat.createdAt).toLocaleString()}` : 'Private chat';
+        row.querySelector('.admin-private-chat-password').textContent = `🔑 ${String(chat.password || '')}`;
+        adminPrivateChatsList.appendChild(row);
+      });
+    }
+    if (users.length) {
+      const heading = document.createElement('div');
+      heading.className = 'admin-group-row';
+      heading.textContent = '👤 Private users';
+      adminPrivateChatsList.appendChild(heading);
+    }
     users.forEach(user => {
       const row = document.createElement('div');
       row.className = 'admin-private-chat-row';

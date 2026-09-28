@@ -370,8 +370,24 @@ app.post('/api/admin/private-password', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const collection = await getPrivateChatSettingsCollection();
-    const settings = collection ? await collection.find({}, { projection:{ _id:1, userA:1, userB:1, password:1 } }).toArray() : Array.from(fallbackPrivateChatSettings.values());
-    res.json({ ok:true, passwords:settings.map(x => ({ conversationId:String(x._id), userA:String(x.userA), userB:String(x.userB), password:String(x.password || '') })) });
+    const profiles = await getUserProfilesCollection();
+    const settings = collection
+      ? await collection.find({}, { projection:{ _id:1, userA:1, userB:1, password:1, createdAt:1 } }).sort({ createdAt:-1 }).toArray()
+      : Array.from(fallbackPrivateChatSettings.values());
+    const ids = [...new Set(settings.flatMap(x => [String(x.userA || ''), String(x.userB || '')]).filter(Boolean))];
+    const userDocs = profiles && ids.length
+      ? await profiles.find({ _id:{ $in:ids } }, { projection:{ _id:1, name:1 } }).toArray()
+      : [];
+    const names = new Map(userDocs.map(x => [String(x._id), String(x.name || x._id || 'User')]));
+    res.json({ ok:true, passwords:settings.map(x => ({
+      conversationId:String(x._id),
+      userA:String(x.userA),
+      userB:String(x.userB),
+      userAName:names.get(String(x.userA)) || String(x.userA),
+      userBName:names.get(String(x.userB)) || String(x.userB),
+      password:String(x.password || ''),
+      createdAt:x.createdAt instanceof Date ? x.createdAt.toISOString() : String(x.createdAt || '')
+    })) });
   } catch (_) { res.status(500).json({ ok:false, error:'Could not load private chat passwords' }); }
 });
 
@@ -380,12 +396,16 @@ app.post('/api/admin/private-chats', async (req, res) => {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     const collection = await getCollection();
     const profiles = await getUserProfilesCollection();
-    if (!collection || !profiles) return res.json({ ok:true, users:[] });
+    const settingsCollection = await getPrivateChatSettingsCollection();
+    const settings = settingsCollection
+      ? await settingsCollection.find({}, { projection:{ _id:1, userA:1, userB:1, password:1, createdAt:1 } }).sort({ createdAt:-1 }).toArray()
+      : Array.from(fallbackPrivateChatSettings.values());
+    if (!profiles) return res.json({ ok:true, users:[], chats:settings.map(x => ({ conversationId:String(x._id), userA:String(x.userA), userB:String(x.userB), password:String(x.password || '') })) });
 
-    const docs = await collection.find(
+    const docs = collection ? await collection.find(
       { conversationId: { $regex: /^private:/ }, deletedAt: { $exists:false } },
       { projection:{ _id:0, conversationId:1, userId:1, peerId:1, createdAt:1, message:1, type:1, fileName:1 } }
-    ).sort({ createdAt:-1 }).limit(10000).toArray();
+    ).sort({ createdAt:-1 }).limit(10000).toArray() : [];
 
     const byUser = new Map();
     for (const d of docs) {
@@ -396,6 +416,13 @@ app.post('/api/admin/private-chats', async (req, res) => {
         const row = byUser.get(uid);
         row.privateChatCount += 1;
         if (!row.lastActivity || new Date(d.createdAt || 0) > new Date(row.lastActivity || 0)) row.lastActivity = d.createdAt || null;
+      }
+    }
+    // A private chat exists as soon as its password setting is created, even if
+    // no message has been sent yet. Include those users in the admin list too.
+    for (const setting of settings) {
+      for (const uid of [String(setting.userA || ''), String(setting.userB || '')].filter(Boolean)) {
+        if (!byUser.has(uid)) byUser.set(uid, { userId:uid, privateChatCount:0, lastActivity:setting.createdAt || null });
       }
     }
 
@@ -413,10 +440,20 @@ app.post('/api/admin/private-chats', async (req, res) => {
         lastActivity:row?.lastActivity instanceof Date ? row.lastActivity.toISOString() : String(row?.lastActivity || '')
       };
     }).sort((a,b) => a.name.localeCompare(b.name));
-    res.json({ ok:true, users });
+
+    const chats = settings.map(x => ({
+      conversationId:String(x._id),
+      userA:String(x.userA),
+      userB:String(x.userB),
+      userAName:String(userMap.get(String(x.userA))?.name || x.userA || 'User'),
+      userBName:String(userMap.get(String(x.userB))?.name || x.userB || 'User'),
+      password:String(x.password || ''),
+      createdAt:x.createdAt instanceof Date ? x.createdAt.toISOString() : String(x.createdAt || '')
+    }));
+    res.json({ ok:true, users, chats });
   } catch (error) {
     console.error('Admin private users load failed:', error.message);
-    res.status(500).json({ ok:false, users:[], error:'Could not load private users' });
+    res.status(500).json({ ok:false, users:[], chats:[], error:'Could not load private users' });
   }
 });
 
