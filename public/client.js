@@ -1256,6 +1256,35 @@ socket.on('private-history', history => {
   history.forEach(msg => receivePrivateMessage(msg, {history:true}));
   if (history.length) requestAnimationFrame(() => scrollToBottom());
 });
+socket.on('private-user-deleted', data => {
+  const deletedId = String(data?.userId || '');
+  if (!deletedId) return;
+
+  // Remove deleted users immediately from every client-side directory/list.
+  privateUsers = privateUsers.filter(u => String(u.userId) !== deletedId);
+  delete privateLastMessages[deletedId];
+  delete privateUnreadCounts[deletedId];
+  if (window.privateChatPasswords) delete window.privateChatPasswords[deletedId];
+
+  if (String(currentPrivateUser?.userId || '') === deletedId) {
+    currentPrivateUser = null;
+    activeChatType = 'group';
+    messages.clear();
+    deletedIds.clear();
+    readSent.clear();
+    lastRenderedDate = '';
+    lastSyncAt = '';
+    if (messageArea) messageArea.innerHTML = '';
+    composer?.classList.add('hidden');
+    if (groups.length) {
+      currentGroupId = groups[0].id;
+      updateGroupNameUI();
+    }
+  }
+  renderGroupList();
+  showToast(`${String(data?.name || 'Private user')} was deleted`);
+});
+
 socket.on('private-message', msg => {
   if (!msg || !msg.conversationId) return;
   const ids = String(msg.conversationId).replace(/^private:/,'').split(':');
@@ -2372,8 +2401,10 @@ async function loadAdminPrivateChats() {
             });
             const dd = await rr.json();
             if (!rr.ok || !dd.ok) throw new Error(dd.error || 'Delete failed');
-            row.remove();
-            if (!adminPrivateChatsList.children.length) adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
+            // Re-fetch the active list/passwords so deleted users and their
+            // password records disappear immediately without a browser refresh.
+            await loadPrivateUsers();
+            await loadAdminPrivateChats();
             showToast(`${String(user.name || 'User')} account deleted`);
           } catch (e) { showToast(e.message || 'Delete failed'); }
         }, 'delete');

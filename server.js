@@ -563,6 +563,16 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
     try { await db.collection('notification_access').deleteMany({ userId }); } catch (_) {}
     try { await db.collection(EVENTS_COLLECTION_NAME).deleteMany({ 'payload.userId':userId, 'payload.privateUserId':userId }); } catch (_) {}
 
+    // Tell every other connected client immediately so deleted private users
+    // disappear from sidebars/lists without a page refresh.
+    try {
+      for (const target of io.sockets.sockets.values()) {
+        if (String(target.userId || '') !== userId) {
+          target.emit('private-user-deleted', { userId, name:String(profile.name || 'User') });
+        }
+      }
+    } catch (_) {}
+
     const socketsToClose = [];
     for (const target of io.sockets.sockets.values()) {
       if (String(target.userId || '') === userId) socketsToClose.push(target);
