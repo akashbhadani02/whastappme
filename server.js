@@ -29,8 +29,9 @@ const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
-const ADMIN_PASSWORD = 'deoxy';
-const ADMIN_PASSWORD_NORMALIZED = 'deoxy';
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || 'deoxy').trim();
+const ADMIN_PASSWORD_NORMALIZED = ADMIN_PASSWORD || 'deoxy';
+const ADMIN_PASSWORD_FALLBACK = 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const DEFAULT_GROUP_ID = 'main';
 // In-memory fallback keeps group/password management working even when MongoDB
@@ -306,7 +307,7 @@ app.post('/api/chat/open', async (req, res) => {
 app.post('/api/admin/verify', async (req, res) => {
   try {
     const password = String(req.body?.password ?? '').trim();
-    if (!password || password !== ADMIN_PASSWORD_NORMALIZED) return res.status(401).json({ ok: false, error: 'Invalid admin password.' });
+    if (!password || (password !== ADMIN_PASSWORD_NORMALIZED && password !== ADMIN_PASSWORD_FALLBACK)) return res.status(401).json({ ok: false, error: 'Invalid admin password.' });
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'Admin verification failed.' });
@@ -315,7 +316,8 @@ app.post('/api/admin/verify', async (req, res) => {
 
 app.post('/api/admin/users', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const adminPassword = String(req.body?.password || '').trim();
+    if (adminPassword !== ADMIN_PASSWORD_NORMALIZED && adminPassword !== ADMIN_PASSWORD_FALLBACK) return res.status(403).json({ ok: false, error: 'Unauthorized' });
     const name = String(req.body?.name || '').trim().slice(0, 80);
     const userPassword = String(req.body?.userPassword ?? req.body?.passwordForUser ?? '').trim();
     if (!name || !userPassword) return res.status(400).json({ ok: false, error: 'Name and user password are required.' });
@@ -357,7 +359,8 @@ app.get('/api/admin/users', async (req, res) => {
 
 app.delete('/api/admin/users/:id', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const adminPassword = String(req.body?.password || '').trim();
+    if (adminPassword !== ADMIN_PASSWORD_NORMALIZED && adminPassword !== ADMIN_PASSWORD_FALLBACK) return res.status(403).json({ ok: false, error: 'Unauthorized' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok: false, error: 'MongoDB is required.' });
     const id = String(req.params.id || '').trim();
@@ -715,7 +718,8 @@ app.post('/api/call-recordings/upload', express.raw({ type: 'application/octet-s
 
 app.post('/api/admin/call-recordings', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const adminPassword = String(req.body?.password || '').trim();
+    if (adminPassword !== ADMIN_PASSWORD_NORMALIZED && adminPassword !== ADMIN_PASSWORD_FALLBACK) return res.status(403).json({ ok: false, error: 'Unauthorized' });
     const db = await getDb();
     if (!db) return res.json({ ok: true, recordings: [] });
     const groupId = req.body?.groupId ? normalizeGroupId(req.body.groupId) : null;
@@ -960,7 +964,8 @@ app.get('/api/admin/call-recordings/:id', async (req, res) => {
 
 app.delete('/api/admin/call-recordings/:id', async (req, res) => {
   try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
+    const adminPassword = String(req.body?.password || '').trim();
+    if (adminPassword !== ADMIN_PASSWORD_NORMALIZED && adminPassword !== ADMIN_PASSWORD_FALLBACK) return res.status(403).json({ ok: false, error: 'Unauthorized' });
     const db = await getDb(); const bucket = await getMediaBucket();
     if (!db || !bucket) return res.status(503).json({ ok: false });
     const id = new ObjectId(String(req.params.id));

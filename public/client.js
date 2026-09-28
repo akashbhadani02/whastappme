@@ -1890,7 +1890,7 @@ async function loadAdminCallRecordings(groupId = '') {
         card.querySelector('.admin-view-recording-btn').addEventListener('click', openView);
         card.querySelector('.admin-delete-btn').addEventListener('click', async()=>{
           if(!confirm('Delete this call recording?')) return;
-          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
+          const rr=await fetch(`/api/admin/call-recordings/${encodeURIComponent(item.fileId)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:adminSessionPassword || PASSWORD})});
           const dd=await rr.json(); if(dd.ok) loadAdminCallRecordings(groupId); else showToast(dd.error||'Delete failed');
         });
         grid.appendChild(card);
@@ -2006,7 +2006,7 @@ async function renderAdminRecycleGroupFilters(items) {
   try {
     const r = await fetch('/api/admin/groups', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:PASSWORD}), cache:'no-store'
+      body:JSON.stringify({password:adminSessionPassword || PASSWORD}), cache:'no-store'
     });
     const d = await r.json();
     if (d.ok && Array.isArray(d.groups)) {
@@ -2220,7 +2220,7 @@ document.querySelector('#adminAbcClearBtn')?.addEventListener('click', async () 
   try {
     const r = await fetch('/api/admin/abc-clear-messages', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:PASSWORD})
+      body:JSON.stringify({password:adminSessionPassword || PASSWORD})
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'ABC cleanup failed');
@@ -2544,6 +2544,7 @@ const adminVerifyPassword = document.querySelector('#adminVerifyPassword');
 const adminVerifyBtn = document.querySelector('#adminVerifyBtn');
 const adminVerifyError = document.querySelector('#adminVerifyError');
 let adminPanelVerified = false;
+let adminSessionPassword = '';
 
 async function verifyAndOpenAdminPanel() {
   const password = String(adminVerifyPassword?.value || '').trim();
@@ -2554,6 +2555,7 @@ async function verifyAndOpenAdminPanel() {
     const d = await r.json().catch(()=>({}));
     if (!r.ok || !d.ok) throw new Error(d.error || 'Invalid admin password.');
     adminPanelVerified = true;
+    adminSessionPassword = password;
     adminVerifyModal?.classList.add('hidden');
     adminUsersModal?.classList.remove('hidden');
     if (adminVerifyPassword) adminVerifyPassword.value = '';
@@ -2596,7 +2598,7 @@ function renderAdminUsers(list) {
       if (!confirm(`Delete ${user.name}?`)) return;
       const r = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
         method:'DELETE', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({password:PASSWORD})
+        body:JSON.stringify({password:adminSessionPassword || PASSWORD})
       });
       const d = await r.json().catch(()=>({}));
       if (!r.ok || !d.ok) return showToast(d.error || 'Delete failed');
@@ -2642,7 +2644,7 @@ adminUserCreateBtn?.addEventListener('click', async () => {
   try {
     const r = await fetch('/api/admin/users', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:PASSWORD,name:uname,userPassword:upass})
+      body:JSON.stringify({password:adminSessionPassword || PASSWORD,name:uname,userPassword:upass})
     });
     const d = await r.json().catch(()=>({}));
     if (!r.ok || !d.ok) throw new Error(d.error || 'Could not create user.');
