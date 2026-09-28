@@ -2312,6 +2312,7 @@ function setLoginVisible(visible) {
   if (!accountModal) return;
   accountModal.classList.toggle('hidden', !visible);
   accountModal.style.display = visible ? 'flex' : 'none';
+  document.body.classList.toggle('login-locked', visible);
   if (visible) {
     setTimeout(() => accountNameInput?.focus(), 50);
   }
@@ -2526,6 +2527,8 @@ function openAccountModal(force = false) {
 accountContinueBtn?.addEventListener('click', loginAccount);
 accountAdminBtn?.addEventListener('click', () => {
   accountError.textContent = '';
+  accountModal?.classList.add('hidden');
+  accountModal.style.display = 'none';
   adminVerifyPassword.value = '';
   adminVerifyError.textContent = '';
   adminVerifyModal?.classList.remove('hidden');
