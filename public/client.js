@@ -1484,37 +1484,57 @@ function joinDirectChat(chatId, peerUserId, peerPassword) {
 
 async function openDirectChat(user, verifiedPassword) {
   if (!user || !user.id) throw new Error('Invalid user.');
-  if (!userId) { openAccountModal(true); throw new Error('Please enter your name first.'); }
+  if (!userId) { openAccountModal(true); throw new Error('Please login with your admin-created account first.'); }
   if (!socket.connected) throw new Error('Connecting to chat server…');
 
   await ensureSocketUserRegistered();
-  const chatId = await clientDmId(user.id);
+  const peerId = String(user.id).trim().toUpperCase();
+  const chatId = await clientDmId(peerId);
   if (!chatId) throw new Error('Could not create this chat.');
-  directChatIds.set(String(user.id), chatId);
-  const peerId = String(user.id);
-  await joinDirectChat(chatId, peerId, verifiedPassword);
+  directChatIds.set(peerId, chatId);
 
+  // Switch the client state BEFORE the server sends the history event.
+  // Otherwise the history can arrive while currentGroupId still points to the
+  // previous chat and receiveMessage() correctly (but incorrectly for this
+  // transition) discards it as a cross-chat message.
+  const previousState = {
+    groupId: currentGroupId, peerId: currentPeerUserId, name: groupName,
+    chatOpen, html: messageArea?.innerHTML || ''
+  };
   currentPeerUserId = peerId;
   currentGroupId = chatId;
-  groupName = String(user.name || user.id);
-  localStorage.setItem('wa_chat_id', chatId);
-  localStorage.setItem('wa_chat_name', groupName);
-  localStorage.setItem('wa_peer_user_id', currentPeerUserId);
-
-  setUnreadCount(chatId, 0);
-  otherGroupMemberOnline = false;
-  setOnlineStatus('offline');
-  composer?.classList.remove('hidden');
-  app?.classList.remove('group-locked');
+  groupName = String(user.name || peerId);
   messages.clear();
   deletedIds.clear();
   readSent.clear();
   lastRenderedDate = '';
   lastSyncAt = '';
-  messageArea.innerHTML = '';
+  if (messageArea) messageArea.innerHTML = '';
   updateGroupNameUI();
+
+  try {
+    await joinDirectChat(chatId, peerId, verifiedPassword);
+  } catch (err) {
+    // Restore the previous view if authorization/socket join fails.
+    currentGroupId = previousState.groupId;
+    currentPeerUserId = previousState.peerId;
+    groupName = previousState.name;
+    if (messageArea) messageArea.innerHTML = previousState.html;
+    updateGroupNameUI();
+    throw err;
+  }
+
+  localStorage.setItem('wa_chat_id', chatId);
+  localStorage.setItem('wa_chat_name', groupName);
+  localStorage.setItem('wa_peer_user_id', currentPeerUserId);
+  setUnreadCount(chatId, 0);
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
+  composer?.classList.remove('hidden');
+  app?.classList.remove('group-locked');
   renderGroupList();
-  loadLocalMessageHistory();
+  // Socket history is now associated with the correct chat. The REST sync is
+  // kept as a recovery path for refreshes/serverless instances.
   await syncMessages();
   openChat();
 }
