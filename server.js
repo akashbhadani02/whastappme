@@ -2110,6 +2110,37 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId || '' });
   });
 
+  socket.on('login-account', async (data, ack) => {
+    const loginName = String(data?.name || '').trim().slice(0, 60);
+    const loginPassword = String(data?.password || '');
+    if (!loginName || !loginPassword) { if (typeof ack === 'function') ack({ok:false,error:'Name and password are required.'}); return; }
+    try {
+      const profiles = await getUserProfilesCollection();
+      let profile = null;
+      if (profiles) {
+        const escaped = loginName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        profile = await profiles.findOne({name: {$regex:`^${escaped}$`, $options:'i'}, adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false}, enabled:{$ne:false}});
+      } else {
+        const wanted = loginName.toLowerCase();
+        profile = [...fallbackUsers.values()].find(u => u.adminCreated===true && u.deleted!==true && !u.deletedAt && u.enabled!==false && String(u.name||'').trim().toLowerCase()===wanted) || null;
+      }
+      if (!profile) { if (typeof ack === 'function') ack({ok:false,error:'Name not found. Ask admin to create your account.'}); return; }
+      if (String(profile.userPassword || '') !== loginPassword) { if (typeof ack === 'function') ack({ok:false,error:'Wrong password.'}); return; }
+      const resolvedId = String(profile._id || profile.id || '').trim().toUpperCase();
+      const resolvedName = String(profile.name || loginName).trim();
+      if (!resolvedId) { if (typeof ack === 'function') ack({ok:false,error:'This account has no User ID. Ask admin to recreate it.'}); return; }
+      socket.userId = resolvedId;
+      socket.callDeviceId = String(data?.deviceId || '').slice(0,160);
+      fallbackUsers.set(resolvedId,{id:resolvedId,name:resolvedName,updatedAt:new Date(),adminCreated:true,enabled:true});
+      socket.emit('user-profile',{userId:resolvedId,name:resolvedName});
+      io.emit('user-registered',{userId:resolvedId,name:resolvedName});
+      if (typeof ack === 'function') ack({ok:true,user:{id:resolvedId,name:resolvedName}});
+    } catch (error) {
+      console.error('Socket account login failed:', error.message);
+      if (typeof ack === 'function') ack({ok:false,error:'Login failed. Please try again.'});
+    }
+  });
+
   socket.on('register-user', async (data, ack) => {
     const previousUserId = String(socket.userId || '');
     const requestedUserId = String(data?.userId || '').trim().toUpperCase();

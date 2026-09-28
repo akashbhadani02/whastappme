@@ -2412,6 +2412,36 @@ function closeAccountModalAfterLogin() {
   document.querySelector('.app-shell')?.classList.remove('login-locked');
 }
 
+async function waitForSocketConnection(timeoutMs = 10000) {
+  if (socket.connected) return true;
+  return await new Promise(resolve => {
+    let done = false;
+    const finish = ok => { if (done) return; done = true; clearTimeout(timer); socket.off('connect', onConnect); socket.off('connect_error', onError); resolve(ok); };
+    const onConnect = () => finish(true);
+    const onError = () => {};
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once('connect', onConnect);
+    socket.on('connect_error', onError);
+    try { socket.connect(); } catch (_) {}
+  });
+}
+
+function socketAccountLogin(loginName, loginPassword) {
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; resolve({ok:false,error:'Connection timeout. Please try again.'}); } }, 12000);
+    try {
+      socket.emit('login-account', {name: loginName, password: loginPassword, deviceId}, response => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); resolve(response || {ok:false,error:'Login failed.'});
+      });
+    } catch (e) {
+      if (settled) return;
+      settled = true; clearTimeout(timer); resolve({ok:false,error:'Could not connect to server.'});
+    }
+  });
+}
+
 async function finishAccountLogin() {
   const enteredName = String(accountNameInput.value || '').trim();
   const enteredPassword = String(accountPasswordInput.value || '');
@@ -2421,26 +2451,24 @@ async function finishAccountLogin() {
   accountContinueBtn.textContent = 'Logging in…';
   accountError.textContent = '';
   try {
-    const r = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:enteredName,password:enteredPassword}), cache:'no-store' });
-    const response = await r.json().catch(()=>({ok:false,error:'Invalid server response'}));
-    if (!r.ok || !response?.ok) { accountError.textContent = response?.error || 'Login failed'; return; }
+    const connected = await waitForSocketConnection();
+    if (!connected) { accountError.textContent = 'Server connection failed. Start the server and try again.'; return; }
+    const response = await socketAccountLogin(enteredName, enteredPassword);
+    if (!response?.ok) { accountError.textContent = response?.error || 'Login failed'; return; }
     userId = String(response.user?.id || '').trim().toUpperCase();
     name = String(response.user?.name || enteredName).trim();
     if (!userId) { accountError.textContent = 'Login failed: account ID missing'; return; }
     localStorage.setItem('wa_user_id', userId);
     localStorage.setItem('wa_name', name);
     localStorage.setItem('wa_logged_in', '1');
-    socket.emit('register-user', { userId, deviceId }, reg => {
-      if (!reg?.ok) { accountError.textContent = reg?.error || 'Could not connect this account'; return; }
-      socket.emit('presence-login', { userId, deviceId });
-      closeAccountModalAfterLogin();
-      updateMyNameUI();
-      refreshContacts();
-      refreshAllUnreadCounts();
-      showToast('Logged in as ' + name);
-    });
+    socket.emit('presence-login', { userId, deviceId });
+    closeAccountModalAfterLogin();
+    updateMyNameUI();
+    await refreshContacts();
+    await refreshAllUnreadCounts();
+    showToast('Logged in as ' + name);
   } catch (e) {
-    accountError.textContent = 'Server is not reachable. Please try again.';
+    accountError.textContent = 'Login failed. Please try again.';
   } finally {
     accountContinueBtn.disabled = false;
     accountContinueBtn.textContent = 'Login';
