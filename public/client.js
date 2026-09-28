@@ -184,6 +184,8 @@ const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose')
 const adminPrivateChatsList = document.querySelector('#adminPrivateChatsList');
 const adminPrivateChatsError = document.querySelector('#adminPrivateChatsError');
 const adminPrivateChatsRefresh = document.querySelector('#adminPrivateChatsRefresh');
+const adminDeleteAllUsersBtn = document.querySelector('#adminDeleteAllUsersBtn');
+const adminDeleteAllGroupsBtn = document.querySelector('#adminDeleteAllGroupsBtn');
 const adminGroupMediaModal = document.querySelector('#adminGroupMediaModal');
 const adminGroupMediaClose = document.querySelector('#adminGroupMediaClose');
 const adminGroupMediaTitle = document.querySelector('#adminGroupMediaTitle');
@@ -2061,6 +2063,42 @@ adminPrivateChatsBtn?.addEventListener('click', () => { appMenu?.classList.add('
 adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.classList.add('hidden'));
 adminPrivateChatsModal?.addEventListener('click', e => { if (e.target === adminPrivateChatsModal) adminPrivateChatsModal.classList.add('hidden'); });
 adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats());
+
+async function adminDeleteAllUsers() {
+  if (!adminUnlocked) return requestAdminThen(adminDeleteAllUsers);
+  const ok = confirm('Delete ALL user accounts permanently? This will delete every account and private chat data. Main Recycle Bin data will NOT be deleted. This cannot be undone.');
+  if (!ok) return;
+  try {
+    const r = await fetch('/api/admin/delete-all-users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD}) });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Delete all users failed');
+    showToast(`${Number(d.deletedUsers||0)} user account(s) deleted`);
+    loadAdminPrivateChats();
+  } catch (e) { showToast(e.message || 'Delete all users failed'); }
+}
+
+async function adminDeleteAllGroups() {
+  if (!adminUnlocked) return requestAdminThen(adminDeleteAllGroups);
+  const ok = confirm('Delete ALL groups permanently? Live group messages will be preserved in Main Recycle Bin; existing Recycle Bin data will NOT be deleted. This cannot be undone.');
+  if (!ok) return;
+  try {
+    const r = await fetch('/api/admin/delete-all-groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD}) });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Delete all groups failed');
+    groups = [];
+    currentGroupId = '';
+    groupName = '';
+    localStorage.removeItem('wa_group_id');
+    localStorage.removeItem('wa_group_name');
+    renderGroupList?.();
+    showToast(`${Number(d.deletedGroups||0)} group(s) deleted`);
+    openAdminGroups();
+  } catch (e) { showToast(e.message || 'Delete all groups failed'); }
+}
+
+
+adminDeleteAllUsersBtn?.addEventListener('click', adminDeleteAllUsers);
+adminDeleteAllGroupsBtn?.addEventListener('click', adminDeleteAllGroups);
 adminGroupMediaRefresh?.addEventListener('click', () => loadAdminGroupMedia(adminGroupMediaType));
 
 async function loadAdminCallRecordings(groupId = '') {

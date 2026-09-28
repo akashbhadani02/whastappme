@@ -411,6 +411,87 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
   }
 });
 
+
+app.post('/api/admin/delete-all-users', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    const profiles = await getUserProfilesCollection();
+    if (!db || !profiles) return res.status(503).json({ ok:false, error:'Database unavailable' });
+
+    const users = await profiles.find({}, { projection:{ _id:1, name:1 } }).toArray();
+    const ids = users.map(u => String(u._id)).filter(Boolean);
+    if (!ids.length) return res.json({ ok:true, deletedUsers:0, deletedPrivateMessages:0, deletedPrivateMedia:0, recycleBinPreserved:true });
+
+    const messages = db.collection(COLLECTION_NAME);
+    const privateRegex = new RegExp(`^private:(?:${ids.map(escapeRegExp).join('|')}):|^private:[^:]+:(?:${ids.map(escapeRegExp).join('|')})$`);
+    const privateResult = await messages.deleteMany({ conversationId: { $regex: privateRegex } });
+
+    let mediaResult = { deletedCount:0 };
+    try {
+      const mediaUploads = db.collection(MEDIA_UPLOADS_COLLECTION_NAME);
+      mediaResult = await mediaUploads.deleteMany({
+        $or: [
+          { userId: { $in: ids } },
+          { peerId: { $in: ids } },
+          { conversationId: { $regex: privateRegex } }
+        ]
+      });
+    } catch (_) {}
+
+    try { await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteMany({ userId:{ $in:ids } }); } catch (_) {}
+    try { await db.collection('notification_access').deleteMany({ userId:{ $in:ids } }); } catch (_) {}
+    try { await db.collection(EVENTS_COLLECTION_NAME).deleteMany({ $or:[{'payload.userId':{$in:ids}},{'payload.privateUserId':{$in:ids}}] }); } catch (_) {}
+
+    for (const target of io.sockets.sockets.values()) {
+      if (ids.includes(String(target.userId || ''))) {
+        try { target.emit('account-deleted', { reason:'All user accounts deleted by administrator' }); } catch (_) {}
+        try { target.disconnect(true); } catch (_) {}
+      }
+    }
+
+    const profileResult = await profiles.deleteMany({ _id:{ $in:ids } });
+    res.json({ ok:true, deletedUsers:Number(profileResult.deletedCount||0), deletedPrivateMessages:Number(privateResult.deletedCount||0), deletedPrivateMedia:Number(mediaResult.deletedCount||0), recycleBinPreserved:true });
+  } catch (error) {
+    console.error('Admin delete all users failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Delete all users failed' });
+  }
+});
+
+app.post('/api/admin/delete-all-groups', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const db = await getDb();
+    const settings = await getGroupSettingsCollection();
+    const messages = await getCollection();
+    if (!db || !settings) return res.status(503).json({ ok:false, error:'Database unavailable' });
+
+    const groupDocs = await settings.find({}, { projection:{ _id:1, name:1 } }).toArray();
+    const groupIds = groupDocs.map(g => normalizeGroupId(g._id)).filter(Boolean);
+    let archived = 0;
+    if (messages && groupIds.length) {
+      const liveMessages = await messages.find({ groupId:{ $in:groupIds }, deletedAt:{ $exists:false } }).toArray();
+      if (liveMessages.length) {
+        await moveMessagesToRecycleBin(liveMessages, '__all-groups-delete__', 'group-delete');
+        await messages.updateMany({ groupId:{ $in:groupIds }, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:'admin', deleteReason:'all-groups-delete' } });
+        archived = liveMessages.length;
+      }
+    }
+
+    // Existing recycle-bin documents are deliberately preserved. Live group
+    // messages are copied to Main Recycle Bin before group settings are removed.
+    const result = await settings.deleteMany({});
+    for (const gid of groupIds) {
+      try { io.emit('group-deleted', { id:gid }); await publishRealtimeEvent('group-deleted', { id:gid }); } catch (_) {}
+    }
+    fallbackGroups.clear();
+    res.json({ ok:true, deletedGroups:Number(result.deletedCount||0), archivedMessages:archived, recycleBinPreserved:true });
+  } catch (error) {
+    console.error('Admin delete all groups failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Delete all groups failed' });
+  }
+});
+
 app.get('/api/private-messages', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
