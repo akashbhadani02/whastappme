@@ -1512,6 +1512,14 @@ socket.on('user-registered', data => {
   if (!data?.userId || String(data.userId) === String(userId)) return;
   refreshContacts();
 });
+socket.on('user-deleted', data => {
+  if (!data?.userId) return;
+  contacts = contacts.filter(u => String(u.id) !== String(data.userId));
+  groups = groups.filter(g => String(g.peerUserId || '') !== String(data.userId));
+  renderGroupList();
+  if (String(currentPeerUserId || '') === String(data.userId)) { showToast('This user account was deleted by admin.'); }
+});
+
 socket.on('user-renamed', data => {
   if (!data?.userId) return;
   const u=contacts.find(x=>String(x.id)===String(data.userId));
@@ -2314,13 +2322,18 @@ async function loadAdminUsers(){
     adminUsersList.innerHTML='';
     (d.users||[]).forEach(u=>{
       const row=document.createElement('div'); row.className='admin-group-row';
-      row.innerHTML='<div class="admin-group-name"></div><input class="admin-password-input user-admin-name" maxlength="60"><div class="admin-password-wrap"><input type="text" class="admin-password-input user-admin-password" maxlength="120"><button type="button" class="mini-btn user-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-save-btn user-save-btn">Save</button></div>';
+      row.innerHTML='<div class="admin-group-name"></div><input class="admin-password-input user-admin-name" maxlength="60"><div class="admin-password-wrap"><input type="text" class="admin-password-input user-admin-password" maxlength="120"><button type="button" class="mini-btn user-copy-btn">Copy</button></div><div class="admin-row-actions"><button type="button" class="mini-btn admin-save-btn user-save-btn">Save</button><button type="button" class="mini-btn admin-delete-btn user-delete-btn">Delete</button></div>';
       row.querySelector('.admin-group-name').textContent=u.id;
       row.querySelector('.user-admin-name').value=u.name||''; row.querySelector('.user-admin-password').value=u.userPassword||'';
       row.querySelector('.user-copy-btn').onclick=async()=>{try{await navigator.clipboard.writeText(row.querySelector('.user-admin-password').value);showToast('Password copied')}catch(_){}};
       row.querySelector('.user-save-btn').onclick=async()=>{
         try{const rr=await fetch('/api/admin/users/'+encodeURIComponent(u.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminPassword:PASSWORD,name:row.querySelector('.user-admin-name').value.trim(),userPassword:row.querySelector('.user-admin-password').value.trim()})}); const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Update failed'); showToast('User updated'); refreshContacts();}
         catch(e){showToast(e.message||'Update failed');}
+      };
+      row.querySelector('.user-delete-btn').onclick=async()=>{
+        if(!confirm(`Delete user "${u.name || u.id}"? They will no longer appear or be able to open chats.`)) return;
+        try{const rr=await fetch('/api/admin/users/'+encodeURIComponent(u.id),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminPassword:PASSWORD})}); const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Delete failed'); row.remove(); contacts=contacts.filter(x=>String(x.id)!==String(u.id)); groups=groups.filter(x=>String(x.peerUserId)!==String(u.id)); renderGroupList(); showToast('User deleted');}
+        catch(e){showToast(e.message||'Delete failed');}
       };
       adminUsersList.appendChild(row);
     });

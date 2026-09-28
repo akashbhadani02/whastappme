@@ -320,9 +320,27 @@ app.post('/api/admin/users/list', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
     const profiles = await getUserProfilesCollection();
-    let users = profiles ? await profiles.find({}).sort({name:1,_id:1}).limit(1000).toArray() : [...fallbackUsers.values()];
+    let users = profiles ? await profiles.find({ adminCreated:true, deleted:{$ne:true}, deletedAt:{$exists:false} }).sort({name:1,_id:1}).limit(1000).toArray() : [...fallbackUsers.values()].filter(u=>u.adminCreated===true && u.deleted!==true && !u.deletedAt);
     res.json({ok:true, users:users.map(u=>({id:String(u._id||u.id),name:String(u.name||''),userPassword:String(u.userPassword||''),enabled:u.enabled!==false}))});
   } catch(e){ res.status(500).json({ok:false,error:'Could not load users'}); }
+});
+
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ok:false,error:'Unauthorized'});
+    const id = String(req.params.id || '').trim().toUpperCase();
+    if (!id) return res.status(400).json({ok:false,error:'User ID is required'});
+    const profiles = await getUserProfilesCollection();
+    const now = new Date();
+    if (profiles) {
+      const r = await profiles.updateOne({_id:id}, {$set:{deleted:true, deletedAt:now, enabled:false, updatedAt:now}});
+      if (!r.matchedCount) return res.status(404).json({ok:false,error:'User not found'});
+    }
+    const old = fallbackUsers.get(id);
+    if (old) fallbackUsers.set(id,{...old,id,deleted:true,deletedAt:now,enabled:false,updatedAt:now});
+    io.emit('user-deleted',{userId:id});
+    res.json({ok:true,userId:id});
+  } catch(e) { console.error('Admin user delete failed:',e.message); res.status(500).json({ok:false,error:'Could not delete user'}); }
 });
 
 app.put('/api/admin/users/:id', async (req, res) => {
@@ -2138,7 +2156,7 @@ io.on('connection', async (socket) => {
       try {
         const profiles = await getUserProfilesCollection();
         const peer = profiles ? await profiles.findOne({ _id: peerUserId }) : fallbackUsers.get(peerUserId);
-        if (!peer || peer.enabled === false) return typeof ack === 'function' && ack({ok:false,error:'User not found.'});
+        if (!peer || peer.adminCreated !== true || peer.deleted === true || peer.deletedAt || peer.enabled === false) return typeof ack === 'function' && ack({ok:false,error:'User not found.'});
         if (String(suppliedPassword || '') !== String(peer.userPassword || '')) return typeof ack === 'function' && ack({ok:false,error:'Wrong password.'});
       } catch (_) { return typeof ack === 'function' && ack({ok:false,error:'Could not verify password.'}); }
       const previousGroupId = socket.groupId;
