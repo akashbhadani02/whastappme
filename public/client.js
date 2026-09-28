@@ -2300,6 +2300,7 @@ const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
 const accountPasswordInput = document.querySelector('#accountPasswordInput');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
+const accountAdminBtn = document.querySelector('#accountAdminBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
 
@@ -2523,6 +2524,13 @@ function openAccountModal(force = false) {
 }
 
 accountContinueBtn?.addEventListener('click', loginAccount);
+accountAdminBtn?.addEventListener('click', () => {
+  accountError.textContent = '';
+  adminVerifyPassword.value = '';
+  adminVerifyError.textContent = '';
+  adminVerifyModal?.classList.remove('hidden');
+  setTimeout(() => adminVerifyPassword?.focus(), 50);
+});
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') loginAccount(); });
 accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') loginAccount(); });
 
