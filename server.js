@@ -2157,6 +2157,37 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok: true });
   });
 
+  socket.on('open-direct-chat', async (data, ack) => {
+    const peerUserId = String(data?.peerUserId || '').trim().toUpperCase();
+    const suppliedPassword = String(data?.password || '');
+    if (!socket.userId || !peerUserId || peerUserId === String(socket.userId).toUpperCase()) {
+      return typeof ack === 'function' && ack({ok:false,error:'Invalid chat users.'});
+    }
+    const chatId = makeDirectChatId(socket.userId, peerUserId);
+    try {
+      const profiles = await getUserProfilesCollection();
+      const peer = profiles ? await profiles.findOne({_id:peerUserId}) : fallbackUsers.get(peerUserId);
+      if (!peer || peer.adminCreated !== true || peer.deleted === true || peer.deletedAt || peer.enabled === false) {
+        return typeof ack === 'function' && ack({ok:false,error:'This user is not available.'});
+      }
+      if (String(peer.userPassword || '') !== suppliedPassword) {
+        return typeof ack === 'function' && ack({ok:false,error:'Wrong password.'});
+      }
+      const previous = normalizeGroupId(socket.groupId || '');
+      if (previous && previous !== chatId) socket.leave(`group:${previous}`);
+      socket.groupId = chatId;
+      socket.peerUserId = peerUserId;
+      socket.join(`group:${chatId}`);
+      const history = await loadMessages('', chatId);
+      socket.emit('history', history);
+      emitGroupPresence(chatId);
+      return typeof ack === 'function' && ack({ok:true,chatId,peerUserId,peerName:String(peer.name || peerUserId)});
+    } catch (error) {
+      console.error('open-direct-chat failed:', error.stack || error.message);
+      return typeof ack === 'function' && ack({ok:false,error:'Could not open chat on server.'});
+    }
+  });
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
     const suppliedPassword = String(data?.password || '');

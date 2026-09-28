@@ -1373,7 +1373,7 @@ async function startNewChatWithUser(user){
   closeNewChatModal();
   requestUserPassword(user, async () => {
     try { await openDirectChat(user, pendingVerifiedUserPassword); showToast(`${user.name || user.id} chat opened`); }
-    catch (_) { showToast('Unable to open this chat. Please try again.'); }
+    catch (err) { showToast(err?.message || 'Unable to open this chat. Please try again.'); }
   });
 }
 
@@ -1405,7 +1405,7 @@ function renderGroupList() {
     summary.querySelector('strong').textContent=user.name || user.id;
     summary.querySelector('.group-unread-badge').textContent=unread>0?(unread>99?'99+':String(unread)):'';
     if(unread>0) summary.querySelector('.group-unread-badge').style.display='inline-flex';
-    button.append(avatar,summary); button.addEventListener('click',()=>requestUserPassword(user, async()=>{ try{ await openDirectChat(user,pendingVerifiedUserPassword); }catch(_){ showToast('Unable to open this chat.'); } })); chatList.appendChild(button);
+    button.append(avatar,summary); button.addEventListener('click',()=>requestUserPassword(user, async()=>{ try{ await openDirectChat(user,pendingVerifiedUserPassword); }catch(err){ showToast(err?.message || 'Unable to open this chat.'); } })); chatList.appendChild(button);
   });
 }
 function makeClientDirectChatId(peerId) {
@@ -1467,13 +1467,17 @@ function joinDirectChat(chatId, peerUserId, peerPassword) {
       clearTimeout(timer);
       if (ok) resolve(); else reject(new Error(err || 'Unable to open chat.'));
     };
-    const timer = setTimeout(() => finish(false, 'Unable to open chat. Please check your connection.'), 8000);
-    socket.emit('join-group', { groupId: chatId, peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
+    const timer = setTimeout(() => finish(false, 'Chat server did not respond. Please refresh the page.'), 10000);
+    socket.emit('open-direct-chat', { peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
       if (response?.ok) {
-        if (response.name) { name = String(response.name).trim(); localStorage.setItem('wa_name', name); updateMyNameUI(); }
+        if (response.peerName) {
+          groupName = String(response.peerName);
+          updateGroupNameUI();
+        }
         finish(true);
+      } else {
+        finish(false, response?.error || 'Unable to open chat.');
       }
-      else finish(false, response?.error || 'Unable to open chat.');
     });
   });
 }
@@ -1487,14 +1491,15 @@ async function openDirectChat(user, verifiedPassword) {
   const chatId = await clientDmId(user.id);
   if (!chatId) throw new Error('Could not create this chat.');
   directChatIds.set(String(user.id), chatId);
-  currentPeerUserId = String(user.id);
+  const peerId = String(user.id);
+  await joinDirectChat(chatId, peerId, verifiedPassword);
+
+  currentPeerUserId = peerId;
   currentGroupId = chatId;
   groupName = String(user.name || user.id);
   localStorage.setItem('wa_chat_id', chatId);
   localStorage.setItem('wa_chat_name', groupName);
   localStorage.setItem('wa_peer_user_id', currentPeerUserId);
-
-  await joinDirectChat(chatId, currentPeerUserId, verifiedPassword);
 
   setUnreadCount(chatId, 0);
   otherGroupMemberOnline = false;
