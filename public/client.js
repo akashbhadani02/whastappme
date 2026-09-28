@@ -1442,7 +1442,10 @@ function ensureSocketUserRegistered() {
     };
     const timer = setTimeout(() => finish(false, 'Chat connection timed out.'), 8000);
     socket.emit('register-user', { userId, name, deviceId }, response => {
-      if (response?.ok) finish(true);
+      if (response?.ok) {
+        if (response.name) { name = String(response.name).trim(); localStorage.setItem('wa_name', name); updateMyNameUI(); }
+        finish(true);
+      }
       else finish(false, response?.error || 'User registration failed.');
     });
   });
@@ -1460,7 +1463,10 @@ function joinDirectChat(chatId, peerUserId, peerPassword) {
     };
     const timer = setTimeout(() => finish(false, 'Unable to open chat. Please check your connection.'), 8000);
     socket.emit('join-group', { groupId: chatId, peerUserId: String(peerUserId), password: String(peerPassword || '') }, response => {
-      if (response?.ok) finish(true);
+      if (response?.ok) {
+        if (response.name) { name = String(response.name).trim(); localStorage.setItem('wa_name', name); updateMyNameUI(); }
+        finish(true);
+      }
       else finish(false, response?.error || 'Unable to open chat.');
     });
   });
@@ -2412,7 +2418,8 @@ function finishAccountLogin() {
   socket.emit('register-user', { userId: enteredId, deviceId }, response => {
     if (!response?.ok) { accountError.textContent = response?.error || 'User ID not found'; return; }
     userId = String(response.userId || enteredId);
-    name = '';
+    name = String(response.name || response.userName || '').trim();
+    if (!name) name = userId;
     localStorage.setItem('wa_user_id', userId);
     socket.emit('presence-login', { userId, deviceId });
     accountModal.classList.add('hidden');

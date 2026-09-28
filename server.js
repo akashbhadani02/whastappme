@@ -2110,7 +2110,7 @@ io.on('connection', async (socket) => {
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
     io.emit('user-registered', { userId: socket.userId, name: requestedName || socket.userId });
-    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
+    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId, name: displayName });
   });
 
   socket.on('register-admin', (data, ack) => {
