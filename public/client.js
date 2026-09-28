@@ -2469,6 +2469,7 @@ async function finishAccountLogin() {
     localStorage.setItem('wa_name', name);
     socket.emit('presence-login', { userId, deviceId });
     accountModal.classList.add('hidden');
+    document.body.classList.add('logged-in');
     appMenu?.classList.add('hidden');
     updateMyNameUI();
     refreshContacts();
@@ -2601,6 +2602,7 @@ logoutBtn?.addEventListener('click', () => {
   if (accountPasswordInput) accountPasswordInput.value = '';
   if (typeof closeCurrentChat === 'function') { try { closeCurrentChat(); } catch (_) {} }
   document.querySelector('#appMenu')?.classList.add('hidden');
+  document.body.classList.remove('logged-in');
   openAccountModal(true);
   updateMyNameUI();
 });
@@ -2612,6 +2614,7 @@ name = '';
 localStorage.removeItem('wa_user_id');
 localStorage.removeItem('wa_name');
 // The user must enter their admin-created name and password again.
+document.body.classList.remove('logged-in');
 openAccountModal(true);
 updateMyNameUI();
 updateGroupNameUI();

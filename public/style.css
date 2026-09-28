@@ -290,3 +290,9 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 
 .me-account{display:flex;align-items:center;gap:9px;min-width:0;cursor:pointer}.me-account-text{display:flex;flex-direction:column;min-width:0;line-height:1.15}.me-account-text strong{font-size:13px;max-width:115px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.me-account-text span{font-size:10px;color:var(--wa-muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.login-card{width:min(390px,calc(100vw - 32px))}.login-card input{width:100%;box-sizing:border-box}.app-menu button{display:block;width:100%;text-align:left;padding:10px 12px;border:0;background:transparent;cursor:pointer}.app-menu button:hover{background:#f0f2f5}
 @media(max-width:700px){.me-account-text{display:none}}
+
+/* Forced account login: the app cannot be used before authentication. */
+body:not(.logged-in) #accountModal { display:grid !important; }
+body:not(.logged-in) .app-shell { pointer-events:none; }
+#accountModal .login-card { width:min(92vw,420px); }
+#accountModal .primary-btn { cursor:pointer; }
