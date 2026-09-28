@@ -142,6 +142,7 @@ const chatList = document.querySelector('#chatList');
 const newChatChoiceModal = document.querySelector('#newChatChoiceModal');
 const newChatChoiceClose = document.querySelector('#newChatChoiceClose');
 const newPrivateChatChoice = document.querySelector('#newPrivateChatChoice');
+const joinPrivateChatChoice = document.querySelector('#joinPrivateChatChoice');
 const newGroupChoice = document.querySelector('#newGroupChoice');
 const privateChatModal = document.querySelector('#privateChatModal');
 const privateChatClose = document.querySelector('#privateChatClose');
@@ -151,6 +152,12 @@ const privateUserCreateName = document.querySelector('#privateUserCreateName');
 const privateUserCreatePassword = document.querySelector('#privateUserCreatePassword');
 const privateUserCreateError = document.querySelector('#privateUserCreateError');
 const privateUserCreateSave = document.querySelector('#privateUserCreateSave');
+const privateUserJoinModal = document.querySelector('#privateUserJoinModal');
+const privateUserJoinClose = document.querySelector('#privateUserJoinClose');
+const privateUserJoinName = document.querySelector('#privateUserJoinName');
+const privateUserJoinPassword = document.querySelector('#privateUserJoinPassword');
+const privateUserJoinError = document.querySelector('#privateUserJoinError');
+const privateUserJoinSave = document.querySelector('#privateUserJoinSave');
 const privateChatSearch = document.querySelector('#privateChatSearch');
 const privateUserList = document.querySelector('#privateUserList');
 const listPreview = document.querySelector('#listPreview');
@@ -2083,6 +2090,60 @@ newPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
   openPrivateUserCreateModal();
 });
+joinPrivateChatChoice?.addEventListener('click', () => {
+  newChatChoiceModal?.classList.add('hidden');
+  openPrivateUserJoinModal();
+});
+
+function openPrivateUserJoinModal() {
+  if (!privateUserJoinModal) return;
+  privateUserJoinName.value = '';
+  privateUserJoinPassword.value = '';
+  privateUserJoinError.textContent = '';
+  privateUserJoinModal.classList.remove('hidden');
+  setTimeout(() => privateUserJoinName.focus(), 50);
+}
+function closePrivateUserJoinModal() {
+  privateUserJoinModal?.classList.add('hidden');
+  if (privateUserJoinError) privateUserJoinError.textContent = '';
+}
+async function joinPrivateUserAndOpen() {
+  const joinName = String(privateUserJoinName?.value || '').trim().slice(0,60);
+  const password = String(privateUserJoinPassword?.value || '');
+  if (!joinName) { privateUserJoinError.textContent = 'Enter the private user name'; privateUserJoinName.focus(); return; }
+  if (!password) { privateUserJoinError.textContent = 'Enter the private chat password'; privateUserJoinPassword.focus(); return; }
+  privateUserJoinSave.disabled = true;
+  privateUserJoinError.textContent = '';
+  try {
+    const r = await fetch('/api/private-chat/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name:joinName, password }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok || !d.user || !d.peer) throw new Error(d.error || 'Could not join private chat');
+    // The shared private user is a real private account. Logging in with its
+    // name/password makes the second person use the same conversation identity
+    // that the creator shared with them.
+    userId = normalizeUserId(d.user.userId);
+    name = String(d.user.name || joinName).slice(0,60);
+    localStorage.setItem('wa_user_id', userId);
+    localStorage.setItem('wa_name', name);
+    syncAndroidNotificationIdentity();
+    closePrivateUserJoinModal();
+    socket.emit('register-user', { userId, name, deviceId });
+    socket.emit('presence-login', { userId, deviceId });
+    const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
+    privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
+    window.privateChatPasswords = window.privateChatPasswords || {};
+    window.privateChatPasswords[peer.userId] = password;
+    await openPrivateChat(peer, password);
+    await loadPrivateUsers();
+    showToast(`Joined private chat with ${peer.name}`);
+  } catch (e) {
+    privateUserJoinError.textContent = e?.message || 'Could not join private chat';
+  } finally { privateUserJoinSave.disabled = false; }
+}
+privateUserJoinSave?.addEventListener('click', joinPrivateUserAndOpen);
+privateUserJoinPassword?.addEventListener('keydown', e => { if (e.key === 'Enter') joinPrivateUserAndOpen(); });
+privateUserJoinClose?.addEventListener('click', closePrivateUserJoinModal);
+privateUserJoinModal?.addEventListener('click', e => { if (e.target === privateUserJoinModal) closePrivateUserJoinModal(); });
 
 function openPrivateUserCreateModal() {
   if (!privateUserCreateModal) return;

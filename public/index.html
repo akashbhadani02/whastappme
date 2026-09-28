@@ -238,6 +238,7 @@
       <p>Choose what you want to create.</p>
       <div class="new-chat-choice-list">
         <button class="primary-btn" id="newPrivateChatChoice" type="button">💬 New Private Chat</button>
+        <button class="primary-btn secondary-choice" id="joinPrivateChatChoice" type="button">🔑 Join Private Chat</button>
         <button class="primary-btn secondary-choice" id="newGroupChoice" type="button">👥 New Group</button>
       </div>
     </div>
@@ -253,6 +254,20 @@
       <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="Private chat password" style="margin-top:10px">
       <div class="password-error" id="privateUserCreateError"></div>
       <button class="primary-btn" id="privateUserCreateSave">Create & Open Chat</button>
+    </div>
+  </div>
+
+
+  <div class="modal hidden" id="privateUserJoinModal" role="dialog" aria-modal="true" aria-label="Join private chat">
+    <div class="modal-card">
+      <button class="modal-close" id="privateUserJoinClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔑</div>
+      <h3>Join private chat</h3>
+      <p>Enter the private user name and the password shared by the chat creator.</p>
+      <input id="privateUserJoinName" type="text" maxlength="60" autocomplete="off" placeholder="Private user name">
+      <input id="privateUserJoinPassword" type="password" maxlength="100" autocomplete="current-password" placeholder="Private chat password" style="margin-top:10px">
+      <div class="password-error" id="privateUserJoinError"></div>
+      <button class="primary-btn" id="privateUserJoinSave">Join & Open Chat</button>
     </div>
   </div>
 

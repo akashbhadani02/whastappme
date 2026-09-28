@@ -289,25 +289,53 @@ app.get('/api/users', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
     const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.json({ ok: true, users: [] });
-    // Private-chat directory contains ONLY active private users created via
-    // New Private Chat. Normal/group accounts must never appear here.
-    const query = me
-      ? { kind:'private_user', _id: { $ne: me } }
-      : { kind:'private_user' };
-    const docs = await profiles.find(query, {
-      projection: { _id: 1, name: 1, kind: 1, updatedAt: 1 }
-    }).sort({ name: 1 }).limit(500).toArray();
-    res.json({
-      ok: true,
-      users: docs.map(u => ({
-        userId: String(u._id),
-        name: String(u.name || 'User').slice(0, 40)
-      }))
-    });
+    const settings = await getPrivateChatSettingsCollection();
+    if (!profiles || !me) return res.json({ ok: true, users: [] });
+
+    // Private-chat directory is conversation-scoped. A user sees only the
+    // other participant of private chats they actually own/are part of.
+    const settingDocs = settings
+      ? await settings.find({ $or:[{ userA:me }, { userB:me }] }, { projection:{ userA:1, userB:1, _id:1, createdAt:1 } }).sort({ createdAt:-1 }).limit(500).toArray()
+      : [];
+    const peerIds = [...new Set(settingDocs.map(s => String(s.userA) === me ? String(s.userB) : String(s.userA)).filter(Boolean).filter(id => id !== me))];
+    if (!peerIds.length) return res.json({ ok:true, users:[] });
+    const docs = await profiles.find({ _id:{ $in:peerIds } }, { projection:{ _id:1, name:1, kind:1, updatedAt:1 } }).toArray();
+    const byId = new Map(docs.map(u => [String(u._id), u]));
+    const users = peerIds.filter(id => byId.has(id)).map(id => ({
+      userId:id,
+      name:String(byId.get(id)?.name || id).slice(0,60)
+    }));
+    res.json({ ok:true, users });
   } catch (error) {
     console.error('User directory failed:', error.message);
-    res.status(500).json({ ok: false, users: [] });
+    res.status(500).json({ ok:false, users:[] });
+  }
+});
+
+app.post('/api/private-chat/join', async (req, res) => {
+  try {
+    const displayName = String(req.body?.name || '').trim().slice(0, 60);
+    const password = String(req.body?.password || '');
+    if (!displayName || !password) return res.status(400).json({ ok:false, error:'Name and password are required.' });
+    const profiles = await getUserProfilesCollection();
+    const settings = await getPrivateChatSettingsCollection();
+    if (!profiles || !settings) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const matches = await profiles.find({ kind:'private_user', name:displayName }, { projection:{ _id:1, name:1, kind:1 } }).limit(10).toArray();
+    const valid = [];
+    for (const profile of matches) {
+      const setting = await settings.findOne({ userB:String(profile._id), password });
+      if (setting) valid.push({ profile, setting });
+    }
+    if (valid.length === 0) return res.status(403).json({ ok:false, error:'Invalid private user name or password.' });
+    if (valid.length > 1) return res.status(409).json({ ok:false, error:'More than one private user has this name. Ask the creator for the private user ID.' });
+    const { profile, setting } = valid[0];
+    const creatorId = String(setting.userA);
+    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1, kind:1 } });
+    if (!creator) return res.status(410).json({ ok:false, error:'The private chat creator no longer exists.' });
+    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || displayName) }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId:String(setting._id) });
+  } catch (error) {
+    console.error('Private chat join failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not join private chat.' });
   }
 });
 
