@@ -462,9 +462,9 @@ passwordSubmit.addEventListener('click', async () => {
   let valid = false;
   if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
   else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
-  else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify') {
+  else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
     try {
-      const peerId = String(window.pendingPrivatePeerId || '');
+      const peerId = String(window.pendingPrivatePeerId || currentPrivateUser?.userId || '');
       const endpoint = pendingPasswordType === 'private-setup' ? '/api/private-chat/set-password' : '/api/private-chat/verify';
       const r = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId, peerId, password:supplied})});
       const d = await r.json().catch(() => ({}));
@@ -483,8 +483,8 @@ passwordSubmit.addEventListener('click', async () => {
   if (!valid) { passwordError.textContent = 'Wrong password'; passwordInput.select(); return; }
   const action = pendingAction;
   const wasAdminPassword = pendingPasswordType === 'admin';
-  const wasPrivatePassword = pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify';
-  if (wasPrivatePassword) window.privatePasswordForOpen = supplied;
+  const wasPrivatePassword = pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action';
+  if (wasPrivatePassword) { window.privatePasswordForOpen = supplied; window.privatePasswordForAction = supplied; }
   closePassword();
   if (wasAdminPassword) {
     adminUnlocked = true;
@@ -707,7 +707,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete for everyone','Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id));
+    requestPassword('Delete for everyone', activeChatType === 'private' ? 'Enter this private chat password. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id), activeChatType === 'private' ? 'private-action' : 'admin');
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -772,6 +772,14 @@ forwardClose?.addEventListener('click',()=>forwardModal?.classList.add('hidden')
 forwardModal?.addEventListener('click',e=>{if(e.target===forwardModal)forwardModal.classList.add('hidden');});
 chatSearchBtn?.addEventListener('click',()=>{const q=(prompt('Search messages in this chat')||'').trim().toLowerCase();if(!q)return;const found=[...messages.values()].find(m=>(m.message||'').toLowerCase().includes(q));if(found){const el=document.querySelector(`.message[data-id="${CSS.escape(found.id)}"]`);el?.scrollIntoView({behavior:'smooth',block:'center'});el?.classList.add('search-hit');setTimeout(()=>el?.classList.remove('search-hit'),1800);}else showToast('No matching message');});
 
+function privateConversationIdForClient() {
+  const a=String(userId||'').trim(), b=String(currentPrivateUser?.userId||'').trim();
+  if(!a || !b || a===b) return '';
+  return [a,b].sort().join(':');
+}
+function privateChatPasswordForCurrent() {
+  return String(window.privateChatPasswords?.[String(currentPrivateUser?.userId||'')] || '');
+}
 function deleteMessage(messageId, broadcast=true) {
   const id = String(messageId);
   const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
@@ -780,7 +788,14 @@ function deleteMessage(messageId, broadcast=true) {
   deletedIds.add(id);
   selectedMessageIds.delete(id);
   saveLocalMessageHistory();
-  if (broadcast) socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+  if (broadcast) {
+    if (activeChatType === 'private') {
+      const conversationId = privateConversationIdForClient();
+      socket.emit('private-delete-message', {id, conversationId}, (result) => { if (!result || !result.ok) showToast('Private message could not be deleted'); });
+    } else {
+      socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+    }
+  }
   updateSelectionUI();
   updatePreview('Message deleted');
 }
@@ -798,19 +813,32 @@ function deleteMessages(messageIds, broadcast=true) {
   saveLocalMessageHistory();
   exitSelectionMode();
   updatePreview(ids.length === 1 ? 'Message deleted' : `${ids.length} messages deleted`);
-  if (broadcast) socket.emit('delete-messages', {ids}, (result) => {
-    if (!result || !result.ok) showToast('Delete could not be synced');
-  });
+  if (broadcast) {
+    if (activeChatType === 'private') {
+      const conversationId = privateConversationIdForClient();
+      socket.emit('private-delete-messages', {ids, conversationId}, (result) => { if (!result || !result.ok) showToast('Private messages could not be deleted'); });
+    } else {
+      socket.emit('delete-messages', {ids}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+    }
+  }
 }
 
 function clearChat(broadcast=true) {
   messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
   try { localStorage.removeItem(messageCacheKey()); } catch (_) {}
   updatePreview('No messages yet');
-  if (broadcast) socket.emit('clear-chat', {by:name});
+  if (broadcast) {
+    if (activeChatType === 'private') {
+      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient()}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
+    } else {
+      socket.emit('clear-chat', {by:name});
+    }
+  }
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat','Enter password to permanently clear this chat.', () => clearChat(true)));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', activeChatType === 'private' ? 'Enter this private chat password to clear the chat. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to clear this chat.', () => {
+  if (activeChatType === 'private' && privateChatPasswordForCurrent()) clearChat(true); else clearChat(true);
+}, activeChatType === 'private' ? 'private-action' : 'admin'));
 
 const cameraModal = document.querySelector('#cameraModal');
 const cameraPreview = document.querySelector('#cameraPreview');
@@ -1256,6 +1284,29 @@ socket.on('private-history', history => {
   history.forEach(msg => receivePrivateMessage(msg, {history:true}));
   if (history.length) requestAnimationFrame(() => scrollToBottom());
 });
+socket.on('private-chat-deleted', data => {
+  const conversationId = String(data?.conversationId || '');
+  if (!conversationId) return;
+  if (window.privateChatPasswords) {
+    const current = window.privateChatPasswords;
+    Object.keys(current).forEach(k => {
+      if (String(current[k]?.conversationId || '') === conversationId) delete current[k];
+    });
+  }
+  if (String(currentPrivateUser?.conversationId || '') === conversationId) {
+    currentPrivateUser = null;
+    activeChatType = 'group';
+    messages.clear();
+    deletedIds.clear();
+    readSent.clear();
+    lastRenderedDate = '';
+    lastSyncAt = '';
+    if (messageArea) messageArea.innerHTML = '';
+    composer?.classList.add('hidden');
+  }
+  if (typeof loadPrivateUsers === 'function') loadPrivateUsers().catch(() => {});
+});
+
 socket.on('private-user-deleted', data => {
   const deletedId = String(data?.userId || '');
   if (!deletedId) return;
@@ -1823,6 +1874,10 @@ socket.on('user-renamed', data => {
 });
 socket.on('message-updated', data => { if(!data?.message || (data.groupId && data.groupId!==currentGroupId)) return; const m=data.message; const existing=messages.get(m.id); if(existing){Object.assign(existing,m); updateMessageElement(existing); saveLocalMessageHistory();} });
 
+socket.on('private-message-deleted', data => { if (activeChatType !== 'private' || !data?.id) return; deleteMessage(data.id,false); });
+socket.on('private-messages-deleted', data => { if (activeChatType !== 'private' || !Array.isArray(data?.ids)) return; deleteMessages(data.ids,false); });
+socket.on('private-chat-cleared', data => { if (activeChatType !== 'private') return; messageArea.innerHTML=''; messages.clear(); lastRenderedDate=''; try{localStorage.removeItem(messageCacheKey());}catch(_){} updatePreview('No messages yet'); });
+
 socket.on('delete-message', data => { if (data && data.id && (!data.groupId || data.groupId === currentGroupId)) deleteMessage(data.id,false); });
 socket.on('restore-message', data => { if (!data || !data.message) return; if (data.groupId !== currentGroupId) return; const msg=data.message; deletedIds.delete(String(msg.id)); messages.set(String(msg.id),msg); const old=document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`); if(old) old.remove(); renderMessage(msg,msg.userId===userId?'outgoing':'incoming'); saveLocalMessageHistory(); updatePreview('Message restored'); });
 socket.on('delete-messages', data => {
@@ -2371,10 +2426,24 @@ async function loadAdminPrivateChats() {
       chats.forEach(chat => {
         const row = document.createElement('div');
         row.className = 'admin-private-chat-row';
-        row.innerHTML = '<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div>';
+        row.innerHTML = '<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete Chat</button>';
         row.querySelector('.admin-private-chat-users').textContent = `${chat.userAName || chat.userA || 'User'} ↔ ${chat.userBName || chat.userB || 'User'}`;
         row.querySelector('.admin-private-chat-meta').textContent = chat.createdAt ? `Created ${new Date(chat.createdAt).toLocaleString()}` : 'Private chat';
         row.querySelector('.admin-private-chat-password').textContent = `🔑 ${String(chat.password || '')}`;
+        row.querySelector('.admin-delete-btn').addEventListener('click', () => {
+          requestPassword('Delete private chat', `Delete this private chat and move its messages/photos/videos/audio to the Main Recycle Bin? The private users will NOT be deleted. Only Admin can permanently delete those recycle-bin items.`, async () => {
+            try {
+              const rr = await fetch('/api/admin/private-chats/delete', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({password:PASSWORD, conversationId:chat.conversationId})
+              });
+              const dd = await rr.json().catch(() => ({}));
+              if (!rr.ok || !dd.ok) throw new Error(dd.error || 'Delete failed');
+              await loadAdminPrivateChats();
+              showToast('Private chat deleted');
+            } catch (e) { showToast(e.message || 'Delete failed'); }
+          }, 'admin');
+        });
         adminPrivateChatsList.appendChild(row);
       });
     }
@@ -2388,13 +2457,13 @@ async function loadAdminPrivateChats() {
       const row = document.createElement('div');
       row.className = 'admin-private-chat-row';
       const when = user.lastActivity ? new Date(user.lastActivity).toLocaleString() : '';
-      row.innerHTML = `<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete User</button>`;
+      row.innerHTML = `<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div><div class="admin-private-chat-password"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete Account</button>`;
       row.querySelector('.admin-private-chat-users').textContent = String(user.name || user.userId || 'User');
       row.querySelector('.admin-private-chat-meta').textContent = `${Number(user.privateChatCount || 0)} private message(s)${when ? ` • Last activity ${when}` : ''}`;
       const passwordsForUser = privatePasswordSettings.filter(x => String(x.userA) === String(user.userId) || String(x.userB) === String(user.userId));
       row.querySelector('.admin-private-chat-password').textContent = passwordsForUser.length ? passwordsForUser.map(x => `🔑 ${x.password}`).join('  •  ') : '🔑 No password set';
       row.querySelector('.admin-delete-btn').addEventListener('click', () => {
-        requestPassword('Delete user permanently', `Permanently delete ${String(user.name || user.userId || 'this user')} and their private chat data? Enter the Admin password or this user's private-chat password. Main Recycle Bin data will NOT be deleted.`, async () => {
+        requestPassword('Delete user permanently', `Delete ${String(user.name || user.userId || 'this user')} account and move their private photos/videos/audio/messages to the Main Recycle Bin? Enter the Admin password. Only Admin can permanently delete recycle-bin items.`, async () => {
           try {
             const rr = await fetch('/api/admin/private-users/delete', {
               method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, userId:user.userId})
@@ -2542,8 +2611,8 @@ async function renderAdminRecycleGroupFilters(items) {
 }
 
 
-function recycleItemGroupId(item){ return String(item?.deletedGroupId || item?.message?.groupId || 'main'); }
-function recycleItemGroupName(item){ return String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
+function recycleItemGroupId(item){ return item?.recycleType === 'private' ? `private:${String(item?.privateConversationId || item?.message?.conversationId || 'unknown')}` : String(item?.deletedGroupId || item?.message?.groupId || 'main'); }
+function recycleItemGroupName(item){ return item?.recycleType === 'private' ? `Private Chat • ${String(item?.privateConversationId || item?.message?.conversationId || 'Private')}` : String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
 
 function openRecycleChatView(items, groupName, targetId='') {
   const view = document.querySelector('#adminRecycleChatView');
@@ -2622,7 +2691,7 @@ async function loadAdminRecycle() {
       adminRecycleTitle.textContent = `♻️ Main Recycle Bin (${items.length})`;
     }
     const visibleItems = adminRecycleGroupId === 'main' && adminRecycleFilterGroup !== 'all'
-      ? items.filter(item => String(item.deletedGroupId || item.message?.groupId || 'main') === adminRecycleFilterGroup)
+      ? items.filter(item => recycleItemGroupId(item) === adminRecycleFilterGroup)
       : items;
     if (!items.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">Recycle bin is empty.</div>'; return; }
     if (!visibleItems.length) { adminRecycleList.innerHTML = '<div class="recycle-empty">No deleted items in this group.</div>'; return; }
@@ -2633,7 +2702,7 @@ async function loadAdminRecycle() {
       const sender = m.user || m.senderName || m.senderId || m.userId || 'Unknown user';
       const content = m.message || m.fileName || (m.type === 'image' ? 'Photo' : m.type === 'video' ? 'Video' : m.type === 'audio' ? 'Audio' : m.type === 'document' ? 'Document' : 'Deleted message');
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      const oldGroup = item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : '');
+      const oldGroup = item.recycleType === 'private' ? `Private chat: ${String(item.privateConversationId || item.message?.conversationId || '')}` : (item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : ''));
       const isMainRecycle = adminRecycleGroupId === 'main';
       row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">🗑️ Delete → Main Recycle</button>'}</div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
@@ -2660,14 +2729,21 @@ async function loadAdminRecycle() {
           } catch(e){ showToast(e.message||'Download failed'); }
         };
       } else { view.disabled=true; download.disabled=true; }
-      row.querySelector('.recycle-restore-btn').onclick=async()=>{
-        if(!confirm('Restore this deleted item to the group?')) return;
-        try {
-          const r=await fetch('/api/admin/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
-          const d=await r.json(); if(!d.ok) throw new Error(d.error||'Restore failed');
-          showToast('Item restored'); loadAdminRecycle();
-        } catch(e){ adminRecycleError.textContent=e.message||'Restore failed'; }
-      };
+      const restoreBtn = row.querySelector('.recycle-restore-btn');
+      if (item.recycleType === 'private') {
+        restoreBtn.disabled = true;
+        restoreBtn.textContent = '♻️ Private restore unavailable';
+        restoreBtn.title = 'Private recycle items stay in Main Recycle Bin until an Admin permanently deletes them.';
+      } else {
+        restoreBtn.onclick=async()=>{
+          if(!confirm('Restore this deleted item to the group?')) return;
+          try {
+            const r=await fetch('/api/admin/recycle-bin/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,id:item.id})});
+            const d=await r.json(); if(!d.ok) throw new Error(d.error||'Restore failed');
+            showToast('Item restored'); loadAdminRecycle();
+          } catch(e){ adminRecycleError.textContent=e.message||'Restore failed'; }
+        };
+      }
       const permanentDeleteBtn = row.querySelector('.recycle-delete-btn');
       if (permanentDeleteBtn) permanentDeleteBtn.onclick=async()=>{
         if(!confirm('Permanently delete this item and its media? This cannot be undone.')) return;

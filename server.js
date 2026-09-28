@@ -512,39 +512,145 @@ app.post('/api/admin/private-chats', async (req, res) => {
   }
 });
 
+async function movePrivateMessagesToRecycleBin(items, conversationId, reason = 'private-delete') {
+  const db = await getDb();
+  if (!db || !Array.isArray(items) || !items.length || !conversationId) return 0;
+  const recycle = db.collection(RECYCLE_BIN_COLLECTION_NAME);
+  try {
+    const indexes = await recycle.listIndexes().toArray();
+    for (const idx of indexes) {
+      if (idx.name === '_id_') continue;
+      const names = Object.keys(idx.key || {});
+      if (idx.unique && names.some(k => ['originalMessageId','deletedGroupId','groupId'].includes(k))) {
+        try { await recycle.dropIndex(idx.name); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  try { await recycle.createIndex({ recycleType:1, deletedAt:-1 }, { name:'recycle_type_deletedAt' }); } catch (_) {}
+  const parts = String(conversationId).split(':');
+  const userA = parts[1] || '';
+  const userB = parts[2] || '';
+  const docs = [];
+  for (const item of items) {
+    if (!item) continue;
+    const originalMessageId = String(item.id || '').trim();
+    if (!originalMessageId) continue;
+    docs.push({
+      originalMessageId,
+      groupId: DEFAULT_GROUP_ID,
+      deletedGroupId: DEFAULT_GROUP_ID,
+      deletedGroupName: 'Private Chats',
+      recycleType: 'private',
+      privateConversationId: String(conversationId),
+      privateUserA: userA,
+      privateUserB: userB,
+      deletedAt: new Date(),
+      deleteReason: reason,
+      recycleStage: 'main',
+      message: { ...item, conversationId: String(conversationId) }
+    });
+  }
+  if (!docs.length) return 0;
+  try { await recycle.insertMany(docs, { ordered:false }); } catch (_) {}
+  return docs.length;
+}
+
+app.post('/api/admin/private-chats/delete', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const conversationId = String(req.body?.conversationId || '').trim();
+    if (!/^private:[^:]+:[^:]+$/.test(conversationId)) return res.status(400).json({ ok:false, error:'Invalid private chat' });
+
+    const db = await getDb();
+    if (!db) return res.status(503).json({ ok:false, error:'Database unavailable' });
+    const collection = db.collection(COLLECTION_NAME);
+    const settings = await getPrivateChatSettingsCollection();
+
+    const parts = conversationId.split(':');
+    const userA = String(parts[1]);
+    const userB = String(parts[2]);
+
+    const privateMessages = await collection.find({ conversationId, deletedAt:{ $exists:false } }).toArray();
+    const archivedPrivateMessages = await movePrivateMessagesToRecycleBin(privateMessages, conversationId, 'private-chat-delete');
+    const messageResult = await collection.deleteMany({ conversationId });
+    let settingsResult = { deletedCount:0 };
+    if (settings) settingsResult = await settings.deleteOne({ _id:conversationId });
+    fallbackPrivateChatSettings.delete(conversationId);
+
+    let mediaResult = { deletedCount:0 };
+    try {
+      mediaResult = await db.collection(MEDIA_UPLOADS_COLLECTION_NAME).deleteMany({ conversationId });
+    } catch (_) {}
+    try {
+      await db.collection(EVENTS_COLLECTION_NAME).deleteMany({
+        $or: [
+          { 'payload.conversationId': conversationId },
+          { conversationId }
+        ]
+      });
+    } catch (_) {}
+
+    // Keep both private-user accounts intact. This action deletes only the
+    // private conversation itself; the separate Delete User action removes
+    // an actual private-user account.
+    try {
+      io.sockets.sockets.forEach(target => {
+        try { target.emit('private-chat-deleted', { conversationId, userA, userB }); } catch (_) {}
+      });
+    } catch (_) {}
+
+    res.json({
+      ok:true,
+      conversationId,
+      deletedPrivateMessages:Number(messageResult.deletedCount || 0),
+      archivedPrivateMessages:Number(archivedPrivateMessages || 0),
+      deletedPrivateChatSettings:Number(settingsResult.deletedCount || 0),
+      deletedPrivateMedia:Number(mediaResult.deletedCount || 0),
+      usersPreserved:true,
+      recycleBinPreserved:true
+    });
+  } catch (error) {
+    console.error('Admin private chat delete failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Private chat delete failed' });
+  }
+});
+
 app.post('/api/admin/private-users/delete', async (req, res) => {
   try {
     const suppliedPassword = String(req.body?.password || '');
     const userId = String(req.body?.userId || '').trim();
     if (!userId || userId.length > 200) return res.status(400).json({ ok:false, error:'Invalid user' });
 
-    // The Admin panel is already protected by the admin password. For the
-    // individual Delete User action, also allow the private user's own chat
-    // password so the user can be deleted from this list using that password.
-    let authorized = suppliedPassword === ADMIN_PASSWORD;
-    const settingsCollection = await getPrivateChatSettingsCollection();
-    let userSettings = [];
-    if (!authorized && settingsCollection) {
-      userSettings = await settingsCollection.find({
-        $or: [{ userA:userId }, { userB:userId }]
-      }).toArray();
-      authorized = userSettings.some(x => String(x.password || '') === suppliedPassword);
+    // Deleting an account is an Admin-only destructive action. The private
+    // chat password must NEVER be sufficient to delete the account.
+    if (suppliedPassword !== ADMIN_PASSWORD) {
+      return res.status(403).json({ ok:false, error:'Wrong admin password' });
     }
-    if (!authorized) return res.status(403).json({ ok:false, error:'Wrong admin or private-user password' });
 
     const db = await getDb();
     const profiles = await getUserProfilesCollection();
     if (!db || !profiles) return res.status(503).json({ ok:false, error:'Database unavailable' });
     const collection = db.collection(COLLECTION_NAME);
 
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User not found' });
+    const profile = await profiles.findOne(
+      { _id:userId, kind:'private_user' },
+      { projection:{ _id:1, name:1, kind:1 } }
+    );
+    if (!profile) return res.status(404).json({ ok:false, error:'Active private user not found' });
 
     // Permanently remove ONLY the user's account/private data. The main/group
     // recycle-bin collections are intentionally never touched here.
-    const privateResult = await collection.deleteMany({
-      conversationId: { $regex: new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`) }
-    });
+    const privateConversationRegex = new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`);
+    const privateMessagesToArchive = await collection.find({ conversationId: { $regex: privateConversationRegex }, deletedAt:{ $exists:false } }).toArray();
+    const archiveCounts = new Map();
+    for (const msg of privateMessagesToArchive) {
+      const cid = String(msg.conversationId || '');
+      if (!archiveCounts.has(cid)) archiveCounts.set(cid, []);
+      archiveCounts.get(cid).push(msg);
+    }
+    let archivedPrivateMessages = 0;
+    for (const [cid, rows] of archiveCounts.entries()) archivedPrivateMessages += await movePrivateMessagesToRecycleBin(rows, cid, 'private-user-delete');
+    const privateResult = await collection.deleteMany({ conversationId: { $regex: privateConversationRegex } });
 
     let privateSettingsResult = { deletedCount:0 };
     try {
@@ -599,6 +705,7 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
       name:String(profile.name || 'User'),
       deletedAccount:Number(profileResult.deletedCount || 0),
       deletedPrivateMessages:Number(privateResult.deletedCount || 0),
+      archivedPrivateMessages:Number(archivedPrivateMessages || 0),
       deletedPrivateChatSettings:Number(privateSettingsResult.deletedCount || 0),
       deletedPrivateMediaSessions:Number(mediaResult.deletedCount || 0),
       recycleBinPreserved:true
@@ -2902,6 +3009,71 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
+  socket.on('private-delete-message', async (data, ack) => {
+    const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
+    const id = String(data?.id || '').trim();
+    if (!conversationId || !id || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
+    }
+    try {
+      const collection = await getCollection();
+      if (!collection) return typeof ack === 'function' && ack({ok:false});
+      const existing = await collection.findOne({ id, conversationId, deletedAt:{ $exists:false } });
+      if (existing) {
+        await movePrivateMessagesToRecycleBin([existing], conversationId, 'private-message-delete');
+        await collection.updateOne({ _id:existing._id }, { $set:{ deletedAt:new Date(), deletedBy:String(socket.userId || ''), deleteReason:'private-message-delete', recycleStage:'main' } });
+      }
+      io.to(`private:${conversationId}`).emit('private-message-deleted', { id, conversationId });
+      if (typeof ack === 'function') ack({ok:true});
+    } catch (error) {
+      console.error('Private message delete failed:', error.message);
+      if (typeof ack === 'function') ack({ok:false});
+    }
+  });
+
+  socket.on('private-delete-messages', async (data, ack) => {
+    const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
+    const ids = Array.isArray(data?.ids) ? [...new Set(data.ids.map(x=>String(x||'').trim()).filter(Boolean))].slice(0,500) : [];
+    if (!conversationId || !ids.length || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
+    }
+    try {
+      const collection = await getCollection();
+      if (!collection) return typeof ack === 'function' && ack({ok:false});
+      const existing = await collection.find({ id:{ $in:ids }, conversationId, deletedAt:{ $exists:false } }).toArray();
+      if (existing.length) {
+        await movePrivateMessagesToRecycleBin(existing, conversationId, 'private-message-delete');
+        await collection.updateMany({ id:{ $in:existing.map(x=>x.id) }, conversationId, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:String(socket.userId || ''), deleteReason:'private-message-delete', recycleStage:'main' } });
+      }
+      io.to(`private:${conversationId}`).emit('private-messages-deleted', { ids, conversationId });
+      if (typeof ack === 'function') ack({ok:true,count:existing.length});
+    } catch (error) {
+      console.error('Private messages delete failed:', error.message);
+      if (typeof ack === 'function') ack({ok:false});
+    }
+  });
+
+  socket.on('private-clear-chat', async (data, ack) => {
+    const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
+    if (!conversationId || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
+    }
+    try {
+      const collection = await getCollection();
+      if (!collection) return typeof ack === 'function' && ack({ok:false});
+      const existing = await collection.find({ conversationId, deletedAt:{ $exists:false } }).toArray();
+      if (existing.length) {
+        await movePrivateMessagesToRecycleBin(existing, conversationId, 'private-clear-chat');
+        await collection.updateMany({ conversationId, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:String(socket.userId || ''), deleteReason:'private-clear-chat', recycleStage:'main' } });
+      }
+      io.to(`private:${conversationId}`).emit('private-chat-cleared', { conversationId });
+      if (typeof ack === 'function') ack({ok:true,count:existing.length});
+    } catch (error) {
+      console.error('Private clear chat failed:', error.message);
+      if (typeof ack === 'function') ack({ok:false});
     }
   });
 
