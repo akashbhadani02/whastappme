@@ -217,6 +217,17 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="privateChatModal" role="dialog" aria-modal="true" aria-label="New private chat">
+    <div class="modal-card private-chat-picker-card">
+      <button class="modal-close" id="privateChatClose" aria-label="Close">×</button>
+      <div class="lock-icon">💬</div>
+      <h3>New private chat</h3>
+      <p>Choose a user to start a one-to-one chat.</p>
+      <input id="privateChatSearch" type="search" autocomplete="off" placeholder="Search users">
+      <div id="privateUserList" class="private-user-list"></div>
+    </div>
+  </div>
+
   <div class="modal hidden" id="groupPasswordModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" id="groupPasswordClose" aria-label="Close">×</button>

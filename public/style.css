@@ -285,3 +285,14 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 .recycle-chat-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .recycle-chat-empty{padding:30px;text-align:center;color:#68737a}
 @media(max-width:600px){.recycle-chat-view{max-height:68vh}.recycle-chat-bubble{max-width:88%}.recycle-chat-body{padding:8px}.recycle-chat-media img,.recycle-chat-media video{max-height:220px}}
+
+.chat-section-label{padding:10px 14px 5px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#667781;background:#f0f2f5;position:sticky;top:0;z-index:1}
+.private-avatar{background:#dfe7e9}
+.private-chat-picker-card{max-width:460px}
+.private-chat-picker-card input{width:100%;box-sizing:border-box;margin:8px 0 12px;padding:12px 14px;border:1px solid #d1d7db;border-radius:8px;outline:none}
+.private-user-list{max-height:55vh;overflow:auto}
+.private-user-row{width:100%;display:flex;align-items:center;gap:12px;border:0;background:transparent;padding:10px 4px;text-align:left;cursor:pointer;border-bottom:1px solid #edf0f2}
+.private-user-row:hover{background:#f5f7f8}
+.private-user-row strong{display:block;font-size:15px;color:#111b21}
+.private-user-row small{display:block;color:#667781;margin-top:2px}
+.private-empty{padding:24px;text-align:center;color:#667781}

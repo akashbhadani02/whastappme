@@ -282,6 +282,71 @@ app.post('/api/push/unsubscribe', async (req, res) => {
   } catch (error) { res.status(500).json({ ok: false }); }
 });
 
+
+app.get('/api/users', async (req, res) => {
+  try {
+    const me = String(req.query?.userId || '').trim();
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.json({ ok: true, users: [] });
+    const docs = await profiles.find(me ? { _id: { $ne: me } } : {}, {
+      projection: { _id: 1, name: 1, updatedAt: 1 }
+    }).sort({ name: 1 }).limit(500).toArray();
+    res.json({
+      ok: true,
+      users: docs.map(u => ({
+        userId: String(u._id),
+        name: String(u.name || 'User').slice(0, 40)
+      }))
+    });
+  } catch (error) {
+    console.error('User directory failed:', error.message);
+    res.status(500).json({ ok: false, users: [] });
+  }
+});
+
+app.get('/api/private-messages', async (req, res) => {
+  try {
+    const me = String(req.query?.userId || '').trim();
+    const peer = String(req.query?.peerId || '').trim();
+    const conversationId = privateConversationId(me, peer);
+    if (!me || !peer || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
+    const messages = await loadPrivateMessages(conversationId, req.query?.after || '');
+    res.json({ ok:true, messages });
+  } catch (error) {
+    console.error('Private message history failed:', error.message);
+    res.status(500).json({ ok:false, messages:[] });
+  }
+});
+
+app.post('/api/private-messages', async (req, res) => {
+  try {
+    const msg = { ...(req.body || {}) };
+    const sender = String(msg.userId || '').trim();
+    const peer = String(msg.peerId || '').trim();
+    const conversationId = privateConversationId(sender, peer);
+    if (!sender || !peer || sender === peer || !msg.id || !String(msg.message || '').trim() || !conversationId) {
+      return res.status(400).json({ ok:false, error:'Invalid private message' });
+    }
+    msg.conversationId = conversationId;
+    msg.message = String(msg.message).trim().slice(0, 5000);
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
+    const result = await savePrivateMessage(msg);
+    if (result.inserted) {
+      io.to(`private:${conversationId}`).emit('private-message', result.saved);
+      // Notify every connected device of the recipient immediately.
+      for (const target of io.sockets.sockets.values()) {
+        if (String(target.userId || '') === peer && !target.rooms.has(`private:${conversationId}`)) target.emit('private-message', result.saved);
+      }
+    }
+    if (result.inserted) await sendPrivatePush(peer, result.saved);
+    res.json({ ok:true, message:result.saved });
+  } catch (error) {
+    console.error('Private message save failed:', error.message);
+    res.status(503).json({ ok:false, retryable:true, error:'Private message is temporarily unavailable.' });
+  }
+});
+
 app.get('/api/groups', async (req, res) => {
   try {
     const collection = await getGroupSettingsCollection();
@@ -1412,6 +1477,50 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+
+function privateConversationId(a, b) {
+  const ids = [String(a || '').trim(), String(b || '').trim()].filter(Boolean).sort();
+  if (ids.length !== 2 || ids[0] === ids[1]) return '';
+  return `private:${ids[0]}:${ids[1]}`;
+}
+
+async function loadPrivateMessages(conversationId, after) {
+  const collection = await getCollection();
+  if (!collection || !conversationId) return [];
+  const filter = { conversationId: String(conversationId), deletedAt: { $exists: false } };
+  const query = after ? { $and: [filter, { createdAt: { $gte: new Date(after) } }] } : filter;
+  return collection.find(query, { projection: { _id: 0 } }).sort({ createdAt: 1 }).toArray();
+}
+
+async function savePrivateMessage(msg) {
+  const conversationId = String(msg?.conversationId || '').trim();
+  const messageId = String(msg?.id || '').trim();
+  if (!conversationId || !messageId) throw new Error('Missing private conversation/message id');
+  const collection = await getCollection();
+  const createdAt = msg.createdAt ? new Date(msg.createdAt) : new Date();
+  const safeCreatedAt = Number.isNaN(createdAt.getTime()) ? new Date() : createdAt;
+  const saved = { ...msg, id: messageId, conversationId, createdAt: safeCreatedAt };
+  if (!collection) return { saved, inserted: true };
+  try {
+    const result = await collection.updateOne(
+      { id: messageId, conversationId },
+      { $setOnInsert: saved },
+      { upsert: true }
+    );
+    if (result.upsertedCount === 0) {
+      const existing = await collection.findOne({ id: messageId, conversationId }, { projection: { _id: 0 } });
+      if (existing) return { saved: existing, inserted: false };
+    }
+    return { saved, inserted: true };
+  } catch (error) {
+    if (error?.code === 11000) {
+      const existing = await collection.findOne({ id: messageId, conversationId }, { projection: { _id: 0 } });
+      if (existing) return { saved: existing, inserted: false };
+    }
+    throw error;
+  }
+}
+
 async function loadMessages(after, groupId = DEFAULT_GROUP_ID) {
   const collection = await getCollection();
   if (!collection) return [];
@@ -1449,7 +1558,7 @@ app.post('/api/messages', async (req, res) => {
 // application-level maximum video size.
 app.post('/api/media/start', async (req, res) => {
   try {
-    const { uploadId, name, mime, type, size, groupId, userId } = req.body || {};
+    const { uploadId, name, mime, type, size, groupId, userId, conversationId, peerId } = req.body || {};
     if (!uploadId || !name || !mime || !type) return res.status(400).json({ ok:false, error:'Invalid upload' });
     const db = await getDb();
     if (!db) return res.status(503).json({ ok:false, error:'Media storage is unavailable. Configure MONGODB_URI.' });
@@ -1461,7 +1570,7 @@ app.post('/api/media/start', async (req, res) => {
     await uploads.deleteMany({ uploadId: String(uploadId) });
     await uploads.insertOne({
       uploadId: String(uploadId), name: String(name), mime: String(mime), type: String(type),
-      size: Number(size || 0), groupId: normalizeGroupId(groupId), userId: String(userId || ''),
+      size: Number(size || 0), groupId: normalizeGroupId(groupId), conversationId: String(conversationId || ''), peerId: String(peerId || ''), userId: String(userId || ''),
       received: 0, chunks: 0, createdAt: new Date()
     });
     res.json({ ok:true });
@@ -1523,7 +1632,7 @@ app.post('/api/media/end', async (req, res) => {
     }
     const stream = media.openUploadStream(session.name, {
       contentType: session.mime,
-      metadata: { mime: session.mime, type: session.type, userId: session.userId, groupId: session.groupId, fileSize: session.size }
+      metadata: { mime: session.mime, type: session.type, userId: session.userId, groupId: session.groupId, conversationId: session.conversationId || '', peerId: session.peerId || '', fileSize: session.size }
     });
     try {
       for (const chunkFile of chunks) {
@@ -1543,11 +1652,22 @@ app.post('/api/media/end', async (req, res) => {
       await Promise.all(chunks.map(f => chunksBucket.delete(f._id).catch(() => {})));
       await uploads.deleteOne({ _id: session._id });
       const msg = {
-        id: crypto.randomUUID(), groupId: session.groupId, userId: session.userId, user: String(req.body?.user || ''),
+        id: crypto.randomUUID(), groupId: session.groupId, conversationId: session.conversationId || '',
+        peerId: session.peerId || '', userId: session.userId, user: String(req.body?.user || ''),
         type: session.type, mime: session.mime, mediaId: String(stream.id), fileName: session.name, fileSize: session.size,
         time: String(req.body?.time || new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})),
         createdAt: new Date().toISOString(), deliveredTo: [], readBy: []
       };
+      if (session.conversationId) {
+        const result = await savePrivateMessage(msg);
+        if (result.inserted) {
+          io.to(`private:${session.conversationId}`).emit('private-message', result.saved);
+          for (const target of io.sockets.sockets.values()) {
+            if (String(target.userId || '') === String(session.peerId || '') && !target.rooms.has(`private:${session.conversationId}`)) target.emit('private-message', result.saved);
+          }
+        }
+        return res.json({ ok:true, message:result.saved });
+      }
       const saved = await broadcastSaved('media', msg);
       return res.json({ ok:true, message:saved });
     } catch (e) {
@@ -1707,6 +1827,37 @@ async function sendPushToOtherUsers(msg) {
   }
 }
 
+
+
+async function sendPrivatePush(peerUserId, msg) {
+  if (!MONGODB_URI || !peerUserId || !msg?.id) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({
+      userId: String(peerUserId)
+    }).toArray();
+    if (!docs.length) return;
+    const payload = JSON.stringify({
+      title: String(msg.user || 'Private chat'),
+      body: 'New message',
+      messageId: msg.id,
+      privateUserId: String(msg.userId || ''),
+      url: '/#chat'
+    });
+    await Promise.all(docs.map(async doc => {
+      try {
+        await webpush.sendNotification(doc.subscription, payload, { TTL:120, urgency:'high' });
+      } catch (error) {
+        if (error.statusCode === 404 || error.statusCode === 410) {
+          await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
+        }
+      }
+    }));
+  } catch (error) {
+    console.error('Private push failed:', error.message);
+  }
+}
 
 async function sendNativeRealtimeNotification(msg) {
   if (!MONGODB_URI || !msg || !msg.id || !msg.groupId) return;
@@ -2013,6 +2164,64 @@ io.on('connection', async (socket) => {
     if (typeof ack === 'function') ack({ ok: true });
   });
 
+
+  socket.on('join-private', async (data, ack) => {
+    const me = String(socket.userId || '').trim();
+    const peer = String(data?.peerId || '').trim();
+    const conversationId = privateConversationId(me, peer);
+    if (!me || !peer || !conversationId) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Private chat authorization failed.' });
+    }
+    if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
+      socket.leave(`private:${socket.privateConversationId}`);
+    }
+    socket.privateConversationId = conversationId;
+    socket.join(`private:${conversationId}`);
+    try {
+      const history = await loadPrivateMessages(conversationId);
+      socket.emit('private-history', history);
+      if (typeof ack === 'function') ack({ ok:true, conversationId });
+    } catch (error) {
+      socket.emit('private-history', []);
+      if (typeof ack === 'function') ack({ ok:false });
+    }
+  });
+
+  socket.on('leave-private', (data, ack) => {
+    const conversationId = String(data?.conversationId || socket.privateConversationId || '').trim();
+    if (conversationId) socket.leave(`private:${conversationId}`);
+    if (!conversationId || conversationId === socket.privateConversationId) socket.privateConversationId = '';
+    if (typeof ack === 'function') ack({ ok:true });
+  });
+
+  socket.on('private-message', async (msg, ack) => {
+    const sender = String(socket.userId || '').trim();
+    const peer = String(msg?.peerId || '').trim();
+    const conversationId = privateConversationId(sender, peer);
+    if (!sender || !peer || sender === peer || !conversationId || !msg?.id || !String(msg.message || '').trim()) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Private chat is not ready' });
+    }
+    msg.userId = sender;
+    msg.peerId = peer;
+    msg.conversationId = conversationId;
+    msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
+    msg.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
+    try {
+      const result = await savePrivateMessage(msg);
+      if (result.inserted) {
+        io.to(`private:${conversationId}`).emit('private-message', result.saved);
+        for (const target of io.sockets.sockets.values()) {
+          if (String(target.userId || '') === peer && !target.rooms.has(`private:${conversationId}`)) target.emit('private-message', result.saved);
+        }
+      }
+      if (result.inserted) await sendPrivatePush(peer, result.saved);
+      if (typeof ack === 'function') ack({ ok:true, message:result.saved });
+    } catch (error) {
+      console.error('Failed to save private message:', error.message);
+      if (typeof ack === 'function') ack({ ok:false, retryable:true, error:'Private message save temporarily failed' });
+    }
+  });
+
   socket.on('join-group', async (data, ack) => {
     const groupId = normalizeGroupId(data?.groupId);
     const suppliedPassword = String(data?.password || '');
@@ -2291,6 +2500,30 @@ io.on('connection', async (socket) => {
       console.error('Failed to delete multiple messages:', error.message);
       if (typeof ack === 'function') ack({ ok: false });
     }
+  });
+
+  socket.on('private-message-delivered', async (data) => {
+    const conversationId = String(data?.conversationId || '').trim();
+    const id = String(data?.id || '').trim();
+    const receiver = String(socket.userId || '').trim();
+    if (!conversationId || !id || !receiver) return;
+    try {
+      const collection = await getCollection();
+      if (collection) await collection.updateOne({ id, conversationId }, { $addToSet: { deliveredTo: receiver } });
+    } catch (_) {}
+    io.to(`private:${conversationId}`).emit('private-message-delivered', { id, conversationId, userId: receiver });
+  });
+
+  socket.on('private-message-read', async (data) => {
+    const conversationId = String(data?.conversationId || '').trim();
+    const id = String(data?.id || '').trim();
+    const reader = String(socket.userId || '').trim();
+    if (!conversationId || !id || !reader) return;
+    try {
+      const collection = await getCollection();
+      if (collection) await collection.updateOne({ id, conversationId }, { $addToSet: { readBy: reader } });
+    } catch (_) {}
+    io.to(`private:${conversationId}`).emit('private-message-read', { id, conversationId, userId: reader });
   });
 
   socket.on('typing', (data) => {

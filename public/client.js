@@ -36,6 +36,11 @@ let name = localStorage.getItem('wa_name') || '';
 let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
+let privateUsers = [];
+let activeChatType = 'group';
+let currentPrivateUser = null;
+let privateLastMessages = {};
+let privateUnreadCounts = {};
 let groupPasswordTarget = null;
 const unreadCounts = {};
 function getUnreadCount(groupId){ return Math.max(0, Number(unreadCounts[String(groupId)] || 0)); }
@@ -134,6 +139,10 @@ const passwordText = document.querySelector('#passwordText');
 const passwordError = document.querySelector('#passwordError');
 const toast = document.querySelector('#toast');
 const chatList = document.querySelector('#chatList');
+const privateChatModal = document.querySelector('#privateChatModal');
+const privateChatClose = document.querySelector('#privateChatClose');
+const privateChatSearch = document.querySelector('#privateChatSearch');
+const privateUserList = document.querySelector('#privateUserList');
 const listPreview = document.querySelector('#listPreview');
 const listTime = document.querySelector('#listTime');
 const onlineStatus = document.querySelector('#onlineStatus');
@@ -343,16 +352,20 @@ function showForegroundNotification(msg) {
   foregroundNotificationIds.add(id);
   if (foregroundNotificationIds.size > 200) foregroundNotificationIds = new Set([...foregroundNotificationIds].slice(-100));
   const group = groups.find(g => String(g.id) === String(msg.groupId));
-  const title = String(msg.groupName || group?.name || 'WhatsApp');
+  const privatePeer = msg.privateUserId ? privateUsers.find(u => String(u.userId) === String(msg.privateUserId)) : null;
+  const title = String(msg.privateUserId ? (msg.user || privatePeer?.name || 'Private chat') : (msg.groupName || group?.name || 'WhatsApp'));
   const n = new Notification(title, {
     body: 'New message',
     tag: `wa-${id}`,
     icon: '/icon.svg',
-    data: { groupId: msg.groupId || currentGroupId, messageId: id }
+    data: { groupId: msg.groupId || currentGroupId, privateUserId: msg.privateUserId || '', messageId: id }
   });
   n.onclick = () => {
     try { window.focus(); } catch (_) {}
-    if (msg.groupId && String(msg.groupId) !== String(currentGroupId)) {
+    if (msg.privateUserId) {
+      const target = privateUsers.find(u => String(u.userId) === String(msg.privateUserId));
+      if (target) openPrivateChat(target);
+    } else if (msg.groupId && String(msg.groupId) !== String(currentGroupId)) {
       const target = groups.find(g => String(g.id) === String(msg.groupId));
       if (target) joinGroup(target.id, true);
     }
@@ -447,15 +460,48 @@ passwordModal.addEventListener('click', e => { if (e.target === passwordModal) c
 
 async function sendMessage(text) {
   const message = String(text || '').trim();
-  if (!message || !currentGroupId) return;
+  if (!message) return;
+
+  if (activeChatType === 'private') {
+    const peer = currentPrivateUser;
+    if (!peer?.userId) return;
+    const msg = {
+      id:id(), userId, peerId:peer.userId, user:name, senderId:socketId,
+      message, time:now(), type:'text', conversationId:`private:${[String(userId),String(peer.userId)].sort().join(':')}`,
+      createdAt:new Date().toISOString(), deliveredTo:[], readBy:[]
+    };
+    textarea.value = ''; autoResize();
+    renderMessage(msg, 'outgoing');
+    privateLastMessages[peer.userId] = msg;
+    try {
+      const response = await fetch('/api/private-messages', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg), cache:'no-store', keepalive:true
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.error || 'save');
+      const saved = result.message || msg;
+      messages.set(saved.id, saved);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(saved.id)}"]`);
+      if (el) el.dataset.synced = '1';
+      updateTicks(saved);
+    } catch (_) {
+      const ack = await emitAck('private-message', msg, 12000, 1);
+      if (!ack?.ok) showToast('Private message is waiting for connection — please retry');
+      else {
+        messages.set(msg.id, ack.message || msg);
+        const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+        if (el) el.dataset.synced = '1';
+      }
+    }
+    return;
+  }
+
+  if (!currentGroupId) return;
   const msg = { id: id(), groupId: currentGroupId, senderId: socketId, userId, user: name, message, time: now(), type: 'text', createdAt: new Date().toISOString(), deliveredTo: [], readBy: [], ...(replyTo ? {replyTo} : {}) };
   textarea.value = '';
   clearReply();
   autoResize();
   updatePreview(message);
-
-  // Optimistic render: on mobile the message must appear immediately even if
-  // Socket.IO is reconnecting or the REST request takes a moment.
   renderMessage(msg, 'outgoing');
 
   try {
@@ -468,33 +514,24 @@ async function sendMessage(text) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) throw new Error(result.error || 'save');
-    // Replace/merge the optimistic copy with the server copy.
     const saved = result.message || msg;
     messages.set(saved.id, saved);
     const el = document.querySelector(`.message[data-id="${CSS.escape(saved.id)}"]`);
     if (el) el.dataset.synced = '1';
     updateTicks(saved);
   } catch (error) {
-    // Traditional Node/Express deployments can still deliver through Socket.IO.
     const ack = await emitAck('message', msg, 12000, 1);
     if (!ack || !ack.ok) {
       const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
-      if (el) {
-        el.classList.add('send-failed');
-        el.title = 'Send failed. Tap Send again when the connection returns.';
-      }
+      if (el) { el.classList.add('send-failed'); el.title = 'Send failed. Tap Send again when the connection returns.'; }
       showToast('Message is waiting for connection — please retry');
     } else {
       messages.set(msg.id, ack.message || msg);
       const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
-      if (el) {
-        el.dataset.synced = '1';
-        el.classList.remove('send-failed');
-      }
+      if (el) { el.dataset.synced = '1'; el.classList.remove('send-failed'); }
     }
   }
 }
-
 
 sendBtn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); sendMessage(textarea.value); });
 textarea.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); sendMessage(textarea.value); } });
@@ -945,7 +982,14 @@ async function uploadMedia(file) {
   const ui = makeUploadBubble(file, type);
   try {
     const uploadId = id();
-    const meta = { uploadId, groupId: currentGroupId, senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size, time: now(), createdAt: new Date().toISOString() };
+    const privateUpload = activeChatType === 'private' && currentPrivateUser?.userId;
+    const meta = {
+      uploadId, groupId: privateUpload ? '' : currentGroupId,
+      conversationId: privateUpload ? `private:${[String(userId),String(currentPrivateUser.userId)].sort().join(':')}` : '',
+      peerId: privateUpload ? currentPrivateUser.userId : '',
+      senderId: socketId, userId, user: name, type, mime: file.type, name: file.name, size: file.size,
+      time: now(), createdAt: new Date().toISOString()
+    };
     if (ui.status) ui.status.textContent = type === 'video' ? '📤 Uploading video… 0%' : type === 'image' ? '📤 Uploading photo… 0%' : type === 'audio' ? '📤 Uploading audio… 0%' : '📤 Uploading… 0%';
     const startResponse = await fetch('/api/media/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(meta), cache:'no-store' });
     const started = await startResponse.json();
@@ -978,7 +1022,12 @@ async function uploadMedia(file) {
     ui.el.classList.add('upload-done');
     setTimeout(() => ui.el.remove(), 2200);
     renderMessage(result.message, 'outgoing');
-    updatePreview(type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : type === 'audio' ? '🎤 Voice message' : '📎 Document');
+    if (privateUpload) {
+      privateLastMessages[currentPrivateUser.userId] = result.message;
+      renderGroupList();
+    } else {
+      updatePreview(type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : type === 'audio' ? '🎤 Voice message' : '📎 Document');
+    }
   } catch (error) {
     ui.el.classList.add('upload-error');
     if (ui.status) ui.status.textContent = 'Upload failed — tap attach and try again';
@@ -1095,6 +1144,36 @@ socket.on('admin-media-alert', item => showAdminMediaPopup(item, false));
 // Call recordings are saved silently; do not open a View popup when the call ends.
 // Admin can still open recordings manually from the Call Recordings list.
 
+function receivePrivateMessage(msg, options = {}) {
+  if (!msg || !msg.id || !msg.conversationId) return;
+  if (!options.history && messages.has(String(msg.id))) return;
+  const me = String(userId || '');
+  const peer = String(currentPrivateUser?.userId || '');
+  const isIncoming = String(msg.userId || '') !== me;
+  const expected = peer ? [me, peer].sort().join(':') : '';
+  if (!expected || String(msg.conversationId) !== `private:${expected}`) return;
+
+  if (isIncoming && !options.history && (activeChatType !== 'private' || !chatOpen)) {
+    privateUnreadCounts[peer] = Number(privateUnreadCounts[peer] || 0) + 1;
+    renderGroupList();
+  }
+  privateLastMessages[peer] = msg;
+  if (activeChatType !== 'private' || String(currentPrivateUser?.userId) !== peer) {
+    renderGroupList();
+    notifyIncomingMessage({ ...msg, groupId: '', privateUserId: msg.userId });
+    return;
+  }
+  renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
+  if (isIncoming) {
+    socket.emit('private-message-delivered', { id: msg.id, conversationId: msg.conversationId, userId: me });
+  }
+  if (msg.userId !== me && document.visibilityState === 'visible') {
+    socket.emit('private-message-read', { id: msg.id, conversationId: msg.conversationId, userId: me });
+  }
+  if (msg.createdAt) lastSyncAt = new Date(msg.createdAt).toISOString();
+  updatePreview(msg.message || 'New message');
+}
+
 function receiveMessage(msg, options = {}) {
   if (!msg || !msg.id) return;
   const msgGroupId = msg.groupId || 'main';
@@ -1130,10 +1209,43 @@ socket.on('history', history => {
   }
 });
 
-socket.on('connect', () => { if (userId) refreshAllUnreadCounts().catch(() => {}); });
+socket.on('connect', () => { if (userId) { refreshAllUnreadCounts().catch(() => {}); loadPrivateUsers().catch(() => {}); } });
 
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
+socket.on('private-history', history => {
+  if (!Array.isArray(history)) return;
+  history.forEach(msg => receivePrivateMessage(msg, {history:true}));
+  if (history.length) requestAnimationFrame(() => scrollToBottom());
+});
+socket.on('private-message', msg => {
+  if (!msg || !msg.conversationId) return;
+  const ids = String(msg.conversationId).replace(/^private:/,'').split(':');
+  const peerId = ids.find(id => String(id) !== String(userId || '')) || '';
+  const peer = privateUsers.find(u => String(u.userId) === String(peerId));
+  if (peer) {
+    privateLastMessages[peerId] = msg;
+    if (String(currentPrivateUser?.userId) !== String(peerId) || activeChatType !== 'private') {
+      privateUnreadCounts[peerId] = Number(privateUnreadCounts[peerId] || 0) + (String(msg.userId) === String(userId) ? 0 : 1);
+      renderGroupList();
+    }
+  }
+  receivePrivateMessage(msg);
+});
+socket.on('private-message-delivered', data => {
+  if (!data?.id) return;
+  const m = messages.get(String(data.id)); if (!m) return;
+  m.deliveredTo = Array.isArray(m.deliveredTo) ? m.deliveredTo : [];
+  if (!m.deliveredTo.map(String).includes(String(data.userId))) m.deliveredTo.push(String(data.userId));
+  updateTicks(m);
+});
+socket.on('private-message-read', data => {
+  if (!data?.id) return;
+  const m = messages.get(String(data.id)); if (!m) return;
+  m.readBy = Array.isArray(m.readBy) ? m.readBy : [];
+  if (!m.readBy.map(String).includes(String(data.userId))) m.readBy.push(String(data.userId));
+  updateTicks(m);
+});
 
 // A socket is joined to only one group at a time, so messages arriving in
 // other groups are delivered through this user-level event. This makes the
@@ -1341,9 +1453,40 @@ async function loadGroups() {
 function renderGroupList() {
   if (!chatList) return;
   chatList.innerHTML = '';
+
+  const privateSection = document.createElement('div');
+  privateSection.className = 'chat-section-label';
+  privateSection.textContent = 'Private chats';
+  chatList.appendChild(privateSection);
+
+  const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
+  visiblePrivate.forEach(user => {
+    const button = document.createElement('button');
+    button.className = 'chat-item' + (activeChatType === 'private' && currentPrivateUser?.userId === user.userId ? ' active' : '');
+    button.type = 'button';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar private-avatar'; avatar.textContent = firstCharacter(user.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    const last = privateLastMessages[user.userId];
+    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Private message';
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
+    summary.querySelector('strong').textContent = user.name;
+    summary.querySelector('.preview span').textContent = preview;
+    const badge = summary.querySelector('.group-unread-badge');
+    const unread = Number(privateUnreadCounts[user.userId] || 0);
+    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
+    button.append(avatar, summary);
+    button.addEventListener('click', () => openPrivateChat(user));
+    chatList.appendChild(button);
+  });
+
+  const groupSection = document.createElement('div');
+  groupSection.className = 'chat-section-label';
+  groupSection.textContent = 'Groups';
+  chatList.appendChild(groupSection);
+
   groups.forEach(group => {
     const button = document.createElement('button');
-    button.className = 'chat-item' + (group.id === currentGroupId ? ' active' : '');
+    button.className = 'chat-item' + (activeChatType === 'group' && group.id === currentGroupId ? ' active' : '');
     button.type = 'button';
     const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
     const summary = document.createElement('div'); summary.className = 'chat-summary';
@@ -1358,8 +1501,101 @@ function renderGroupList() {
   });
 }
 
+async function loadPrivateUsers() {
+  if (!userId) return;
+  try {
+    const r = await fetch(`/api/users?userId=${encodeURIComponent(userId)}`, { cache:'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (d.ok) privateUsers = Array.isArray(d.users) ? d.users : [];
+    renderGroupList();
+  } catch (_) {}
+}
+
+function openPrivatePicker() {
+  if (!privateChatModal) return;
+  privateChatSearch.value = '';
+  renderPrivateUserList('');
+  privateChatModal.classList.remove('hidden');
+  setTimeout(() => privateChatSearch.focus(), 40);
+}
+
+function renderPrivateUserList(filter='') {
+  if (!privateUserList) return;
+  const q = String(filter || '').trim().toLowerCase();
+  privateUserList.innerHTML = '';
+  const list = privateUsers.filter(u => String(u.userId) !== String(userId) && (!q || String(u.name).toLowerCase().includes(q) || String(u.userId).toLowerCase().includes(q)));
+  if (!list.length) {
+    privateUserList.innerHTML = '<div class="private-empty">No other users found.</div>';
+    return;
+  }
+  list.forEach(user => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'private-user-row';
+    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small></small></div>`;
+    row.querySelector('.avatar').textContent = firstCharacter(user.name);
+    row.querySelector('strong').textContent = user.name;
+    row.querySelector('small').textContent = user.userId;
+    row.addEventListener('click', () => {
+      privateChatModal.classList.add('hidden');
+      openPrivateChat(user);
+    });
+    privateUserList.appendChild(row);
+  });
+}
+
+async function openPrivateChat(user) {
+  if (!user || !user.userId || String(user.userId) === String(userId)) return;
+  activeChatType = 'private';
+  currentPrivateUser = user;
+  privateUnreadCounts[user.userId] = 0;
+  composer?.classList.remove('hidden');
+  app?.classList.remove('group-locked');
+  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+  messageArea.innerHTML = '';
+  updatePrivateHeader();
+  renderGroupList();
+  let privateSocketReady = false;
+  try {
+    if (socket.connected) {
+      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId }, result => {
+        privateSocketReady = !!result?.ok;
+        resolve();
+      }));
+    }
+  } catch (_) {}
+  if (!privateSocketReady) {
+    try {
+      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
+    } catch (_) {}
+  }
+  openChat();
+  requestAnimationFrame(() => scrollToBottom());
+}
+
+function updatePrivateHeader() {
+  if (!currentPrivateUser) return;
+  groupName = currentPrivateUser.name;
+  groupNameHeader.textContent = currentPrivateUser.name;
+  groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
+  if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
+  onlineStatus.textContent = 'private chat';
+  onlineStatus.className = 'offline';
+  document.querySelector('#audioCallBtn')?.classList.add('hidden');
+  document.querySelector('#videoCallBtn')?.classList.add('hidden');
+}
+
+function updateGroupHeader() {
+  updateGroupNameUI();
+}
+
+
 async function openGroup(group) {
   if (!group) return;
+  activeChatType = 'group';
+  currentPrivateUser = null;
 
   // Do not ask repeatedly inside the same tab. Once this tab has successfully
   // verified a group's password, switching away and back can reuse that
@@ -1427,6 +1663,10 @@ async function verifyAndOpenGroup() {
 }
 
 async function joinGroup(groupId, openAfter=true) {
+  activeChatType = 'group';
+  currentPrivateUser = null;
+  document.querySelector('#audioCallBtn')?.classList.remove('hidden');
+  document.querySelector('#videoCallBtn')?.classList.remove('hidden');
   const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
   currentGroupId = groupId || 'main';
   // Optimistically clear while opening, then reconcile against the persisted
@@ -1582,6 +1822,7 @@ socket.on('connect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
+  loadPrivateUsers().catch(() => {});
   // Reconcile all group badges immediately on every login/reconnect. Counts are
   // user-level, so the same User ID sees the same seen/unseen state on all devices.
   if (userId) refreshAllUnreadCounts().catch(() => {});
@@ -1646,8 +1887,14 @@ function openChat(push=true){ chatOpen=true; app.classList.add('chat-open'); if(
 function closeChat(){
   chatOpen=false;
   app.classList.remove('chat-open');
-  // Leaving a group locks it again. The next entry must verify the group password.
-  if (currentGroupId) {
+  if (activeChatType === 'private') {
+    if (socket.connected && currentPrivateUser?.userId) socket.emit('leave-private', {
+      conversationId:`private:${[String(userId),String(currentPrivateUser.userId)].sort().join(':')}`
+    });
+    currentPrivateUser = null;
+    activeChatType = 'group';
+    renderGroupList();
+  } else if (currentGroupId) {
     const leavingGroupId = currentGroupId;
     if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
@@ -1662,7 +1909,14 @@ document.querySelector('#backBtn').addEventListener('click', closeChat);
 window.addEventListener('popstate', () => {
   chatOpen=false;
   app.classList.remove('chat-open');
-  if (currentGroupId) {
+  if (activeChatType === 'private') {
+    if (socket.connected && currentPrivateUser?.userId) socket.emit('leave-private', {
+      conversationId:`private:${[String(userId),String(currentPrivateUser.userId)].sort().join(':')}`
+    });
+    currentPrivateUser = null;
+    activeChatType = 'group';
+    renderGroupList();
+  } else if (currentGroupId) {
     const leavingGroupId = currentGroupId;
     if (socket.connected) socket.emit('leave-group', { groupId: leavingGroupId });
     currentGroupId = '';
@@ -1672,7 +1926,12 @@ window.addEventListener('popstate', () => {
     renderGroupList();
   }
 });
-document.querySelector('#newChatBtn').addEventListener('click', () => showToast('Use + New group to create a group'));
+document.querySelector('#newChatBtn').addEventListener('click', () => {
+  loadPrivateUsers().finally(() => openPrivatePicker());
+});
+privateChatClose?.addEventListener('click', () => privateChatModal?.classList.add('hidden'));
+privateChatModal?.addEventListener('click', e => { if (e.target === privateChatModal) privateChatModal.classList.add('hidden'); });
+privateChatSearch?.addEventListener('input', () => renderPrivateUserList(privateChatSearch.value));
 newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 async function requestAdminThen(action) {
@@ -2299,6 +2558,7 @@ function finishAccountLogin() {
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
+  loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
 }
