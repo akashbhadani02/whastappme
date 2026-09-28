@@ -359,6 +359,27 @@ app.put('/api/admin/users/:id', async (req, res) => {
   } catch(e){ res.status(500).json({ok:false,error:'Could not update user'}); }
 });
 
+app.post('/api/users/login', async (req,res)=>{
+  try {
+    const name=String(req.body?.name||'').trim().slice(0,60);
+    const password=String(req.body?.password||'');
+    if(!name || !password) return res.status(400).json({ok:false,error:'Name and password are required'});
+    const profiles=await getUserProfilesCollection();
+    let candidates=[];
+    if(profiles){
+      candidates=await profiles.find({adminCreated:true,enabled:{$ne:false},deleted:{$ne:true},deletedAt:{$exists:false}}).project({_id:1,name:1,userPassword:1}).limit(5000).toArray();
+    } else {
+      candidates=[...fallbackUsers.values()].filter(u=>u.adminCreated===true&&u.enabled!==false&&u.deleted!==true&&!u.deletedAt);
+    }
+    const matches=candidates.filter(u=>String(u.name||'').trim().toLowerCase()===name.toLowerCase());
+    if(matches.length===0) return res.status(404).json({ok:false,error:'Name not found. Ask the admin to create your account.'});
+    if(matches.length>1) return res.status(409).json({ok:false,error:'More than one account has this name. Ask the admin to use a unique name.'});
+    const u=matches[0];
+    if(String(u.userPassword||'')!==password) return res.status(401).json({ok:false,error:'Wrong password'});
+    res.json({ok:true,user:{id:String(u._id||u.id),name:String(u.name||name)}});
+  } catch(e){ console.error('Login failed:',e.message); res.status(500).json({ok:false,error:'Could not login right now'}); }
+});
+
 app.post('/api/users/resolve-login', async (req,res)=>{
   try {
     const value=String(req.body?.value||'').trim();

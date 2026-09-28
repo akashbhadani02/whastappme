@@ -2451,17 +2451,31 @@ async function finishAccountLogin() {
   const password = String(accountPasswordInput?.value || '');
   if (!entered) { accountError.textContent = 'Enter your name'; return; }
   if (!password) { accountError.textContent = 'Enter your password'; return; }
-  if (!socket.connected) { accountError.textContent = 'Connecting to chat server…'; return; }
-  accountError.textContent = '';
+  accountError.textContent = 'Checking login…';
   try {
-    const rr = await fetch('/api/users/resolve-login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:entered}),cache:'no-store'});
+    // Authenticate by NAME + PASSWORD in one server-side operation. The generated
+    // User ID is only used internally after authentication; users never need to
+    // remember or type it.
+    const rr = await fetch('/api/users/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:entered,password}),cache:'no-store'});
     const resolved = await rr.json().catch(()=>({}));
-    if (!rr.ok || !resolved.ok || !resolved.user?.id) { accountError.textContent = resolved.error || 'Account not found. Ask the admin to create your account.'; return; }
+    if (!rr.ok || !resolved.ok || !resolved.user?.id) { accountError.textContent = resolved.error || 'Login failed'; return; }
     const resolvedId = String(resolved.user.id).trim().toUpperCase();
-    const vr = await fetch('/api/users/verify-password', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:resolvedId,password}),cache:'no-store'});
-    const vd = await vr.json().catch(()=>({}));
-    if (!vr.ok || !vd.ok) { accountError.textContent = vd.error || 'Wrong password'; return; }
-    const reg = await new Promise(resolve => socket.emit('register-user', { userId: resolvedId, name:String(resolved.user.name||''), deviceId }, resolve));
+
+    // Socket.IO can still be connecting on the very first page load. Wait for
+    // the existing socket instead of rejecting a valid login prematurely.
+    if (!socket.connected) {
+      accountError.textContent = 'Connecting…';
+      await new Promise((resolve,reject)=>{
+        const started=Date.now();
+        const check=()=>{
+          if(socket.connected) return resolve();
+          if(Date.now()-started>10000) return reject(new Error('Chat server connection timed out.'));
+          setTimeout(check,100);
+        };
+        check();
+      });
+    }
+    const reg = await new Promise(resolve => socket.emit('register-user', { userId: resolvedId, name:String(resolved.user.name||entered), deviceId }, resolve));
     if (!reg?.ok) { localStorage.removeItem('wa_user_id'); localStorage.removeItem('wa_name'); userId=''; name=''; accountError.textContent = reg?.error || 'Could not open your account'; return; }
     userId = String(reg.userId || resolvedId).trim().toUpperCase();
     name = String(reg.name || resolved.user.name || userId).trim();
