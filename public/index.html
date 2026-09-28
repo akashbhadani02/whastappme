@@ -33,7 +33,7 @@
       <div class="app-menu hidden" id="appMenu">
         <button id="installAppBtn" type="button">📲 Install WhatsApp</button>
         <button id="adminGroupsBtn" type="button">🔐 Passwords / Groups</button>
-        <button id="adminUsersBtn" type="button">👤 Admin Users</button>
+        <button id="adminUsersBtn" type="button">👤 Admin Panel</button>
         <button id="logoutBtn" type="button">🚪 Logout</button>
       </div>
       <div class="search-wrap">
@@ -132,6 +132,18 @@
       <div class="password-error" id="accountError"></div>
       <button class="primary-btn" id="accountContinueBtn">Login</button>
       <div id="accountGenerated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="adminVerifyModal" role="dialog" aria-modal="true" aria-labelledby="adminVerifyTitle">
+    <div class="modal-card" style="max-width:420px">
+      <button class="modal-close" id="adminVerifyClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔐</div>
+      <h3 id="adminVerifyTitle">Admin Login</h3>
+      <p>Enter the Admin password to open the Admin Panel.</p>
+      <input id="adminVerifyPassword" type="password" autocomplete="current-password" placeholder="Admin password">
+      <div class="password-error" id="adminVerifyError"></div>
+      <button class="primary-btn" id="adminVerifyBtn" type="button">Open Admin Panel</button>
     </div>
   </div>
 

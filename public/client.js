@@ -2527,6 +2527,32 @@ accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') logi
 accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') loginAccount(); });
 
 
+const adminVerifyModal = document.querySelector('#adminVerifyModal');
+const adminVerifyClose = document.querySelector('#adminVerifyClose');
+const adminVerifyPassword = document.querySelector('#adminVerifyPassword');
+const adminVerifyBtn = document.querySelector('#adminVerifyBtn');
+const adminVerifyError = document.querySelector('#adminVerifyError');
+let adminPanelVerified = false;
+
+async function verifyAndOpenAdminPanel() {
+  const password = String(adminVerifyPassword?.value || '');
+  if (!password) { if (adminVerifyError) adminVerifyError.textContent = 'Enter the Admin password.'; return; }
+  if (adminVerifyBtn) adminVerifyBtn.disabled = true;
+  try {
+    const r = await fetch('/api/admin/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password}) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Invalid admin password.');
+    adminPanelVerified = true;
+    adminVerifyModal?.classList.add('hidden');
+    adminUsersModal?.classList.remove('hidden');
+    if (adminVerifyPassword) adminVerifyPassword.value = '';
+    if (adminVerifyError) adminVerifyError.textContent = '';
+    loadAdminUsers();
+  } catch (e) {
+    if (adminVerifyError) adminVerifyError.textContent = e.message || 'Admin verification failed.';
+  } finally { if (adminVerifyBtn) adminVerifyBtn.disabled = false; }
+}
+
 const adminUsersBtn = document.querySelector('#adminUsersBtn');
 const adminUsersModal = document.querySelector('#adminUsersModal');
 const adminUsersClose = document.querySelector('#adminUsersClose');
@@ -2572,7 +2598,7 @@ function renderAdminUsers(list) {
 }
 
 async function loadAdminUsers() {
-  if (!adminUsersList) return;
+  if (!adminUsersList || !adminPanelVerified) return;
   adminUsersError.textContent = 'Loading…';
   try {
     const r = await fetch(`/api/admin/users?password=${encodeURIComponent(PASSWORD)}`, {cache:'no-store'});
@@ -2587,12 +2613,17 @@ async function loadAdminUsers() {
 
 adminUsersBtn?.addEventListener('click', () => {
   appMenu?.classList.add('hidden');
-  adminUsersModal?.classList.remove('hidden');
-  loadAdminUsers();
+  if (adminPanelVerified) { adminUsersModal?.classList.remove('hidden'); loadAdminUsers(); }
+  else { adminVerifyError.textContent = ''; adminVerifyPassword.value = ''; adminVerifyModal?.classList.remove('hidden'); setTimeout(() => adminVerifyPassword?.focus(), 50); }
 });
+adminVerifyBtn?.addEventListener('click', verifyAndOpenAdminPanel);
+adminVerifyPassword?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenAdminPanel(); });
+adminVerifyClose?.addEventListener('click', () => adminVerifyModal?.classList.add('hidden'));
+adminVerifyModal?.addEventListener('click', e => { if (e.target === adminVerifyModal) adminVerifyModal.classList.add('hidden'); });
 adminUsersClose?.addEventListener('click', () => adminUsersModal?.classList.add('hidden'));
 adminUsersModal?.addEventListener('click', e => { if (e.target === adminUsersModal) adminUsersModal.classList.add('hidden'); });
 adminUserCreateBtn?.addEventListener('click', async () => {
+  if (!adminPanelVerified) { adminUsersModal?.classList.add('hidden'); return; }
   const uname = String(adminUserNameInput?.value || '').trim();
   const upass = String(adminUserPasswordInput?.value || '').trim();
   if (!uname || !upass) { adminUsersError.textContent = 'Enter user name and password.'; return; }

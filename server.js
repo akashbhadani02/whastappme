@@ -302,6 +302,16 @@ app.post('/api/chat/open', async (req, res) => {
   }
 });
 
+app.post('/api/admin/verify', async (req, res) => {
+  try {
+    const password = String(req.body?.password || '');
+    if (!password || password !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: 'Invalid admin password.' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Admin verification failed.' });
+  }
+});
+
 app.post('/api/admin/users', async (req, res) => {
   try {
     if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false, error: 'Unauthorized' });
