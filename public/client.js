@@ -2469,6 +2469,7 @@ async function finishAccountLogin() {
     localStorage.setItem('wa_name', name);
     socket.emit('presence-login', { userId, deviceId });
     accountModal.classList.add('hidden');
+    appMenu?.classList.add('hidden');
     updateMyNameUI();
     refreshContacts();
     showToast('Logged in as ' + name);
@@ -2624,7 +2625,7 @@ groupNameClose.addEventListener('click', closeGroupNameModal);
 groupNameModal.addEventListener('click', e => { if (e.target === groupNameModal) closeGroupNameModal(); });
 
 meAvatar.addEventListener('click', openUserNameModal);
-meAccount?.addEventListener('click', (e) => { if (e.target === meAvatar) return; openUserNameModal(); });
+meAccount?.addEventListener('click', (e) => { if (e.target === meAvatar) return; if (userId) openUserNameModal(); });
 meAvatar.setAttribute('title', 'Change your name');
 meAvatar.setAttribute('aria-label', 'Change your name');
 meAvatar.style.cursor = 'pointer';
