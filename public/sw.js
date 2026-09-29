@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v13-live-notification';
+const CACHE = 'whatsapp-pwa-v14-webpush-reliable';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -13,19 +13,6 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });
 
-async function chatIsOpenAndVisible() {
-  const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  return list.some((client) => {
-    try {
-      const visible = client.visibilityState === 'visible' || client.focused === true;
-      const url = new URL(client.url);
-      return visible && url.hash === '#chat';
-    } catch (_) {
-      return false;
-    }
-  });
-}
-
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -35,9 +22,6 @@ self.addEventListener('push', (event) => {
   }
 
   event.waitUntil((async () => {
-    // If the user is already looking at the chat, do not interrupt them.
-    if (await chatIsOpenAndVisible()) return;
-
     const messageId = data.messageId || '';
     const groupName = String(data.groupName || data.title || 'WhatsApp').trim() || 'WhatsApp';
     const options = {

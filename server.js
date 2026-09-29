@@ -53,11 +53,12 @@ function removeSocketFromCalls(socket) {
 function getVapidKeys() {
   // Prefer an explicit VAPID private key. If it is not configured, derive a stable
   // server-only key from MONGODB_URI so deployments do not need another secret.
-  const privateKey = process.env.VAPID_PRIVATE_KEY || crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid').digest().toString('base64url');
+  const privateKeyBytes = process.env.VAPID_PRIVATE_KEY ? Buffer.from(String(process.env.VAPID_PRIVATE_KEY).replace(/-/g, '+').replace(/_/g, '/'), 'base64') : crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key').digest();
+  if (privateKeyBytes.length !== 32) throw new Error('VAPID private key must decode to 32 bytes');
   const ecdh = crypto.createECDH('prime256v1');
-  ecdh.setPrivateKey(Buffer.from(privateKey, 'base64url'));
+  ecdh.setPrivateKey(privateKeyBytes);
   const publicKey = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
-  return { privateKey, publicKey };
+  return { privateKey: privateKeyBytes.toString('base64url'), publicKey };
 }
 
 const vapid = getVapidKeys();
@@ -194,20 +195,29 @@ app.get('/api/push/public-key', (req, res) => {
 app.post('/api/push/subscribe', async (req, res) => {
   try {
     const sub = req.body && req.body.subscription;
-    const userId = req.body && String(req.body.userId || '');
-    if (!sub || !sub.endpoint || !userId) return res.status(400).json({ ok: false });
+    const userId = String(req.body?.userId || '').trim();
+    if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth || !userId) return res.status(400).json({ ok:false, error:'Invalid push subscription' });
     const db = await getDb();
-    if (!db) return res.status(503).json({ ok: false });
+    if (!db) return res.status(503).json({ ok:false, error:'MongoDB is required for Web Push' });
     await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).updateOne(
       { endpoint: sub.endpoint },
-      { $set: { userId, subscription: sub, updatedAt: new Date() } },
-      { upsert: true }
+      { $set:{ userId, endpoint:sub.endpoint, subscription:sub, updatedAt:new Date() }, $setOnInsert:{ createdAt:new Date() } },
+      { upsert:true }
     );
-    res.json({ ok: true });
+    res.json({ ok:true });
   } catch (error) {
-    console.error('Push subscription save failed:', error.message);
-    res.status(500).json({ ok: false });
+    console.error('Push subscription save failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Push subscription save failed' });
   }
+});
+
+app.get('/api/push/status', async (req,res) => {
+  try {
+    const userId=String(req.query?.userId||'').trim(); const db=await getDb();
+    if(!userId||!db) return res.json({ok:true,configured:Boolean(db),subscriptions:0});
+    const subscriptions=await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).countDocuments({userId});
+    res.json({ok:true,configured:true,subscriptions,vapid:Boolean(vapid.publicKey)});
+  } catch (_) { res.status(500).json({ok:false,subscriptions:0}); }
 });
 
 app.post('/api/notifications/access', async (req, res) => {
@@ -2345,7 +2355,7 @@ async function sendPushToOtherUsers(msg) {
     });
     await Promise.all(docs.map(async (doc) => {
       try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL: 120, urgency: 'high' });
+        await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
       } catch (error) {
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
@@ -2377,7 +2387,7 @@ async function sendPrivatePush(peerUserId, msg) {
     });
     await Promise.all(docs.map(async doc => {
       try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL:120, urgency:'high' });
+        await webpush.sendNotification(doc.subscription, payload, { TTL:300, urgency:'high' });
       } catch (error) {
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });

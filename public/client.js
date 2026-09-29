@@ -334,6 +334,7 @@ async function setupWebPush() {
   if (Notification.permission !== 'granted') return false;
   try {
     const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await registration.update().catch(() => {});
     await navigator.serviceWorker.ready;
     const response = await fetch('/api/push/public-key', { cache: 'no-store' });
     const data = await response.json();
@@ -352,7 +353,9 @@ async function setupWebPush() {
     });
     if (!saveResponse.ok) return false;
     const saveData = await saveResponse.json().catch(() => ({}));
-    return saveData.ok === true;
+    if (saveData.ok !== true) return false;
+    const status = await fetch(`/api/push/status?userId=${encodeURIComponent(userId)}`, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    return Boolean(status?.ok && Number(status?.subscriptions || 0) > 0);
   } catch (error) {
     console.warn('Web push setup failed:', error);
     return false;
@@ -1856,6 +1859,7 @@ async function joinGroup(groupId, openAfter=true) {
           body: JSON.stringify({ userId, groupId: currentGroupId })
         }).catch(() => {});
       }
+      if (Notification.permission === 'granted') setupWebPush().catch(() => {});
       socket.emit('presence-login', { userId, deviceId }, () => {
         socket.emit('presence-ping', { groupId: currentGroupId });
         resolve();
