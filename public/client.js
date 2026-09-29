@@ -329,6 +329,7 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 async function setupWebPush() {
+  if (!userId) return false;
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
   if (Notification.permission !== 'granted') return false;
   try {
@@ -1284,7 +1285,13 @@ socket.on('history', history => {
   }
 });
 
-socket.on('connect', () => { if (userId) { refreshAllUnreadCounts().catch(() => {}); loadPrivateUsers().catch(() => {}); } });
+socket.on('connect', () => {
+  if (userId) {
+    refreshAllUnreadCounts().catch(() => {});
+    loadPrivateUsers().catch(() => {});
+    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
+  }
+});
 
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
@@ -1979,10 +1986,14 @@ socket.on('connect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
+  setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
   // Reconcile all group badges immediately on every login/reconnect. Counts are
   // user-level, so the same User ID sees the same seen/unseen state on all devices.
-  if (userId) refreshAllUnreadCounts().catch(() => {});
+  if (userId) {
+    refreshAllUnreadCounts().catch(() => {});
+    setupWebPush().catch(() => {});
+  }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;
@@ -2130,6 +2141,7 @@ async function joinPrivateUserAndOpen() {
     syncAndroidNotificationIdentity();
     closePrivateUserJoinModal();
     socket.emit('register-user', { userId, name, deviceId });
+    setupWebPush().catch(() => {});
     socket.emit('presence-login', { userId, deviceId });
     const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
     privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
@@ -2962,6 +2974,7 @@ function finishAccountLogin() {
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
+  setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
