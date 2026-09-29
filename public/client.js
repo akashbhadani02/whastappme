@@ -26,8 +26,10 @@ let userId = localStorage.getItem('wa_user_id') || '';
 function syncAndroidNotificationIdentity() {
   try {
     if (window.AndroidBridge) {
-      if (userId) window.AndroidBridge.setUserId(String(userId));
+      // Save the URL first so the native background listener has everything it
+      // needs before it starts. This is intentionally Firebase-free.
       window.AndroidBridge.setAppUrl(window.location.origin);
+      if (userId) window.AndroidBridge.setUserId(String(userId));
     }
   } catch (_) {}
 }

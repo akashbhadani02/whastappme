@@ -31,8 +31,8 @@ import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v5";
-    private static final String FG_CHANNEL_ID = "wassup_background_v5";
+    private static final String CHANNEL_ID = "wassup_messages_v6";
+    private static final String FG_CHANNEL_ID = "wassup_background_v6";
     private static final int SERVICE_ID = 7001;
 
     private ScheduledExecutorService executor;
@@ -138,6 +138,8 @@ public class NotificationPollService extends Service {
             options.reconnectionDelayMax = 10000;
             options.timeout = 10000;
             options.transports = new String[]{"websocket", "polling"};
+            options.upgrade = true;
+            options.forceNew = false;
 
             realtimeSocket = IO.socket(base, options);
 
