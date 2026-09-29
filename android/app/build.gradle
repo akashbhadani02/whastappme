@@ -1,7 +1,7 @@
 plugins { id 'com.android.application' }
 
 android { namespace 'com.wassup.whatsapp'; compileSdk 35
-    defaultConfig { applicationId 'com.wassup.whatsapp'; minSdk 23; targetSdk 35; versionCode 2; versionName '1.1'; buildConfigField 'String', 'APP_URL', '"' + (project.findProperty('APP_URL') ?: 'https://YOUR-VERCEL-APP.vercel.app/') + '"' }
+    defaultConfig { applicationId 'com.wassup.whatsapp'; minSdk 23; targetSdk 35; versionCode 3; versionName '1.2'; buildConfigField 'String', 'APP_URL', '"' + (project.findProperty('APP_URL') ?: 'https://YOUR-VERCEL-APP.vercel.app/') + '"' }
 }
 
 dependencies {
