@@ -2083,14 +2083,31 @@ socket.on('connect', () => {
 const presencePingTimer = setInterval(() => {
   if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
 }, 3000);
+const pushResyncTimer = setInterval(() => {
+  if (userId && 'Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
+}, 30000);
+
+async function rejoinCurrentGroupAfterReconnect() {
+  if (!socket.connected || !currentGroupId || !userId) return;
+  const groupId = String(currentGroupId);
+  const password = groupId === 'main' ? '' : (getVerifiedGroupPassword(groupId) || '');
+  socket.emit('join-group', { groupId, password }, (result) => {
+    if (!result?.ok) return;
+    socket.emit('presence-login', { userId, deviceId }, () => {
+      socket.emit('presence-ping', { groupId });
+    });
+    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
+  });
+}
 
 socket.on('disconnect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
+  // Socket.IO will reconnect automatically. Do not clear currentGroupId or
+  // notification authorization: both are still valid for this authenticated user.
 });
 socket.on('reconnect', () => {
-  otherGroupMemberOnline = false;
-  setOnlineStatus('offline');
+  rejoinCurrentGroupAfterReconnect().catch(() => {});
 });
 socket.on('connect_error', () => {
   otherGroupMemberOnline = false;
@@ -2100,18 +2117,21 @@ socket.on('connect_error', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     markVisibleMessagesRead();
-    if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+    rejoinCurrentGroupAfterReconnect().catch(() => {});
+    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
   }
 });
 window.addEventListener('focus', () => {
-  if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+  rejoinCurrentGroupAfterReconnect().catch(() => {});
 });
 window.addEventListener('online', () => {
-  if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+  rejoinCurrentGroupAfterReconnect().catch(() => {});
+  if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
 });
-window.addEventListener('pagehide', () => {
-  if (socket.connected && currentGroupId) socket.emit('leave-group', { groupId: currentGroupId });
-});
+// Do not emit leave-group on pagehide. Mobile browsers fire pagehide during
+// bfcache/background transitions; leaving the group there makes a reconnecting
+// user appear offline and breaks call/notification delivery. Socket.IO disconnect
+// and the server heartbeat are responsible for real disconnects.
 messageArea.addEventListener('scroll', markVisibleMessagesRead);
 window.addEventListener('focus', markVisibleMessagesRead);
 

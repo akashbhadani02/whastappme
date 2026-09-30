@@ -2923,6 +2923,21 @@ io.on('connection', async (socket) => {
     // the speed of the messages query.
     if (typeof ack === 'function') ack({ ok: true, groupId });
     emitGroupPresence(groupId);
+    // If a call was already active while this device was reconnecting, re-send
+    // the invitation after the protected group join succeeds. Otherwise a
+    // disconnect/reconnect window could permanently miss the incoming call.
+    const activeGroupCall = [...activeCalls.values()].find(c => normalizeGroupId(c.groupId) === groupId);
+    if (activeGroupCall && activeGroupCall.startedBy !== socket.id) {
+      socket.emit('incoming-call', {
+        callId: activeGroupCall.callId,
+        groupId,
+        type: activeGroupCall.type,
+        fromSocketId: activeGroupCall.startedBy,
+        fromUserId: activeGroupCall.startedByUserId,
+        fromName: activeGroupCall.startedByName,
+        groupName: String(data?.groupName || '')
+      });
+    }
     loadMessages('', groupId).then(history => socket.emit('history', history)).catch(() => socket.emit('history', []));
   });
 
