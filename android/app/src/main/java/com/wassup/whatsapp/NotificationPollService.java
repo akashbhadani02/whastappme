@@ -31,8 +31,8 @@ import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v6";
-    private static final String FG_CHANNEL_ID = "wassup_background_v6";
+    private static final String CHANNEL_ID = "wassup_messages_v7";
+    private static final String FG_CHANNEL_ID = "wassup_background_v7";
     private static final int SERVICE_ID = 7001;
 
     private ScheduledExecutorService executor;
@@ -160,6 +160,7 @@ public class NotificationPollService extends Service {
                 String id = data.optString("id", "");
                 String groupName = data.optString("groupName", "WhatsApp");
                 String groupId = data.optString("groupId", "");
+                String privateUserId = data.optString("privateUserId", "");
                 String body = "New message";
                 if (id.isEmpty()) return;
 
@@ -305,6 +306,9 @@ public class NotificationPollService extends Service {
         open.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (groupId != null && !groupId.isEmpty()) {
             open.putExtra("groupId", groupId);
+        }
+        if (privateUserId != null && !privateUserId.isEmpty()) {
+            open.putExtra("privateUserId", privateUserId);
         }
 
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;

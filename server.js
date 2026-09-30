@@ -2442,6 +2442,31 @@ async function sendPushToOtherUsers(msg) {
 
 
 
+async function sendNativePrivateRealtimeNotification(peerUserId, msg) {
+  const peer = String(peerUserId || '').trim();
+  if (!peer || !msg?.id) return;
+  try {
+    const title = String(msg.user || 'Private chat').trim() || 'Private chat';
+    const payload = {
+      id: String(msg.id),
+      groupId: '',
+      groupName: title,
+      type: 'private-message',
+      privateUserId: String(msg.userId || ''),
+      body: 'New message'
+    };
+
+    // Private chats do not use group notification_access. Route the native
+    // alert directly to every active Android socket belonging to the recipient.
+    for (const target of io.sockets.sockets.values()) {
+      const uid = String(target.userId || '').trim();
+      if (uid === peer) target.emit('native-notification', payload);
+    }
+  } catch (error) {
+    console.error('Native private notification failed:', error.message);
+  }
+}
+
 async function sendPrivatePush(peerUserId, msg) {
   if (!MONGODB_URI || !peerUserId || !msg?.id) return;
   try {
@@ -2869,7 +2894,12 @@ io.on('connection', async (socket) => {
           if (String(target.userId || '') === peer && !target.rooms.has(`private:${conversationId}`)) target.emit('private-message', result.saved);
         }
       }
-      if (result.inserted) await sendPrivatePush(peer, result.saved);
+      if (result.inserted) {
+        await Promise.allSettled([
+          sendNativePrivateRealtimeNotification(peer, result.saved),
+          sendPrivatePush(peer, result.saved)
+        ]);
+      }
       if (typeof ack === 'function') ack({ ok:true, message:result.saved });
     } catch (error) {
       console.error('Failed to save private message:', error.message);
