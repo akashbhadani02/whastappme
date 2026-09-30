@@ -1493,6 +1493,7 @@ socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
   groupName = String(data.name);
   localStorage.setItem('wa_group_name', groupName);
+  startRestPresence();
   updateGroupNameUI();
 });
 
@@ -1525,7 +1526,8 @@ socket.on('group-updated', data => {
   if (!data || !data.id) return;
   const group = groups.find(g => g.id === data.id);
   if (group && data.name) { group.name = data.name; renderGroupList(); }
-  if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
+  if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName);
+  startRestPresence(); updateGroupNameUI(); }
 });
 
 async function loadGroups() {
@@ -1550,6 +1552,7 @@ async function loadGroups() {
     if (selected) {
       groupName = selected.name;
       localStorage.setItem('wa_group_name', groupName);
+  startRestPresence();
       updateGroupNameUI();
     } else {
       groupName = '';
@@ -1822,6 +1825,7 @@ async function joinGroup(groupId, openAfter=true) {
   composer?.classList.remove('hidden');
   localStorage.setItem('wa_group_id', currentGroupId);
   localStorage.setItem('wa_group_name', groupName);
+  startRestPresence();
   messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
   messageArea.innerHTML = '';
   updateGroupNameUI(); renderGroupList();
@@ -1849,6 +1853,7 @@ async function joinGroup(groupId, openAfter=true) {
   // Never block opening the chat on history synchronization.
   // The chat becomes usable immediately; history is reconciled in the background.
   syncMessages().catch(() => {});
+  fetch(`/api/calls/active?userId=${encodeURIComponent(userId)}&groupId=${encodeURIComponent(currentGroupId)}`, {cache:'no-store'}).then(r=>r.json()).then(x=>{ if(x?.ok && x.call && !isActive()) incoming(x.call); }).catch(()=>{});
   if (openAfter) openChat();
 }
 
@@ -1942,6 +1947,19 @@ onlineStatus?.addEventListener('click', (event) => {
   // Fallback for mobile WebViews that report touch as a normal click.
   if (window.matchMedia?.('(max-width: 760px)').matches) showCurrentLastSeen(event);
 });
+
+
+let presenceTimer = null;
+async function syncRestPresence() {
+  if (!userId || !currentGroupId || activeChatType !== 'group') return;
+  try {
+    await fetch('/api/presence/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,groupId:currentGroupId,deviceId})});
+    const r=await fetch(`/api/presence/status?userId=${encodeURIComponent(userId)}&groupId=${encodeURIComponent(currentGroupId)}`,{cache:'no-store'});
+    const x=await r.json(); if(x?.ok) setGroupPresence(!!x.online,currentGroupId,x.lastSeen||{},null,null);
+  } catch(_) {}
+}
+function startRestPresence(){ clearInterval(presenceTimer); syncRestPresence(); presenceTimer=setInterval(syncRestPresence,5000); }
+startRestPresence();
 
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
@@ -3061,6 +3079,7 @@ function saveGroupName() {
   if (nextName === groupName) { closeGroupNameModal(); return; }
   groupName = nextName;
   localStorage.setItem('wa_group_name', groupName);
+  startRestPresence();
   updateGroupNameUI();
   const localGroup = groups.find(g => g.id === currentGroupId); if (localGroup) localGroup.name = groupName; renderGroupList();
   socket.emit('rename-group', { groupId: currentGroupId, name: groupName }, result => {
@@ -3218,9 +3237,9 @@ updateAdvancedTools();
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia({audio:true,video:type==='video'?{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}}:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('Call Ended'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=type==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=type==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const gid=String(d.groupId);const g=groups.find(x=>String(x.id)===gid)||{id:gid,name:d.groupName||'Group'};pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('Call Ended'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=activeCallType==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=activeCallType==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
   function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);

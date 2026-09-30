@@ -27,6 +27,8 @@ const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
+const CALL_INVITES_COLLECTION_NAME = 'call_invites';
+const PRESENCE_COLLECTION_NAME = 'presence_sessions';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
@@ -327,6 +329,83 @@ app.get('/api/notifications/poll', async (req, res) => {
     console.error('Notification poll failed:', error.message);
     res.status(500).json({ ok: false, messages: [] });
   }
+});
+
+
+app.post('/api/presence/heartbeat', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const groupId = normalizeGroupId(req.body?.groupId);
+    const deviceId = String(req.body?.deviceId || '').trim().slice(0,160);
+    if (!userId || !groupId || !deviceId) return res.status(400).json({ok:false});
+    const db = await getDb();
+    if (!db) return res.json({ok:true});
+    const now = new Date();
+    const expiresAt = new Date(Date.now() + 15000);
+    const key = `${userId}:${groupId}:${deviceId}`;
+    await db.collection(PRESENCE_COLLECTION_NAME).updateOne(
+      {_id:key}, {$set:{userId,groupId,deviceId,updatedAt:now,expiresAt}}, {upsert:true}
+    );
+    try { await db.collection(PRESENCE_COLLECTION_NAME).createIndex({expiresAt:1},{expireAfterSeconds:0}); } catch (_) {}
+    res.json({ok:true,expiresAt:expiresAt.toISOString()});
+  } catch (error) { console.error('Presence heartbeat failed:', error.message); res.status(500).json({ok:false}); }
+});
+
+app.get('/api/presence/status', async (req,res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    const groupId = normalizeGroupId(req.query?.groupId);
+    if (!userId || !groupId) return res.json({ok:true,online:false,onlineCount:0,lastSeen:{}});
+    const db = await getDb();
+    if (!db) return res.json({ok:true,online:false,onlineCount:0,lastSeen:{}});
+    const now = new Date();
+    const active = await db.collection(PRESENCE_COLLECTION_NAME).find({groupId,expiresAt:{$gt:now}}).project({userId:1}).toArray();
+    const ids = [...new Set(active.map(x=>String(x.userId||'')).filter(Boolean))];
+    const other = ids.filter(id=>id!==userId);
+    const lastSeen = {};
+    if (other.length) {
+      const profiles = await db.collection(USER_PROFILES_COLLECTION_NAME).find({_id:{$in:other}},{projection:{_id:1,lastSeenAt:1,lastSeenByGroup:1}}).toArray();
+      for (const doc of profiles) {
+        const ts = doc?.lastSeenByGroup?.[groupId] || doc?.lastSeenAt;
+        if (ts) lastSeen[String(doc._id)] = new Date(ts).toISOString();
+      }
+    }
+    res.json({ok:true,online:other.length>0,onlineCount:other.length,lastSeen});
+  } catch (error) { console.error('Presence status failed:', error.message); res.status(500).json({ok:false,online:false,onlineCount:0,lastSeen:{}}); }
+});
+
+app.get('/api/calls/active', async (req,res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    const groupId = normalizeGroupId(req.query?.groupId);
+    if (!userId || !groupId) return res.json({ok:true,call:null});
+    const db = await getDb();
+    if (!db) return res.json({ok:true,call:null});
+    const access = await db.collection('notification_access').findOne({userId,groupId});
+    if (!access) return res.json({ok:true,call:null});
+    const call = await db.collection(CALL_INVITES_COLLECTION_NAME).findOne(
+      {groupId,active:true,expiresAt:{$gt:new Date()},startedByUserId:{$ne:userId}},
+      {projection:{_id:0,callId:1,groupId:1,type:1,fromUserId:1,fromName:1,groupName:1,createdAt:1}}
+    );
+    res.json({ok:true,call:call||null});
+  } catch (error) { console.error('Active call lookup failed:', error.message); res.status(500).json({ok:false,call:null}); }
+});
+
+app.get('/api/notifications/calls', async (req,res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    const after = String(req.query?.after || '').trim();
+    if (!userId) return res.json({ok:true,calls:[]});
+    const db = await getDb();
+    if (!db) return res.json({ok:true,calls:[]});
+    const access = await db.collection('notification_access').find({userId},{projection:{groupId:1}}).toArray();
+    const groupIds = [...new Set(access.map(x=>normalizeGroupId(x.groupId)))];
+    if (!groupIds.length) return res.json({ok:true,calls:[]});
+    const filter={groupId:{$in:groupIds},active:true,expiresAt:{$gt:new Date()},startedByUserId:{$ne:userId}};
+    if(after){const d=new Date(after); if(!Number.isNaN(d.getTime())) filter.createdAt={$gt:d};}
+    const calls=await db.collection(CALL_INVITES_COLLECTION_NAME).find(filter,{projection:{_id:0,callId:1,groupId:1,type:1,fromUserId:1,fromName:1,groupName:1,createdAt:1}}).sort({createdAt:1}).limit(20).toArray();
+    res.json({ok:true,calls:calls.map(c=>({...c,createdAt:c.createdAt instanceof Date?c.createdAt.toISOString():String(c.createdAt||'')}))});
+  } catch(error){console.error('Call notification poll failed:',error.message);res.status(500).json({ok:false,calls:[]});}
 });
 
 app.post('/api/push/unsubscribe', async (req, res) => {
@@ -2446,6 +2525,20 @@ async function sendPrivatePush(peerUserId, msg) {
   }
 }
 
+
+async function sendCallPush(invite) {
+  if (!MONGODB_URI || !invite?.callId) return;
+  try {
+    const db = await getDb(); if (!db) return;
+    const accessDocs = await db.collection('notification_access').find({groupId:normalizeGroupId(invite.groupId)},{projection:{userId:1}}).toArray();
+    const allowed = new Set(accessDocs.map(x=>String(x.userId||'')).filter(Boolean));
+    allowed.delete(String(invite.fromUserId||''));
+    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({userId:{$in:[...allowed]}}).toArray();
+    const payload=JSON.stringify({type:'incoming-call',title:String(invite.groupName||'WhatsApp'),body:`${invite.fromName||'Someone'} is calling`,callId:String(invite.callId),groupId:normalizeGroupId(invite.groupId),groupName:String(invite.groupName||'WhatsApp'),callType:invite.type,url:'/#chat'});
+    await Promise.all(docs.map(async doc=>{try{await webpush.sendNotification(doc.subscription,payload,{TTL:60,urgency:'high'});}catch(error){console.error('Call web push failed:',error.statusCode||'',error.message||error);if(error.statusCode===404||error.statusCode===410)await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({_id:doc._id});}}));
+  } catch(error){console.error('Call push failed:',error.message);}
+}
+
 async function sendNativeRealtimeNotification(msg) {
   if (!MONGODB_URI || !msg || !msg.id || !msg.groupId) return;
   try {
@@ -3281,6 +3374,9 @@ io.on('connection', async (socket) => {
       startedByName: String(data?.name || '').slice(0, 60), createdAt: Date.now()
     };
     activeCalls.set(callId, call);
+    const callInviteDoc = { callId, groupId, type, fromUserId: call.startedByUserId, fromName: call.startedByName, groupName: String(data?.groupName || '').slice(0,100), active:true, createdAt:new Date(), expiresAt:new Date(Date.now()+60000) };
+    try { const db = await getDb(); if (db) { await db.collection(CALL_INVITES_COLLECTION_NAME).updateOne({callId}, {$set:callInviteDoc}, {upsert:true}); try { await db.collection(CALL_INVITES_COLLECTION_NAME).createIndex({expiresAt:1},{expireAfterSeconds:0}); } catch (_) {} } } catch (e) { console.error('Call invite save failed:', e.message); }
+    sendCallPush(callInviteDoc).catch(()=>{});
     socket.join(callRoom(groupId)); socket.callId = callId; socket.callType = type;
     // Notify every authorized member of this group. Members currently inside the
     // group's Socket.IO room are handled first; authorized members who have another
