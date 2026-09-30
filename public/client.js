@@ -332,24 +332,37 @@ async function setupWebPush() {
   if (Notification.permission !== 'granted') return false;
   try {
     const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await registration.update().catch(() => {});
     await navigator.serviceWorker.ready;
     const response = await fetch('/api/push/public-key', { cache: 'no-store' });
     const data = await response.json();
     if (!data.publicKey) return false;
+    const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
     let subscription = await registration.pushManager.getSubscription();
-    const keyFingerprint = String(data.publicKey || '').slice(0, 24);
-    const savedFingerprint = localStorage.getItem('wa_vapid_public_fingerprint') || '';
-    if (subscription && savedFingerprint && savedFingerprint !== keyFingerprint) {
-      try { await subscription.unsubscribe(); } catch (_) {}
-      subscription = null;
+    // A subscription is cryptographically tied to the VAPID public key. If the
+    // Vercel key pair was rotated, reuse of the old subscription makes every
+    // send fail. Re-subscribe automatically with the currently deployed key.
+    if (subscription) {
+      try {
+        const oldKey = subscription.options?.applicationServerKey;
+        const oldBytes = oldKey ? new Uint8Array(oldKey) : null;
+        const sameKey = oldBytes && oldBytes.length === applicationServerKey.length &&
+          oldBytes.every((v, i) => v === applicationServerKey[i]);
+        if (!sameKey) {
+          await subscription.unsubscribe().catch(() => {});
+          subscription = null;
+        }
+      } catch (_) {
+        await subscription.unsubscribe().catch(() => {});
+        subscription = null;
+      }
     }
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(data.publicKey)
+        applicationServerKey
       });
     }
-    localStorage.setItem('wa_vapid_public_fingerprint', keyFingerprint);
     const saveResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -357,27 +370,31 @@ async function setupWebPush() {
     });
     if (!saveResponse.ok) return false;
     const saveData = await saveResponse.json().catch(() => ({}));
-    return saveData.ok === true;
+    if (saveData.ok !== true) return false;
+    const status = await fetch(`/api/push/status?userId=${encodeURIComponent(userId)}`, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    return Boolean(status?.ok && Number(status?.subscriptions || 0) > 0);
   } catch (error) {
     console.warn('Web push setup failed:', error);
     return false;
   }
 }
 
-// Web Push is the single browser notification source of truth.
-// Live Socket.IO messages are rendered in-app; background/desktop notifications
-// are delivered by the server through the service worker.
-function notifyIncomingMessage(msg) { return; }
-
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // Browsers generally allow the permission prompt only from a user gesture.
-  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
-  document.addEventListener('pointerdown', once, { once: true });
-  document.addEventListener('keydown', once, { once: true });
+  // Push subscription creation must happen after a user gesture in browsers.
+  const once = async () => {
+    const granted = await enableNotifications();
+    if (granted && userId) await setupWebPush().catch(() => {});
+    if (granted) {
+      document.removeEventListener('pointerdown', once);
+      document.removeEventListener('keydown', once);
+    }
+  };
+  document.addEventListener('pointerdown', once);
+  document.addEventListener('keydown', once);
 }
 notificationSetup();
-if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
+if ('Notification' in window && Notification.permission === 'granted' && userId) setupWebPush().catch(() => {});
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});

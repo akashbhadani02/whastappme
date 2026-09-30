@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v16-single-push';
+const CACHE = 'whatsapp-pwa-v18-working-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -29,11 +29,9 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch (_) {}
 
   event.waitUntil((async () => {
+    // Keep message pushes visible just like the known-working reference ZIP.
+    // Incoming calls remain high-priority and interactive.
     const isCall = data.kind === 'incoming-call';
-    // Message pushes are suppressed only while the user is actively viewing the
-    // chat. Calls are never suppressed: an incoming call must alert the user.
-    if (!isCall && await chatIsOpenAndVisible()) return;
-
     const groupName = String(data.groupName || data.title || 'WhatsApp').trim() || 'WhatsApp';
     const messageId = String(data.messageId || '');
     const callId = String(data.callId || '');
