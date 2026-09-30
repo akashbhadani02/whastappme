@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <application android:theme="@style/AppTheme" android:label="WhatsApp" android:usesCleartextTraffic="true" android:icon="@drawable/ic_launcher">
         <activity android:name=".MainActivity" android:exported="true">
@@ -15,7 +16,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <service android:name=".NotificationPollService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".NotificationPollService" android:exported="false" android:foregroundServiceType="dataSync" android:stopWithTask="false" />
     <receiver android:name=".NotificationBootReceiver" android:enabled="true" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

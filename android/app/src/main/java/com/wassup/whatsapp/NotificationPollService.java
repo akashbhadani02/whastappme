@@ -31,10 +31,11 @@ import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v8";
-    private static final String FG_CHANNEL_ID = "wassup_background_v8";
+    private static final String CHANNEL_ID = "wassup_messages_v9";
+    private static final String FG_CHANNEL_ID = "wassup_background_v9";
     private static final int SERVICE_ID = 7001;
     private static final long RECONNECT_INTERVAL_MS = 1000L;
+    private static final long POLL_INTERVAL_MS = 1500L;
 
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
@@ -58,7 +59,7 @@ public class NotificationPollService extends Service {
 
         // Polling remains as a recovery path. Realtime Socket.IO is the primary
         // notification path and normally delivers the alert immediately.
-        executor.scheduleWithFixedDelay(this::poll, 1, 1, TimeUnit.SECONDS);
+        executor.scheduleWithFixedDelay(this::poll, 0, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
         connectRealtimeIfNeeded();
     }
 
@@ -363,12 +364,21 @@ public class NotificationPollService extends Service {
     }
 
     @Override public void onTaskRemoved(Intent rootIntent) {
+        // Keep the notification worker alive when the user swipes the WebView
+        // task away. START_STICKY handles normal process recreation; this
+        // explicit alarm also covers OEMs that stop a foreground service with
+        // the task. No Firebase/FCM is required for this recovery path.
         try {
-            Intent restart = new Intent(getApplicationContext(), NotificationPollService.class);
-            if (Build.VERSION.SDK_INT >= 26) {
-                getApplicationContext().startForegroundService(restart);
-            } else {
-                getApplicationContext().startService(restart);
+            Intent restart = new Intent(getApplicationContext(), NotificationBootReceiver.class);
+            restart.setAction("com.wassup.whatsapp.RESTART_NOTIFICATION_SERVICE");
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+            PendingIntent pi = PendingIntent.getBroadcast(getApplicationContext(), 7002, restart, flags);
+            android.app.AlarmManager am = (android.app.AlarmManager)getSystemService(ALARM_SERVICE);
+            if (am != null) {
+                long when = System.currentTimeMillis() + 1500L;
+                if (Build.VERSION.SDK_INT >= 23) am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, when, pi);
+                else am.set(android.app.AlarmManager.RTC_WAKEUP, when, pi);
             }
         } catch (Exception ignored) {}
         super.onTaskRemoved(rootIntent);
