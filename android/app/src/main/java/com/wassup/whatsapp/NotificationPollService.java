@@ -163,8 +163,11 @@ public class NotificationPollService extends Service {
                 String body = "New message";
                 if (id.isEmpty()) return;
 
-                // Do not show the sender's own message. The server also filters
-                // it, but this extra check makes the client defensive.
+                // The server already filters the sender's own message.
+                // Do not add the id to the generic `seen` set here: that set is
+                // used by the HTTP recovery poll, while showMessageNotification
+                // has its own `notified:` de-duplication. Adding it here first
+                // used to make realtime notifications silently disappear.
                 showMessageNotification(id, groupName, groupId, body);
             });
 
