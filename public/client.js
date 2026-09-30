@@ -1865,6 +1865,14 @@ async function verifyAndOpenGroup() {
     setVerifiedGroupPassword(group.id, password);
     groupPasswordTarget = null;
 
+    // This submit is a real user gesture. Use it to request notification
+    // permission and register the device push subscription before opening the
+    // group, so a default permission state can never silently skip push setup.
+    if ('Notification' in window) {
+      const granted = await enableNotifications();
+      if (granted && userId) await setupWebPush().catch(() => {});
+    }
+
     // Open the UI immediately. Message history loads in the background so a
     // slow MongoDB/network connection cannot make the password screen spin.
     await joinGroup(group.id, true);
@@ -3032,7 +3040,11 @@ function finishAccountLogin() {
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
-  setupWebPush().catch(() => {});
+  // The Continue button is a user gesture, so it is the safest place to both
+  // request permission and register the Web Push subscription.
+  enableNotifications().then(granted => {
+    if (granted) return setupWebPush();
+  }).catch(() => {});
   pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
