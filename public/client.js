@@ -1561,7 +1561,8 @@ async function loadGroups() {
       updateGroupNameUI();
     }
     renderGroupList();
-    refreshAllUnreadCounts().catch(() => {});
+    // Startup must not fetch unread counts/history for every group.
+    // Only the group the user explicitly opens is synchronized.
   } catch (_) {
     groups = [];
     currentGroupId = '';
