@@ -303,3 +303,283 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 
 .new-chat-choice-list{display:grid;gap:10px;margin-top:14px}
 .new-chat-choice-list .secondary-choice{background:var(--panel-strong,#f0f2f5);color:inherit;border:1px solid var(--border,#ddd)}
+
+/* =========================
+   ADMIN PANEL RESPONSIVE FIX v1.7
+   Prevent overlap/cut-off on desktop + mobile.
+   ========================= */
+#adminGroupsModal,
+#adminPrivateChatsModal,
+#adminGroupMediaModal,
+#adminCallRecordingsModal,
+#adminRecycleModal,
+#adminMediaViewModal{
+  align-items:center;
+  justify-items:center;
+  padding:clamp(8px,2vw,22px);
+  overflow:hidden;
+}
+
+#adminGroupsModal .admin-card,
+#adminPrivateChatsModal .admin-card,
+#adminGroupMediaModal .admin-media-folder-card,
+#adminCallRecordingsModal .recycle-admin-card,
+#adminRecycleModal .recycle-admin-card{
+  width:min(1180px,96vw);
+  max-width:1180px;
+  max-height:min(92dvh,900px);
+  min-height:0;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  text-align:left;
+  padding:clamp(18px,2.2vw,30px);
+}
+
+#adminGroupsModal .admin-card > h3,
+#adminPrivateChatsModal .admin-card > h3,
+#adminGroupMediaModal .admin-media-folder-card > h3,
+#adminCallRecordingsModal .recycle-admin-card > h3,
+#adminRecycleModal .recycle-admin-card > h3{
+  padding-right:42px;
+  flex:0 0 auto;
+}
+
+#adminGroupsModal .admin-card > p,
+#adminPrivateChatsModal .admin-card > p,
+#adminGroupMediaModal .admin-media-folder-card > p,
+#adminCallRecordingsModal .recycle-admin-card > p,
+#adminRecycleModal .recycle-admin-card > p{
+  flex:0 0 auto;
+}
+
+#adminGroupsList,
+#adminPrivateChatsList,
+#adminGroupMediaList,
+#adminCallRecordingsList,
+#adminRecycleList{
+  min-height:0;
+  overflow:auto;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+  padding:2px 3px 6px;
+}
+
+#adminGroupsModal .admin-main-recycle-row{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  margin:10px 0 14px;
+  flex:0 0 auto;
+}
+#adminGroupsModal .admin-main-recycle-row .mini-btn{
+  width:100%;
+  min-width:0;
+  min-height:42px;
+  padding:9px 8px;
+  white-space:normal;
+  line-height:1.2;
+}
+
+#adminGroupsModal .admin-groups-list .admin-group-row{
+  grid-template-columns:minmax(150px,1fr) minmax(220px,1.4fr) auto;
+  min-width:0;
+}
+#adminGroupsModal #adminNewGroupBtn{
+  flex:0 0 auto;
+}
+
+#adminPrivateChatsModal .admin-private-chat-row{
+  min-width:0;
+}
+#adminGroupMediaModal .admin-media-folder-grid,
+#adminCallRecordingsModal .recording-video-grid{
+  min-width:0;
+  overflow:visible;
+}
+
+#adminRecycleModal .recycle-admin-actions-top{
+  flex:0 0 auto;
+  overflow-x:auto;
+  scrollbar-width:thin;
+}
+#adminRecycleModal .recycle-chat-view{
+  min-height:0;
+  max-height:none;
+  flex:1 1 auto;
+}
+
+#adminMediaViewModal .admin-media-view-card{
+  width:min(1100px,96vw);
+  max-width:1100px;
+  max-height:92dvh;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+#adminMediaViewModal .admin-media-view-body{
+  min-height:0;
+  flex:1 1 auto;
+  max-height:calc(92dvh - 150px);
+  overflow:auto;
+}
+
+/* Desktop: keep admin rows usable without horizontal clipping. */
+@media (min-width:761px){
+  #adminGroupsModal .admin-card,
+  #adminPrivateChatsModal .admin-card,
+  #adminGroupMediaModal .admin-media-folder-card,
+  #adminCallRecordingsModal .recycle-admin-card,
+  #adminRecycleModal .recycle-admin-card{
+    width:min(1180px,calc(100vw - 44px));
+  }
+  #adminGroupsModal .admin-card{max-height:calc(100dvh - 44px)}
+  #adminGroupsModal .admin-main-recycle-row{grid-template-columns:repeat(4,minmax(140px,1fr))}
+}
+
+/* Tablet / phone: use the whole available viewport and stack controls. */
+@media (max-width:760px){
+  #adminGroupsModal,
+  #adminPrivateChatsModal,
+  #adminGroupMediaModal,
+  #adminCallRecordingsModal,
+  #adminRecycleModal,
+  #adminMediaViewModal{
+    padding:0;
+    align-items:stretch;
+  }
+
+  #adminGroupsModal .admin-card,
+  #adminPrivateChatsModal .admin-card,
+  #adminGroupMediaModal .admin-media-folder-card,
+  #adminCallRecordingsModal .recycle-admin-card,
+  #adminRecycleModal .recycle-admin-card,
+  #adminMediaViewModal .admin-media-view-card{
+    width:100vw;
+    max-width:none;
+    height:100dvh;
+    max-height:none;
+    border-radius:0;
+    padding:calc(18px + env(safe-area-inset-top,0px)) 12px calc(14px + env(safe-area-inset-bottom,0px));
+  }
+
+  #adminGroupsModal .admin-main-recycle-row{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+  }
+  #adminGroupsModal .admin-main-recycle-row .mini-btn{
+    min-height:44px;
+    font-size:12px;
+  }
+
+  #adminGroupsModal .admin-groups-list .admin-group-row{
+    grid-template-columns:1fr;
+    gap:8px;
+    padding:10px;
+  }
+  #adminGroupsModal .admin-groups-list .admin-password-wrap,
+  #adminGroupsModal .admin-groups-list .admin-row-actions{
+    width:100%;
+  }
+  #adminGroupsModal .admin-groups-list .admin-row-actions{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+  }
+  #adminGroupsModal .admin-groups-list .admin-row-actions button{
+    width:100%;
+    min-height:44px;
+  }
+  #adminGroupsModal .admin-password-input{
+    min-height:44px;
+    font-size:16px;
+  }
+
+  #adminPrivateChatsModal .admin-private-chat-row{
+    flex-direction:column;
+    align-items:stretch;
+  }
+  #adminPrivateChatsModal .admin-private-chat-row .admin-delete-btn{
+    width:100%;
+    min-height:44px;
+  }
+
+  #adminGroupMediaModal .admin-media-folder-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+  #adminGroupMediaModal .admin-media-folder-head{
+    flex-wrap:wrap;
+  }
+
+  #adminCallRecordingsModal .recording-video-grid{
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+  #adminCallRecordingsModal .recycle-admin-actions,
+  #adminRecycleModal .recycle-admin-actions{
+    flex-wrap:wrap;
+  }
+  #adminCallRecordingsModal .recycle-admin-actions .mini-btn,
+  #adminRecycleModal .recycle-admin-actions .mini-btn{
+    flex:1 1 140px;
+    min-height:44px;
+  }
+
+  #adminRecycleModal .recycle-admin-actions-top{
+    position:sticky;
+    top:0;
+    z-index:5;
+    padding-top:3px;
+  }
+  #adminRecycleModal .recycle-chat-view{
+    flex:1 1 auto;
+    max-height:none;
+  }
+
+  #adminMediaViewModal .admin-media-view-body{
+    max-height:none;
+    flex:1 1 auto;
+  }
+  #adminMediaViewModal .admin-media-view-body img,
+  #adminMediaViewModal .admin-media-view-body video{
+    max-width:100%;
+    max-height:calc(100dvh - 190px);
+  }
+}
+
+@media (max-width:420px){
+  #adminGroupsModal .admin-main-recycle-row{
+    grid-template-columns:1fr 1fr;
+  }
+  #adminGroupsModal .admin-groups-list .admin-row-actions{
+    grid-template-columns:1fr;
+  }
+  #adminGroupMediaModal .admin-media-folder-grid{
+    grid-template-columns:1fr;
+  }
+  #adminGroupsModal .admin-card,
+  #adminPrivateChatsModal .admin-card,
+  #adminGroupMediaModal .admin-media-folder-card,
+  #adminCallRecordingsModal .recycle-admin-card,
+  #adminRecycleModal .recycle-admin-card,
+  #adminMediaViewModal .admin-media-view-card{
+    padding-left:10px;
+    padding-right:10px;
+  }
+}
+
+/* Prevent long names/passwords from ever forcing a horizontal overflow. */
+#adminGroupsModal *,
+#adminPrivateChatsModal *,
+#adminGroupMediaModal *,
+#adminCallRecordingsModal *,
+#adminRecycleModal *,
+#adminMediaViewModal *{
+  max-width:100%;
+}
+#adminGroupsModal .admin-password-input,
+#adminPrivateChatsModal input{
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
