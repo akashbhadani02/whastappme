@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v21-all-members-group-notification';
+const CACHE = 'whatsapp-pwa-v23-background-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

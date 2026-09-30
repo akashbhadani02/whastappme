@@ -336,7 +336,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=22', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=23', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -1434,6 +1434,7 @@ socket.on('unread-message', data => {
 // temporarily unavailable. Never expose the message preview.
 socket.on('native-notification', async data => {
   if (!data?.id || !data?.groupId) return;
+  if (!document.hidden) return;
   if (String(data.userId || '') === String(userId || '')) return;
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
@@ -1445,7 +1446,7 @@ socket.on('native-notification', async data => {
       icon: '/icon.svg',
       badge: '/icon.svg',
       tag: `wa-${String(data.id)}`,
-      renotify: true,
+      renotify: false,
       data: { url: '/#chat', messageId: String(data.id), groupId: String(data.groupId) }
     });
   } catch (_) {}
