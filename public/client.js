@@ -336,7 +336,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=20', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -345,11 +345,24 @@ async function setupWebPush() {
       if (!data.publicKey) return false;
       const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
       let subscription = await registration.pushManager.getSubscription();
-      // Never unsubscribe a valid existing subscription merely because a browser
-      // does not expose applicationServerKey in subscription.options. That field
-      // is commonly unavailable and doing so can create an unsubscribe/subscribe
-      // race that silently loses notifications. Only recreate if subscribe itself
-      // fails with the current VAPID key.
+      // A PushSubscription is bound to the VAPID applicationServerKey that
+      // created it. If the deployment's VAPID key changed, the old subscription
+      // can look valid locally but every server push will fail. Recreate only
+      // when the browser exposes a key and it actually differs; otherwise keep
+      // the existing subscription stable.
+      if (subscription) {
+        try {
+          const existingKey = subscription.options?.applicationServerKey;
+          if (existingKey) {
+            const a = new Uint8Array(existingKey);
+            const b = new Uint8Array(applicationServerKey);
+            if (a.length !== b.length || a.some((v, i) => v !== b[i])) {
+              await subscription.unsubscribe().catch(() => {});
+              subscription = null;
+            }
+          }
+        } catch (_) {}
+      }
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
       }
