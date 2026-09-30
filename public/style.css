@@ -583,3 +583,88 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
   overflow:hidden;
   text-overflow:ellipsis;
 }
+
+/* v1.8 — Admin panel mobile/desktop layout hardening */
+html,body{max-width:100%;overflow-x:hidden}
+.modal{box-sizing:border-box;overscroll-behavior:contain}
+.admin-card,
+.admin-media-view-card,
+.admin-media-folder-card,
+.recycle-admin-card{
+  box-sizing:border-box;
+  width:min(96vw,760px);
+  max-width:760px;
+  max-height:calc(100dvh - 24px);
+  overflow-x:hidden;
+  overflow-y:auto;
+  padding:24px;
+}
+.admin-main-recycle-row,
+.recycle-admin-actions,
+.recycle-admin-actions-top{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+}
+.admin-main-recycle-row .mini-btn,
+.recycle-admin-actions .mini-btn{flex:0 1 auto;min-width:0;max-width:100%}
+.admin-groups-list{width:100%;min-width:0;overflow:visible}
+.admin-group-row{min-width:0;width:100%;box-sizing:border-box}
+.admin-group-row>*{min-width:0;max-width:100%}
+.admin-group-name{min-width:0;overflow-wrap:anywhere}
+.admin-password-wrap{min-width:0;width:100%}
+.admin-password-wrap .admin-password-input{min-width:0}
+.admin-private-password-box{overflow-wrap:anywhere;word-break:break-word}
+.admin-media-view-body{max-width:100%;overflow:auto}
+.admin-media-view-body img,.admin-media-view-body video{max-width:100%;height:auto;object-fit:contain}
+
+@media (min-width:761px){
+  .admin-card{width:min(760px,calc(100vw - 48px));}
+  .admin-group-row{grid-template-columns:minmax(120px,1fr) minmax(180px,1.5fr) auto}
+}
+
+@media (max-width:760px){
+  .modal{padding:8px;place-items:center;overflow:hidden}
+  .admin-card,
+  .admin-media-view-card,
+  .admin-media-folder-card,
+  .recycle-admin-card{
+    width:100%;
+    max-width:none;
+    max-height:calc(100dvh - 16px);
+    padding:18px 14px calc(18px + env(safe-area-inset-bottom));
+    border-radius:14px;
+  }
+  .admin-card h3{font-size:18px;line-height:1.25;padding:0 30px}
+  .admin-card p{font-size:13px;line-height:1.45}
+  .modal-close{right:8px;top:5px;z-index:5;width:40px;height:40px;display:grid;place-items:center}
+  .admin-main-recycle-row,
+  .recycle-admin-actions,
+  .recycle-admin-actions-top{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%}
+  .admin-main-recycle-row .mini-btn,
+  .recycle-admin-actions .mini-btn{width:100%;min-width:0;white-space:normal;line-height:1.2;min-height:44px;padding:9px 7px;}
+  .admin-group-row{grid-template-columns:minmax(0,1fr)!important;gap:8px;padding:10px}
+  .admin-group-name{white-space:normal;line-height:1.3}
+  .admin-save-btn,.admin-delete-btn,.admin-row-actions button{width:100%;min-height:44px}
+  .admin-row-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;gap:7px}
+  .admin-row-actions>*{min-width:0}
+  .admin-password-wrap{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+  .admin-password-wrap .admin-password-input{width:100%;min-width:0}
+  .admin-private-password-box{font-size:13px;line-height:1.4}
+  .admin-groups-list{max-height:none}
+  .admin-media-folder-card .admin-groups-list,
+  .recycle-admin-card .admin-groups-list{max-height:52dvh;overflow-y:auto;padding-right:2px}
+}
+
+@media (max-width:380px){
+  .admin-card,
+  .admin-media-view-card,
+  .admin-media-folder-card,
+  .recycle-admin-card{padding-left:10px;padding-right:10px}
+  .admin-main-recycle-row,
+  .recycle-admin-actions,
+  .recycle-admin-actions-top{grid-template-columns:1fr}
+  .admin-row-actions{grid-template-columns:1fr}
+  .admin-card h3{font-size:17px}
+}
