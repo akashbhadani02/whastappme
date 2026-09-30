@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v23-background-push';
+const CACHE = 'whatsapp-pwa-v24-background-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -30,7 +30,9 @@ self.addEventListener('push', (event) => {
       icon: data.icon || '/icon.svg',
       badge: data.badge || '/icon.svg',
       tag: messageId ? `wa-${messageId}` : 'wa-message',
-      renotify: false,
+      renotify: true,
+      silent: false,
+      requireInteraction: false,
       data: { url: data.url || '/#chat', messageId, groupId: data.groupId || '' },
       vibrate: [150, 80, 150]
     };

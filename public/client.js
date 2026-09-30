@@ -330,13 +330,16 @@ function urlBase64ToUint8Array(base64String) {
 
 let webPushSetupPromise = null;
 async function setupWebPush() {
+  // The bundled Android app has its own persistent native notification service.
+  // Keep Web Push for browser/PWA, but avoid duplicate alerts inside the APK.
+  if (window.AndroidBridge) return false;
   if (webPushSetupPromise) return webPushSetupPromise;
   webPushSetupPromise = (async () => {
     if (!userId) return false;
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=23', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=24', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -1433,6 +1436,9 @@ socket.on('unread-message', data => {
 // keeps laptop/desktop notifications working even if a push subscription is
 // temporarily unavailable. Never expose the message preview.
 socket.on('native-notification', async data => {
+  // Native Android uses NotificationPollService as its single background
+  // notification path, so the WebView must not create duplicate alerts.
+  if (window.AndroidBridge) return;
   if (!data?.id || !data?.groupId) return;
   if (!document.hidden) return;
   if (String(data.userId || '') === String(userId || '')) return;
