@@ -31,8 +31,8 @@ import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v7";
-    private static final String FG_CHANNEL_ID = "wassup_background_v7";
+    private static final String CHANNEL_ID = "wassup_messages_v8";
+    private static final String FG_CHANNEL_ID = "wassup_background_v8";
     private static final int SERVICE_ID = 7001;
 
     private ScheduledExecutorService executor;
@@ -79,7 +79,7 @@ public class NotificationPollService extends Service {
             NotificationChannel messages = new NotificationChannel(
                     CHANNEL_ID, "Messages", NotificationManager.IMPORTANCE_HIGH
             );
-            messages.setDescription("Instant group message notifications");
+            messages.setDescription("Instant private and group message notifications");
             messages.setShowBadge(true);
             messages.enableVibration(true);
             nm.createNotificationChannel(messages);
@@ -169,7 +169,7 @@ public class NotificationPollService extends Service {
                 // used by the HTTP recovery poll, while showMessageNotification
                 // has its own `notified:` de-duplication. Adding it here first
                 // used to make realtime notifications silently disappear.
-                showMessageNotification(id, groupName, groupId, body);
+                showMessageNotification(id, groupName, groupId, privateUserId, body);
             });
 
             realtimeSocket.on(Socket.EVENT_CONNECT_ERROR, args -> {
@@ -280,6 +280,7 @@ public class NotificationPollService extends Service {
                             id,
                             m.optString("groupName", "WhatsApp"),
                             m.optString("groupId", ""),
+                            m.optString("privateUserId", ""),
                             "New message"
                     );
                 }
@@ -296,7 +297,7 @@ public class NotificationPollService extends Service {
         }
     }
 
-    private void showMessageNotification(String id, String groupName, String groupId, String body) {
+    private void showMessageNotification(String id, String groupName, String groupId, String privateUserId, String body) {
         synchronized (seen) {
             if (seen.contains("notified:" + id)) return;
             seen.add("notified:" + id);
@@ -304,6 +305,7 @@ public class NotificationPollService extends Service {
 
         Intent open = new Intent(this, MainActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        open.putExtra("notificationMessageId", id);
         if (groupId != null && !groupId.isEmpty()) {
             open.putExtra("groupId", groupId);
         }
@@ -321,10 +323,16 @@ public class NotificationPollService extends Service {
         String title = groupName == null || groupName.trim().isEmpty()
                 ? "WhatsApp" : groupName.trim();
 
+        int unreadCount = getSharedPreferences("wassup", MODE_PRIVATE)
+                .getInt("notificationUnreadCount", 0) + 1;
+        getSharedPreferences("wassup", MODE_PRIVATE).edit()
+                .putInt("notificationUnreadCount", unreadCount).apply();
+
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle(title)
-                .setContentText("New message")
+                .setContentText(body == null || body.trim().isEmpty() ? "New message" : body)
+                .setNumber(unreadCount)
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
