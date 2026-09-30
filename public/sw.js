@@ -1,11 +1,15 @@
-const CACHE = 'whatsapp-pwa-v26-reliable-push';
+const CACHE = 'whatsapp-pwa-v27-group-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
@@ -39,6 +43,12 @@ self.addEventListener('push', (event) => {
 
     await self.registration.showNotification(groupName, options);
   })());
+});
+
+self.addEventListener('pushsubscriptionchange', (event) => {
+  // Browsers may rotate a PushSubscription. The page will resync on next
+  // launch/visibility change, so do not fabricate a subscription here.
+  event.waitUntil(Promise.resolve());
 });
 
 self.addEventListener('notificationclick', (event) => {

@@ -1,16 +1,8 @@
-# Notification v2 — Firebase-free background delivery
+# Notification v2.2 — Group-only notifications
 
-This version keeps the existing app UI unchanged and improves Android background notification delivery without Firebase/FCM.
-
-## Behavior
-- Android runs a foreground notification service after login.
-- Socket.IO is the instant path while the service is connected.
-- HTTP recovery polling runs about every 1.5 seconds while the service is alive.
-- If the app task is swiped away, the service is configured not to stop with the task and schedules a restart alarm as an OEM fallback.
-- The service starts again after device boot/app replacement.
-- Server polling is recipient-aware: group messages exclude the sender; private messages are returned only when `peerId` equals the logged-in user.
-- Notification delivery is deduplicated locally.
-- No Firebase/FCM dependency was added.
-
-## Important Android requirement
-The user must allow Notifications and, for best reliability on aggressive OEMs, disable battery optimization for the app. If Android Settings force-stops the app, Android itself prevents background execution until the user opens it again; no non-FCM code can bypass that OS rule.
+- Private-message notification delivery has been removed from native Android and server notification paths.
+- Android recovery polling now returns only group messages for groups persisted in `notification_access`.
+- Group notification authorization is persistent: leaving the visible chat does not delete `notification_access`, so the user can still receive group notifications while the app is in the background.
+- Rejoining a group refreshes/upserts the same notification authorization record.
+- Native realtime and web-push group notifications are filtered by the originating group and never notify the sender.
+- No Firebase/FCM is used.

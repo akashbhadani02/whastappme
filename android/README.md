@@ -7,7 +7,7 @@ The Android wrapper uses a native Socket.IO realtime notification channel as the
   app's background notification service has a live connection.
 - Notifications show the group name and "New message"; message text is not exposed.
 - The sender's own messages do not trigger a notification.
-- Only groups the User ID has previously joined are eligible.
+- Only groups the User ID has previously joined are eligible. Leaving the visible chat does not revoke that notification authorization; rejoining refreshes the same group access record.
 - Android 13+ requires POST_NOTIFICATIONS permission.
 - The foreground service requests battery-optimization exemption to improve
   reliability on Android devices that aggressively stop background work.

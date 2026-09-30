@@ -81,7 +81,7 @@ public class NotificationPollService extends Service {
             NotificationChannel messages = new NotificationChannel(
                     CHANNEL_ID, "Messages", NotificationManager.IMPORTANCE_HIGH
             );
-            messages.setDescription("Instant private and group message notifications");
+            messages.setDescription("Instant group message notifications");
             messages.setShowBadge(true);
             messages.enableVibration(true);
             nm.createNotificationChannel(messages);
@@ -162,7 +162,6 @@ public class NotificationPollService extends Service {
                 String id = data.optString("id", "");
                 String groupName = data.optString("groupName", "WhatsApp");
                 String groupId = data.optString("groupId", "");
-                String privateUserId = data.optString("privateUserId", "");
                 String body = "New message";
                 if (id.isEmpty()) return;
 
@@ -171,7 +170,7 @@ public class NotificationPollService extends Service {
                 // used by the HTTP recovery poll, while showMessageNotification
                 // has its own `notified:` de-duplication. Adding it here first
                 // used to make realtime notifications silently disappear.
-                showMessageNotification(id, groupName, groupId, privateUserId, body);
+                showMessageNotification(id, groupName, groupId, body);
             });
 
             realtimeSocket.on(Socket.EVENT_CONNECT_ERROR, args -> {
@@ -283,7 +282,6 @@ public class NotificationPollService extends Service {
                             id,
                             m.optString("groupName", "WhatsApp"),
                             m.optString("groupId", ""),
-                            m.optString("privateUserId", ""),
                             "New message"
                     );
                 }
@@ -300,7 +298,7 @@ public class NotificationPollService extends Service {
         }
     }
 
-    private void showMessageNotification(String id, String groupName, String groupId, String privateUserId, String body) {
+    private void showMessageNotification(String id, String groupName, String groupId, String body) {
         synchronized (seen) {
             if (seen.contains("notified:" + id)) return;
             seen.add("notified:" + id);
@@ -316,9 +314,6 @@ public class NotificationPollService extends Service {
         open.putExtra("notificationMessageId", id);
         if (groupId != null && !groupId.isEmpty()) {
             open.putExtra("groupId", groupId);
-        }
-        if (privateUserId != null && !privateUserId.isEmpty()) {
-            open.putExtra("privateUserId", privateUserId);
         }
 
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;

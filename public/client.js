@@ -23,6 +23,14 @@ const deviceId = (() => {
   return value;
 })();
 let userId = localStorage.getItem('wa_user_id') || '';
+// Register the PWA service worker immediately. This is intentionally
+// independent of the currently open group: once a browser has granted
+// notification permission, the same PushSubscription can receive messages
+// for every group the User ID has previously joined.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js?v=27', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
+}
+
 function syncAndroidNotificationIdentity() {
   try {
     if (window.AndroidBridge) {
@@ -339,7 +347,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=26', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=27', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -450,7 +458,7 @@ async function pollWebNotifications() {
     webNotificationPrimed = true;
   } catch (_) {}
 }
-setInterval(pollWebNotifications, 3000);
+setInterval(pollWebNotifications, 5000);
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});

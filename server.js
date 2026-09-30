@@ -241,7 +241,7 @@ app.post('/api/push/subscribe', async (req, res) => {
     if (!db) return res.status(503).json({ ok:false, error:'MongoDB is required for Web Push' });
     await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).updateOne(
       { endpoint: sub.endpoint },
-      { $set:{ userId, endpoint:sub.endpoint, subscription:sub, updatedAt:new Date() }, $setOnInsert:{ createdAt:new Date() } },
+      { $set:{ userId, endpoint:sub.endpoint, subscription:sub, updatedAt:new Date(), lastPushSyncAt:new Date() }, $setOnInsert:{ createdAt:new Date() } },
       { upsert:true }
     );
     res.json({ ok:true });
@@ -289,27 +289,19 @@ app.get('/api/notifications/poll', async (req, res) => {
     const db = await getDb();
     if (!collection || !db) return res.json({ ok: true, messages: [] });
 
-    // Message notifications are intentionally user-wide: a message sent in
-    // Group A may notify a user currently using Group B (and vice versa).
-    // Calls remain strictly group-scoped elsewhere in the signaling layer.
-    // A valid user session is enough; no group password is trusted here.
+    // Notifications are GROUP-ONLY. Private messages never enter this endpoint.
+    // Membership/notification access is persistent: once a user has joined a
+    // group, leaving the visible chat does not revoke background notification
+    // authorization. Joining again simply refreshes the same access record.
+    const accessDocs = await db.collection('notification_access')
+      .find({ userId }, { projection: { groupId: 1 } }).toArray();
+    const allowedGroupIds = [...new Set(accessDocs.map(x => normalizeGroupId(x?.groupId)).filter(Boolean))];
+    if (!allowedGroupIds.length) return res.json({ ok: true, messages: [] });
 
-    // Notification delivery is device-level, not read-receipt-level.
-    // Another device (for example a laptop) may read the message first, but
-    // the user's phone must still receive its own notification. The Android
-    // client keeps a per-message ID set so removing readBy here does not create
-    // duplicates on the same device.
-    // Return only messages this user can actually receive. Group messages
-    // are user-wide for the Android recovery worker; private messages are
-    // addressed explicitly through peerId. This is important when the app is
-    // closed: the background service must never consume another user's private
-    // chat as a notification.
     const filter = {
       deletedAt: { $exists: false },
-      $or: [
-        { groupId: { $exists: true }, userId: { $ne: userId } },
-        { groupId: { $exists: false }, peerId: userId, userId: { $ne: userId } }
-      ]
+      groupId: { $in: allowedGroupIds },
+      userId: { $ne: userId }
     };
     if (after) {
       const d = new Date(after);
@@ -327,11 +319,6 @@ app.get('/api/notifications/poll', async (req, res) => {
       ...m,
       createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt || ''),
       groupName: groupNames.get(String(m.groupId || '')) || String(m.groupId || 'WhatsApp'),
-      // For private messages the recipient must be able to open the exact
-      // private chat from the Android notification. The sender is stored in
-      // userId on the message document. Group notifications leave this empty.
-      privateUserId: m.groupId ? '' : String(m.userId || ''),
-      privatePeerId: m.groupId ? '' : String(m.peerId || ''),
       body: 'New message'
     })) });
   } catch (error) {
@@ -933,7 +920,6 @@ app.post('/api/private-messages', async (req, res) => {
         if (String(target.userId || '') === peer && !target.rooms.has(`private:${conversationId}`)) target.emit('private-message', result.saved);
       }
     }
-    if (result.inserted) await sendPrivatePush(peer, result.saved);
     res.json({ ok:true, message:result.saved });
   } catch (error) {
     console.error('Private message save failed:', error.message);
@@ -2394,122 +2380,33 @@ async function saveMessage(msg) {
 }
 
 async function sendPushToOtherUsers(msg) {
-  if (!MONGODB_URI || !msg || !msg.id) return;
+  if (!MONGODB_URI || !msg || !msg.id || !msg.groupId) return;
   try {
     const db = await getDb();
     if (!db) return;
     const senderUserId = String(msg.userId || '').trim();
     const gid = normalizeGroupId(msg.groupId);
-    // Message notifications are user-wide by design: Group A messages may
-    // notify users who are currently viewing Group B, and vice versa.
-    // This does NOT change call routing; call-start/call-join stay group-scoped.
     const accessDocs = await db.collection('notification_access')
-      .find({}, { projection: { userId: 1 } }).toArray();
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
     const allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
-    // Also include users with a stored push subscription, so a user who has
-    // not opened a group recently can still receive a background push.
-    const pushUsers = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
-      .find({}, { projection: { userId: 1 } }).toArray();
-    for (const x of pushUsers) {
-      const uid = String(x?.userId || '').trim();
-      if (uid) allowedUsers.add(uid);
-    }
     if (senderUserId) allowedUsers.delete(senderUserId);
     if (!allowedUsers.size) return;
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
       .find({ userId: { $in: [...allowedUsers] } }).toArray();
     if (!docs.length) return;
-    // Show only the group name in the notification. Never expose the actual
-    // message text, sender name, or message preview in the push payload.
     let groupName = String(msg.groupName || '').trim();
     if (!groupName) {
-      try {
-        const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne({
-          _id: normalizeGroupId(msg.groupId)
-        }, { projection: { name: 1 } });
-        groupName = String(group?.name || '').trim();
-      } catch (_) {}
+      const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne({ _id: gid }, { projection: { name: 1 } });
+      groupName = String(group?.name || gid || 'WhatsApp').trim();
     }
-    if (!groupName) groupName = 'WhatsApp';
-    const payload = JSON.stringify({
-      title: groupName,
-      body: 'New message',
-      messageId: msg.id,
-      groupId: normalizeGroupId(msg.groupId),
-      groupName,
-      url: '/#chat'
-    });
+    const payload = JSON.stringify({ title: groupName || 'WhatsApp', body: 'New message', messageId: msg.id, groupId: gid, groupName: groupName || 'WhatsApp', notificationType: 'group-message', url: '/#chat' });
     await Promise.all(docs.map(async (doc) => {
-      try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
-      } catch (error) {
-        console.error('Web push delivery failed:', error.statusCode || '', error.body || error.message || error);
-        if (error.statusCode === 404 || error.statusCode === 410) {
-          await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
-        }
+      try { await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' }); }
+      catch (error) {
+        if (error.statusCode === 404 || error.statusCode === 410) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
       }
     }));
-  } catch (error) {
-    console.error('Web push failed:', error.stack || error.message);
-  }
-}
-
-
-
-async function sendNativePrivateRealtimeNotification(peerUserId, msg) {
-  const peer = String(peerUserId || '').trim();
-  if (!peer || !msg?.id) return;
-  try {
-    const title = String(msg.user || 'Private chat').trim() || 'Private chat';
-    const payload = {
-      id: String(msg.id),
-      groupId: '',
-      groupName: title,
-      type: 'private-message',
-      privateUserId: String(msg.userId || ''),
-      body: 'New message'
-    };
-
-    // Private chats do not use group notification_access. Route the native
-    // alert directly to every active Android socket belonging to the recipient.
-    for (const target of io.sockets.sockets.values()) {
-      const uid = String(target.userId || '').trim();
-      if (uid === peer) target.emit('native-notification', payload);
-    }
-  } catch (error) {
-    console.error('Native private notification failed:', error.message);
-  }
-}
-
-async function sendPrivatePush(peerUserId, msg) {
-  if (!MONGODB_URI || !peerUserId || !msg?.id) return;
-  try {
-    const db = await getDb();
-    if (!db) return;
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({
-      userId: String(peerUserId)
-    }).toArray();
-    if (!docs.length) return;
-    const payload = JSON.stringify({
-      title: String(msg.user || 'Private chat'),
-      body: 'New message',
-      messageId: msg.id,
-      privateUserId: String(msg.userId || ''),
-      url: '/#chat'
-    });
-    await Promise.all(docs.map(async doc => {
-      try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL:300, urgency:'high' });
-      } catch (error) {
-        console.error('Private web push delivery failed:', error.statusCode || '', error.body || error.message || error);
-        if (error.statusCode === 404 || error.statusCode === 410) {
-          await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
-        }
-      }
-    }));
-  } catch (error) {
-    console.error('Private push failed:', error.stack || error.message);
-  }
+  } catch (error) { console.error('Group web push failed:', error.stack || error.message); }
 }
 
 async function sendNativeRealtimeNotification(msg) {
@@ -2910,8 +2807,6 @@ io.on('connection', async (socket) => {
       }
       if (result.inserted) {
         await Promise.allSettled([
-          sendNativePrivateRealtimeNotification(peer, result.saved),
-          sendPrivatePush(peer, result.saved)
         ]);
       }
       if (typeof ack === 'function') ack({ ok:true, message:result.saved });
