@@ -9,8 +9,6 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
-import android.provider.Settings;
-import android.media.AudioAttributes;
 import androidx.core.app.NotificationCompat;
 
 import org.json.JSONArray;
@@ -33,9 +31,8 @@ import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
 
 public class NotificationPollService extends Service {
-    private static final String CHANNEL_ID = "wassup_messages_v5";
-    private static final String CALL_CHANNEL_ID = "wassup_calls_v1";
-    private static final String FG_CHANNEL_ID = "wassup_background_v5";
+    private static final String CHANNEL_ID = "wassup_messages_v6";
+    private static final String FG_CHANNEL_ID = "wassup_background_v6";
     private static final int SERVICE_ID = 7001;
 
     private ScheduledExecutorService executor;
@@ -86,21 +83,6 @@ public class NotificationPollService extends Service {
             messages.setShowBadge(true);
             messages.enableVibration(true);
             nm.createNotificationChannel(messages);
-
-            NotificationChannel calls = new NotificationChannel(
-                    CALL_CHANNEL_ID, "Incoming calls", NotificationManager.IMPORTANCE_HIGH
-            );
-            calls.setDescription("Incoming group call alerts");
-            calls.setShowBadge(true);
-            calls.enableVibration(true);
-            try {
-                AudioAttributes audio = new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build();
-                calls.setSound(Settings.System.DEFAULT_NOTIFICATION_URI, audio);
-            } catch (Exception ignored) {}
-            nm.createNotificationChannel(calls);
 
             NotificationChannel background = new NotificationChannel(
                     FG_CHANNEL_ID, "Background service", NotificationManager.IMPORTANCE_LOW
@@ -155,7 +137,9 @@ public class NotificationPollService extends Service {
             options.reconnectionDelay = 1000;
             options.reconnectionDelayMax = 10000;
             options.timeout = 10000;
-            options.transports = new String[]{"websocket"};
+            options.transports = new String[]{"websocket", "polling"};
+            options.upgrade = true;
+            options.forceNew = false;
 
             realtimeSocket = IO.socket(base, options);
 
@@ -184,20 +168,14 @@ public class NotificationPollService extends Service {
                 showMessageNotification(id, groupName, groupId, body);
             });
 
-            realtimeSocket.on("native-call-notification", args -> {
-                if (args == null || args.length == 0 || !(args[0] instanceof JSONObject)) return;
-                JSONObject data = (JSONObject) args[0];
-                String callId = data.optString("callId", "");
-                if (callId.isEmpty()) return;
-                String groupName = data.optString("groupName", "WhatsApp");
-                String groupId = data.optString("groupId", "");
-                String type = data.optString("type", "audio");
-                String fromName = data.optString("fromName", "Someone");
-                showCallNotification(callId, groupName, groupId, type, fromName);
+            realtimeSocket.on(Socket.EVENT_CONNECT_ERROR, args -> {
+                // Socket.IO will retry automatically; HTTP polling remains the
+                // independent recovery path below.
             });
 
-            realtimeSocket.on(Socket.EVENT_CONNECT_ERROR, args -> {
-                // Polling fallback continues independently.
+            realtimeSocket.on(Socket.EVENT_DISCONNECT, args -> {
+                // Keep the service alive. Socket.IO reconnection and HTTP polling
+                // will restore delivery when connectivity returns.
             });
 
             realtimeSocket.connect();
@@ -354,33 +332,6 @@ public class NotificationPollService extends Service {
         if (nm != null) {
             if (Build.VERSION.SDK_INT >= 24 && !nm.areNotificationsEnabled()) return;
             nm.notify(Math.abs(id.hashCode()), n);
-        }
-    }
-
-    private void showCallNotification(String callId, String groupName, String groupId, String type, String fromName) {
-        Intent open = new Intent(this, MainActivity.class);
-        open.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        open.putExtra("groupId", groupId);
-        open.putExtra("callId", callId);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent pending = PendingIntent.getActivity(this, Math.abs(callId.hashCode()), open, flags);
-        String title = "Incoming " + ("video".equals(type) ? "video" : "audio") + " call";
-        Notification n = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
-                .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
-                .setContentTitle(title)
-                .setContentText(String.format(Locale.US, "%s • %s", fromName == null || fromName.trim().isEmpty() ? "Someone" : fromName.trim(), groupName == null || groupName.trim().isEmpty() ? "WhatsApp" : groupName.trim()))
-                .setContentIntent(pending)
-                .setAutoCancel(true)
-                .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
-                .build();
-        NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
-        if (nm != null && (Build.VERSION.SDK_INT < 24 || nm.areNotificationsEnabled())) {
-            nm.notify(900000 + Math.abs(callId.hashCode() % 100000), n);
         }
     }
 

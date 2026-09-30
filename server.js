@@ -50,24 +50,59 @@ function removeSocketFromCalls(socket) {
 }
 
 
+function decodeBase64Url(value) {
+  const text = String(value || '').trim();
+  if (!text) return Buffer.alloc(0);
+  const normalized = text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
+  return Buffer.from(normalized + '='.repeat((4 - normalized.length % 4) % 4), 'base64');
+}
+
 function getVapidKeys() {
-  // Vercel deployments should provide a matching private/public pair. When only
-  // the private key exists, derive the public key from it. Without either key,
-  // derive a stable fallback from MONGODB_URI so the project still works without
-  // Firebase/Google services.
-  const privateKey = process.env.VAPID_PRIVATE_KEY || crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid').digest().toString('base64url');
-  const ecdh = crypto.createECDH('prime256v1');
-  ecdh.setPrivateKey(Buffer.from(privateKey, 'base64url'));
-  const derivedPublicKey = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
-  const configuredPublicKey = String(process.env.VAPID_PUBLIC_KEY || '').trim();
-  if (configuredPublicKey && configuredPublicKey !== derivedPublicKey) {
-    console.warn('VAPID_PUBLIC_KEY does not match VAPID_PRIVATE_KEY; using the public key derived from VAPID_PRIVATE_KEY.');
+  const configuredPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  const configuredPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+
+  let privateKeyBytes;
+  if (configuredPrivate) {
+    if (configuredPrivate.includes('BEGIN')) {
+      // Accept a PEM EC private key as well as web-push's normal base64url key.
+      const keyObj = crypto.createPrivateKey(configuredPrivate);
+      const jwk = keyObj.export({ format: 'jwk' });
+      privateKeyBytes = Buffer.from(String(jwk.d || ''), 'base64url');
+    } else {
+      privateKeyBytes = decodeBase64Url(configuredPrivate);
+    }
+  } else {
+    privateKeyBytes = crypto.createHash('sha256')
+      .update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key')
+      .digest();
   }
-  return { privateKey, publicKey: derivedPublicKey };
+  if (privateKeyBytes.length !== 32) {
+    throw new Error('VAPID_PRIVATE_KEY must be a 32-byte base64url key or P-256 PEM private key');
+  }
+
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.setPrivateKey(privateKeyBytes);
+  const derivedPublic = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
+  if (configuredPublic) {
+    const configuredPublicBytes = decodeBase64Url(configuredPublic);
+    if (configuredPublicBytes.length !== 65 || configuredPublicBytes[0] !== 4) {
+      throw new Error('VAPID_PUBLIC_KEY must be a valid 65-byte uncompressed P-256 public key');
+    }
+    if (configuredPublic !== derivedPublic) {
+      throw new Error('VAPID_PUBLIC_KEY does not match VAPID_PRIVATE_KEY');
+    }
+  }
+  return { privateKey: privateKeyBytes.toString('base64url'), publicKey: derivedPublic };
 }
 
 const vapid = getVapidKeys();
-try { webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapid.publicKey, vapid.privateKey); } catch (error) { console.error('VAPID setup failed:', error.message); }
+try {
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapid.publicKey, vapid.privateKey);
+  console.log('Web Push VAPID configured:', configuredVapidLabel());
+} catch (error) { console.error('VAPID setup failed:', error.message); }
+function configuredVapidLabel() {
+  return process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY ? 'Vercel VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY' : 'stable fallback VAPID key';
+}
 
 let mongoClientPromise = null;
 let dbPromise = null;
@@ -197,27 +232,33 @@ app.get('/api/push/public-key', (req, res) => {
   res.json({ ok: true, publicKey: vapid.publicKey });
 });
 
-app.get('/api/push/status', (req, res) => {
-  res.json({ ok: true, configured: Boolean(process.env.VAPID_PRIVATE_KEY), publicKey: vapid.publicKey, subject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com' });
-});
-
 app.post('/api/push/subscribe', async (req, res) => {
   try {
     const sub = req.body && req.body.subscription;
-    const userId = req.body && String(req.body.userId || '');
-    if (!sub || !sub.endpoint || !userId) return res.status(400).json({ ok: false });
+    const userId = String(req.body?.userId || '').trim();
+    if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth || !userId) return res.status(400).json({ ok:false, error:'Invalid push subscription' });
     const db = await getDb();
-    if (!db) return res.status(503).json({ ok: false });
+    if (!db) return res.status(503).json({ ok:false, error:'MongoDB is required for Web Push' });
     await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).updateOne(
       { endpoint: sub.endpoint },
-      { $set: { userId, subscription: sub, updatedAt: new Date() } },
-      { upsert: true }
+      { $set:{ userId, endpoint:sub.endpoint, subscription:sub, updatedAt:new Date() }, $setOnInsert:{ createdAt:new Date() } },
+      { upsert:true }
     );
-    res.json({ ok: true });
+    res.json({ ok:true });
   } catch (error) {
-    console.error('Push subscription save failed:', error.message);
-    res.status(500).json({ ok: false });
+    console.error('Push subscription save failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Push subscription save failed' });
   }
+});
+
+app.get('/api/push/status', async (req,res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    const db = await getDb();
+    if (!userId || !db) return res.json({ ok:true, configured:Boolean(db), subscriptions:0, vapid:Boolean(vapid.publicKey) });
+    const subscriptions = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).countDocuments({ userId });
+    res.json({ ok:true, configured:true, subscriptions, vapid:Boolean(vapid.publicKey) });
+  } catch (_) { res.status(500).json({ ok:false, subscriptions:0, vapid:Boolean(vapid.publicKey) }); }
 });
 
 app.post('/api/notifications/access', async (req, res) => {
@@ -255,10 +296,15 @@ app.get('/api/notifications/poll', async (req, res) => {
     const groupIds = access.map(x => normalizeGroupId(x.groupId)).filter(Boolean);
     if (!groupIds.length) return res.json({ ok: true, messages: [] });
 
+    // Notification delivery is device-level, not read-receipt-level.
+    // Another device (for example a laptop) may read the message first, but
+    // the user's phone must still receive its own notification. The Android
+    // client keeps a per-message ID set so removing readBy here does not create
+    // duplicates on the same device.
     const filter = {
       groupId: { $in: groupIds },
       userId: { $ne: userId },
-      deletedAt: { $exists: false },
+      deletedAt: { $exists: false }
     };
     if (after) {
       const d = new Date(after);
@@ -891,11 +937,8 @@ app.get('/api/groups', async (req, res) => {
     const groups = await collection.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1, _id: 1 }).toArray();
     res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
   } catch (error) {
-    // Never replace a user's existing group list with only the fallback group
-    // when MongoDB/Vercel is temporarily unavailable. Returning an error lets
-    // the client keep its cached group list and retry without data loss.
     console.error('Failed to load groups:', error.message);
-    res.status(503).json({ ok: false, retryable: true, error: 'Groups are temporarily unavailable.' });
+    res.json({ ok: true, groups: [{ id: DEFAULT_GROUP_ID, name: 'WhatsApp' }] });
   }
 });
 
@@ -2357,61 +2400,19 @@ async function sendPushToOtherUsers(msg) {
     });
     await Promise.all(docs.map(async (doc) => {
       try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL: 120, urgency: 'high' });
+        await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
       } catch (error) {
+        console.error('Web push delivery failed:', error.statusCode || '', error.body || error.message || error);
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
         }
       }
     }));
   } catch (error) {
-    console.error('Web push failed:', error.message);
+    console.error('Web push failed:', error.stack || error.message);
   }
 }
 
-
-
-async function getGroupPushRecipients(db, groupId, senderUserId = '') {
-  const gid = normalizeGroupId(groupId);
-  const accessDocs = await db.collection('notification_access')
-    .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
-  const users = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
-  if (senderUserId) users.delete(String(senderUserId).trim());
-  return [...users];
-}
-
-async function sendGroupCallPush(call) {
-  if (!MONGODB_URI || !call?.groupId || !call?.callId) return;
-  try {
-    const db = await getDb();
-    if (!db) return;
-    const recipients = await getGroupPushRecipients(db, call.groupId, call.fromUserId);
-    if (!recipients.length) return;
-    const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).find({ userId: { $in: recipients } }).toArray();
-    if (!docs.length) return;
-    const payload = JSON.stringify({
-      kind: 'incoming-call',
-      title: `Incoming ${call.type === 'video' ? 'video' : 'audio'} call`,
-      body: `${call.fromName || 'Someone'} is calling`,
-      callId: String(call.callId),
-      groupId: normalizeGroupId(call.groupId),
-      groupName: String(call.groupName || 'WhatsApp'),
-      callType: call.type === 'video' ? 'video' : 'audio',
-      url: '/#chat'
-    });
-    await Promise.all(docs.map(async doc => {
-      try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL: 60, urgency: 'high' });
-      } catch (error) {
-        if (error.statusCode === 404 || error.statusCode === 410) {
-          await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
-        }
-      }
-    }));
-  } catch (error) {
-    console.error('Incoming call web push failed:', error.message);
-  }
-}
 
 
 async function sendPrivatePush(peerUserId, msg) {
@@ -2432,15 +2433,16 @@ async function sendPrivatePush(peerUserId, msg) {
     });
     await Promise.all(docs.map(async doc => {
       try {
-        await webpush.sendNotification(doc.subscription, payload, { TTL:120, urgency:'high' });
+        await webpush.sendNotification(doc.subscription, payload, { TTL:300, urgency:'high' });
       } catch (error) {
+        console.error('Private web push delivery failed:', error.statusCode || '', error.body || error.message || error);
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
         }
       }
     }));
   } catch (error) {
-    console.error('Private push failed:', error.message);
+    console.error('Private push failed:', error.stack || error.message);
   }
 }
 
@@ -2739,12 +2741,6 @@ io.on('connection', async (socket) => {
       // this exact group. Another device/browser in the same group keeps them online.
       if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
-      try {
-        if (uid) {
-          const db = await getDb();
-          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
-        }
-      } catch (_) {}
     }
     if (typeof ack === 'function') ack({ ok: true });
   });
@@ -2843,16 +2839,26 @@ io.on('connection', async (socket) => {
       // Switching groups is also an offline transition for the old group, but
       // only when no other session for this User ID remains in that group.
       if (uid) await updateLastSeenForUser(uid, previous);
-      try {
-        if (uid) {
-          const db = await getDb();
-          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
-        }
-      } catch (_) {}
       setImmediate(() => emitGroupPresence(previous));
     }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
+    // Persist this user's membership/notification authorization for the group.
+    // It must survive switching to another group so every member continues to
+    // receive Web Push notifications while their browser/app is elsewhere.
+    try {
+      const uid = String(socket.userId || '').trim();
+      const db = await getDb();
+      if (db && uid && groupId) {
+        await db.collection('notification_access').updateOne(
+          { userId: uid, groupId },
+          { $set: { userId: uid, groupId, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+          { upsert: true }
+        );
+      }
+    } catch (error) {
+      console.error('Group notification membership save failed:', error.message);
+    }
     // Broadcast immediately after the new member is fully registered in the
     // room, so other users see login/re-login without refreshing.
     emitGroupPresence(groupId);
@@ -3303,16 +3309,6 @@ io.on('connection', async (socket) => {
         notified.add(target.id);
       }
     }
-    // Background Android service gets an immediate high-priority native alert.
-    for (const target of io.sockets.sockets.values()) {
-      const uid = String(target.userId || '').trim();
-      if (!uid || uid === call.startedByUserId || !target.authorizedGroups?.has(groupId)) continue;
-      target.emit('native-call-notification', {
-        callId, groupId, groupName: invite.groupName || 'WhatsApp', type,
-        fromUserId: call.startedByUserId, fromName: call.startedByName
-      });
-    }
-    sendGroupCallPush({ callId, groupId, groupName: invite.groupName || 'WhatsApp', type, fromUserId: call.startedByUserId, fromName: call.startedByName }).catch(() => {});
     if (typeof ack === 'function') ack({ ok: true, callId, type });
   });
 

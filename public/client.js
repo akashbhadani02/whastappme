@@ -26,8 +26,10 @@ let userId = localStorage.getItem('wa_user_id') || '';
 function syncAndroidNotificationIdentity() {
   try {
     if (window.AndroidBridge) {
-      if (userId) window.AndroidBridge.setUserId(String(userId));
+      // Save the URL first so the native background listener has everything it
+      // needs before it starts. This is intentionally Firebase-free.
       window.AndroidBridge.setAppUrl(window.location.origin);
+      if (userId) window.AndroidBridge.setUserId(String(userId));
     }
   } catch (_) {}
 }
@@ -456,15 +458,6 @@ passwordSubmit.addEventListener('click', async () => {
   let valid = false;
   if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
   else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
-  else if (pendingPasswordType === 'group') {
-    try {
-      const gid = String(groupPasswordTarget || '');
-      const r = await fetch('/api/groups/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({groupId:gid, password:supplied})});
-      const d = await r.json().catch(() => ({}));
-      valid = !!d.ok;
-      if (valid) setVerifiedGroupPassword(gid, supplied);
-    } catch (_) { valid = false; }
-  }
   else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
     try {
       const peerId = String(window.pendingPrivatePeerId || currentPrivateUser?.userId || '');
@@ -1276,6 +1269,13 @@ socket.on('history', history => {
   }
 });
 
+socket.on('connect', () => {
+  if (userId) {
+    refreshAllUnreadCounts().catch(() => {});
+    loadPrivateUsers().catch(() => {});
+  }
+});
+
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
 socket.on('private-history', history => {
@@ -1528,54 +1528,42 @@ socket.on('group-updated', data => {
   if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
 });
 
-function applyGroupList(nextGroups) {
-  // The sidebar is driven only by groups created by the admin and returned by
-  // /api/groups. Never inject a fake/default WhatsApp group when the server
-  // returns an empty list or is temporarily unavailable.
-  groups = Array.isArray(nextGroups) ? nextGroups.filter(g => g && g.id).map(g => ({
-    id: String(g.id), name: String(g.name || 'Group')
-  })) : [];
-  currentGroupId = '';
-  app?.classList.add('group-locked');
-  composer?.classList.add('hidden');
-  messageArea.innerHTML = '';
-  messages.clear();
-  deletedIds.clear();
-  starredIds.clear();
-  pinnedIds.clear();
-  deletedForMeIds.clear();
-  lastRenderedDate = '';
-  groupName = '';
-  localStorage.removeItem('wa_group_id');
-  localStorage.setItem('wa_group_list_cache', JSON.stringify(groups));
-  updateGroupNameUI();
-  renderGroupList();
-}
-
 async function loadGroups() {
-  // Cache-first startup: show the selection UI immediately and refresh the
-  // lightweight group list in the background. No history/unread data is loaded.
   try {
-    const cached = JSON.parse(localStorage.getItem('wa_group_list_cache') || '[]');
-    if (Array.isArray(cached) && cached.length) applyGroupList(cached);
-  } catch (_) {}
-  if (!groups.length) applyGroupList([]);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const response = await fetch('/api/groups', { cache: 'no-store', signal: controller.signal });
-    const data = await response.json().catch(() => ({}));
-    // Only replace the cached group list when the server actually returned a
-    // successful, non-empty list. A temporary 503/network error must never
-    // overwrite existing groups with the default/fallback group.
-    if (response.ok && Array.isArray(data.groups) && data.groups.length) {
-      applyGroupList(data.groups);
+    const response = await fetch('/api/groups', { cache: 'no-store' });
+    const data = await response.json();
+    groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
+    // Never restore an unlocked group automatically. Every time a group is opened
+    // (including after leaving it or reopening it later), its password is required.
+    const saved = groups.find(g => g.id === currentGroupId);
+    const selected = saved || groups[0];
+    currentGroupId = '';
+    app?.classList.add('group-locked');
+    composer?.classList.add('hidden');
+    messageArea.innerHTML = '';
+    messages.clear();
+    deletedIds.clear();
+    starredIds.clear();
+    pinnedIds.clear();
+    deletedForMeIds.clear();
+    lastRenderedDate = '';
+    if (selected) {
+      groupName = selected.name;
+      localStorage.setItem('wa_group_name', groupName);
+      updateGroupNameUI();
+    } else {
+      groupName = '';
+      localStorage.removeItem('wa_group_id');
+      localStorage.removeItem('wa_group_name');
+      updateGroupNameUI();
     }
+    renderGroupList();
+    refreshAllUnreadCounts().catch(() => {});
   } catch (_) {
-    // Keep cached groups; startup must never turn a slow Vercel response into
-    // a blocking server-error screen.
-  } finally {
-    clearTimeout(timeout);
+    groups = [];
+    currentGroupId = '';
+    renderGroupList();
+    updateGroupNameUI();
   }
 }
 
@@ -1583,98 +1571,285 @@ function renderGroupList() {
   if (!chatList) return;
   chatList.innerHTML = '';
 
-  const list = Array.isArray(groups) ? groups : [];
-  if (!list.length) {
-    const empty = document.createElement('div');
-    empty.className = 'group-list-empty';
-    empty.textContent = 'No groups created by admin';
-    chatList.appendChild(empty);
-    return;
-  }
+  const privateSection = document.createElement('div');
+  privateSection.className = 'chat-section-label';
+  privateSection.textContent = 'Private chats';
+  chatList.appendChild(privateSection);
 
-  list.forEach(group => {
-    const gid = String(group.id);
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = `chat-item${String(currentGroupId) === gid && activeChatType === 'group' ? ' active' : ''}`;
-    row.dataset.groupId = gid;
+  const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
+  visiblePrivate.forEach(user => {
+    const button = document.createElement('button');
+    button.className = 'chat-item' + (activeChatType === 'private' && currentPrivateUser?.userId === user.userId ? ' active' : '');
+    button.type = 'button';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar private-avatar'; avatar.textContent = firstCharacter(user.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    const last = privateLastMessages[user.userId];
+    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Private message';
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
+    summary.querySelector('strong').textContent = user.name;
+    summary.querySelector('.preview span').textContent = preview;
+    const badge = summary.querySelector('.group-unread-badge');
+    const unread = Number(privateUnreadCounts[user.userId] || 0);
+    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
+    button.append(avatar, summary);
+    button.addEventListener('click', () => openPrivateChat(user));
+    chatList.appendChild(button);
+  });
 
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar group-avatar';
-    avatar.textContent = firstCharacter(group.name, 'G');
+  const groupSection = document.createElement('div');
+  groupSection.className = 'chat-section-label';
+  groupSection.textContent = 'Groups';
+  chatList.appendChild(groupSection);
 
-    const summary = document.createElement('div');
-    summary.className = 'chat-summary';
-
-    const line = document.createElement('div');
-    line.className = 'chat-line group-title-line';
-    const strong = document.createElement('strong');
-    strong.textContent = group.name || 'Group';
-    const badge = document.createElement('span');
-    badge.className = `group-unread-badge${getUnreadCount(gid) > 0 ? ' show' : ''}`;
-    badge.textContent = getUnreadCount(gid) > 99 ? '99+' : String(getUnreadCount(gid));
-    line.append(strong, badge);
-
-    const previewLine = document.createElement('div');
-    previewLine.className = 'chat-line preview';
-    const preview = document.createElement('span');
-    preview.textContent = 'Tap to open group';
-    const lock = document.createElement('span');
-    lock.textContent = '🔒';
-    previewLine.append(preview, lock);
-
-    summary.append(line, previewLine);
-    row.append(avatar, summary);
-    row.addEventListener('click', () => openGroup(group));
-    chatList.appendChild(row);
+  groups.forEach(group => {
+    const button = document.createElement('button');
+    button.className = 'chat-item' + (activeChatType === 'group' && group.id === currentGroupId ? ' active' : '');
+    button.type = 'button';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
+    summary.querySelector('strong').textContent = group.name;
+    const badge = summary.querySelector('.group-unread-badge');
+    const unread = getUnreadCount(group.id);
+    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
+    button.append(avatar, summary);
+    button.addEventListener('click', () => openGroup(group));
+    chatList.appendChild(button);
   });
 }
 
-async function openGroup(group) {
-  if (!group || !group.id) return;
-  const gid = String(group.id);
-  const verified = getVerifiedGroupPassword(gid);
-  const enter = async (password) => {
-    try {
-      const r = await fetch('/api/groups/verify', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: gid, password: String(password || '') })
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.ok) { showToast('Wrong group password'); return; }
-      setVerifiedGroupPassword(gid, password);
-      currentGroupId = gid;
-      groupName = String(group.name || 'Group');
-      activeChatType = 'group';
-      currentPrivateUser = null;
-      localStorage.setItem('wa_group_id', gid);
-      localStorage.setItem('wa_group_name', groupName);
-      app?.classList.remove('group-locked');
-      composer?.classList.remove('hidden');
-      messageArea.innerHTML = '';
-      messages.clear();
-      deletedIds.clear();
-      readSent.clear();
-      lastRenderedDate = '';
-      updateGroupNameUI();
-      renderGroupList();
-      if (socket.connected) {
-        socket.emit('join-group', { groupId: gid, password: String(password || '') }, () => {
-          socket.emit('presence-login', { userId, deviceId }, () => {
-            socket.emit('presence-ping', { groupId: gid });
-          });
-          syncMessages().finally(markVisibleMessagesRead);
-        });
-      }
-      openChat(true);
-    } catch (_) {
-      showToast('Unable to open group. Please try again.');
-    }
-  };
+async function loadPrivateUsers() {
+  if (!userId) return;
+  try {
+    const r = await fetch(`/api/users?userId=${encodeURIComponent(userId)}`, { cache:'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (d.ok) privateUsers = Array.isArray(d.users) ? d.users : [];
+    renderGroupList();
+  } catch (_) {}
+}
 
-  if (verified) return enter(verified);
-  groupPasswordTarget = gid;
-  requestPassword('Group password', `Enter the password for ${group.name || 'this group'}.`, () => enter(passwordInput.value), 'group');
+function openPrivatePicker() {
+  if (!privateChatModal) return;
+  privateChatSearch.value = '';
+  renderPrivateUserList('');
+  privateChatModal.classList.remove('hidden');
+  setTimeout(() => privateChatSearch.focus(), 40);
+}
+
+function renderPrivateUserList(filter='') {
+  if (!privateUserList) return;
+  const q = String(filter || '').trim().toLowerCase();
+  privateUserList.innerHTML = '';
+  const list = privateUsers.filter(u => String(u.userId) !== String(userId) && (!q || String(u.name).toLowerCase().includes(q) || String(u.userId).toLowerCase().includes(q)));
+  if (!list.length) {
+    privateUserList.innerHTML = '<div class="private-empty">No other users found.</div>';
+    return;
+  }
+  list.forEach(user => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'private-user-row';
+    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small></small></div>`;
+    row.querySelector('.avatar').textContent = firstCharacter(user.name);
+    row.querySelector('strong').textContent = user.name;
+    row.querySelector('small').textContent = user.userId;
+    row.addEventListener('click', () => {
+      privateChatModal.classList.add('hidden');
+      openPrivateChat(user);
+    });
+    privateUserList.appendChild(row);
+  });
+}
+
+async function openPrivateChat(user, suppliedPassword='') {
+  if (!user || !user.userId || String(user.userId) === String(userId)) return;
+  let password = suppliedPassword;
+  if (!password) {
+    try {
+      const r = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
+      const d = await r.json().catch(() => ({}));
+      if (!d.exists) {
+        window.pendingPrivatePeerId = String(user.userId);
+        requestPassword('Set private chat password', 'Set a password for this private chat. Share it with the other person.', () => openPrivateChat(user, '__SET_BY_MODAL__'), 'private-setup');
+        return;
+      }
+    } catch (_) {
+      showToast('Could not check private chat password');
+      return;
+    }
+    window.pendingPrivatePeerId = String(user.userId);
+    requestPassword('Private chat password', 'Enter the password set for this private chat.', () => openPrivateChat(user, '__VERIFY_BY_MODAL__'), 'private-verify');
+    return;
+  }
+  if (password === '__SET_BY_MODAL__' || password === '__VERIFY_BY_MODAL__') {
+    password = window.privatePasswordForOpen || '';
+    window.privatePasswordForOpen = '';
+  }
+  if (!password) return;
+  window.privateChatPasswords = window.privateChatPasswords || {};
+  window.privateChatPasswords[String(user.userId)] = password;
+  activeChatType = 'private';
+  currentPrivateUser = user;
+  privateUnreadCounts[user.userId] = 0;
+  composer?.classList.remove('hidden');
+  app?.classList.remove('group-locked');
+  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+  messageArea.innerHTML = '';
+  updatePrivateHeader();
+  renderGroupList();
+  let privateSocketReady = false;
+  try {
+    if (socket.connected) {
+      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId, password }, result => {
+        privateSocketReady = !!result?.ok;
+        resolve();
+      }));
+    }
+  } catch (_) {}
+  if (!privateSocketReady) {
+    try {
+      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
+    } catch (_) {}
+  }
+  openChat();
+  requestAnimationFrame(() => scrollToBottom());
+}
+
+
+function updatePrivateHeader() {
+  if (!currentPrivateUser) return;
+  groupName = currentPrivateUser.name;
+  groupNameHeader.textContent = currentPrivateUser.name;
+  groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
+  if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
+  onlineStatus.textContent = 'private chat';
+  onlineStatus.className = 'offline';
+  document.querySelector('#audioCallBtn')?.classList.add('hidden');
+  document.querySelector('#videoCallBtn')?.classList.add('hidden');
+}
+
+function updateGroupHeader() {
+  updateGroupNameUI();
+}
+
+
+async function openGroup(group) {
+  if (!group) return;
+  activeChatType = 'group';
+  currentPrivateUser = null;
+
+  // Do not ask repeatedly inside the same tab. Once this tab has successfully
+  // verified a group's password, switching away and back can reuse that
+  // verification. sessionStorage is intentionally used instead of localStorage
+  // so closing the tab/browser session forces a fresh password next time.
+  const cachedPassword = group.id === 'main' ? '' : getVerifiedGroupPassword(group.id);
+  if (group.id === 'main' || cachedPassword) {
+    await joinGroup(group.id, true);
+    return;
+  }
+
+  groupPasswordTarget = group;
+  groupPasswordTitle.textContent = `Open ${group.name}`;
+  groupPasswordHelp.textContent = "Enter this group's password to open it.";
+  groupPasswordInput.value = ''; groupPasswordError.textContent = '';
+  groupPasswordModal.classList.remove('hidden');
+  setTimeout(() => groupPasswordInput.focus(), 50);
+}
+
+async function verifyAndOpenGroup() {
+  const group = groupPasswordTarget;
+  if (!group) return;
+  const password = groupPasswordInput.value;
+  if (!password) { groupPasswordError.textContent = 'Enter the group password'; return; }
+
+  // Prevent double-clicks and remove the feeling that the app is stuck.
+  groupPasswordSubmit.disabled = true;
+  const oldLabel = groupPasswordSubmit.textContent;
+  groupPasswordSubmit.textContent = 'Opening…';
+  groupPasswordError.textContent = '';
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch('/api/groups/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: group.id, password }),
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      groupPasswordError.textContent = response.status === 404 ? 'Group not found' : 'Wrong group password';
+      groupPasswordInput.select();
+      return;
+    }
+
+    groupPasswordModal.classList.add('hidden');
+    setVerifiedGroupPassword(group.id, password);
+    groupPasswordTarget = null;
+
+    // Open the UI immediately. Message history loads in the background so a
+    // slow MongoDB/network connection cannot make the password screen spin.
+    await joinGroup(group.id, true);
+  } catch (error) {
+    groupPasswordError.textContent = error?.name === 'AbortError'
+      ? 'Server is taking too long. Please try again.'
+      : 'Could not verify password';
+  } finally {
+    clearTimeout(timeout);
+    groupPasswordSubmit.disabled = false;
+    groupPasswordSubmit.textContent = oldLabel;
+  }
+}
+
+async function joinGroup(groupId, openAfter=true) {
+  activeChatType = 'group';
+  currentPrivateUser = null;
+  document.querySelector('#audioCallBtn')?.classList.remove('hidden');
+  document.querySelector('#videoCallBtn')?.classList.remove('hidden');
+  const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
+  currentGroupId = groupId || 'main';
+  // Optimistically clear while opening, then reconcile against the persisted
+  // User-ID readBy state after the history/read receipts arrive.
+  setUnreadCount(currentGroupId, 0);
+  otherGroupMemberOnline = false;
+  setOnlineStatus('offline');
+  groupName = group.name || 'WhatsApp';
+  app?.classList.remove('group-locked');
+  composer?.classList.remove('hidden');
+  localStorage.setItem('wa_group_id', currentGroupId);
+  localStorage.setItem('wa_group_name', groupName);
+  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+  messageArea.innerHTML = '';
+  updateGroupNameUI(); renderGroupList();
+  loadLocalMessageHistory();
+  await new Promise(resolve => {
+    if (!socket.connected) { resolve(); return; }
+    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '') }, () => {
+      // Persist notification authorization server-side after the password-protected
+      // group join succeeds. This lets the native background service receive only
+      // notifications from groups this User ID has actually entered.
+      if (userId) {
+        fetch('/api/notifications/access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, groupId: currentGroupId })
+        }).catch(() => {});
+      }
+      if (Notification.permission === 'granted') setupWebPush().catch(() => {});
+      socket.emit('presence-login', { userId, deviceId }, () => {
+        socket.emit('presence-ping', { groupId: currentGroupId });
+        resolve();
+      });
+    });
+  });
+  // Never block opening the chat on history synchronization.
+  // The chat becomes usable immediately; history is reconciled in the background.
+  syncMessages().catch(() => {});
+  if (openAfter) openChat();
 }
 
 loadGroups();
@@ -1795,8 +1970,14 @@ socket.on('connect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
-  if (Notification.permission === 'granted') setupWebPush().catch(() => {});
+  setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
+  // Reconcile all group badges immediately on every login/reconnect. Counts are
+  // user-level, so the same User ID sees the same seen/unseen state on all devices.
+  if (userId) {
+    refreshAllUnreadCounts().catch(() => {});
+    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
+  }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;
@@ -1944,6 +2125,7 @@ async function joinPrivateUserAndOpen() {
     syncAndroidNotificationIdentity();
     closePrivateUserJoinModal();
     socket.emit('register-user', { userId, name, deviceId });
+    setupWebPush().catch(() => {});
     socket.emit('presence-login', { userId, deviceId });
     const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
     privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
@@ -2726,6 +2908,8 @@ adminCallRecordingsDownloadAll?.addEventListener('click', () => {
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
+groupPasswordSubmit?.addEventListener('click', verifyAndOpenGroup);
+groupPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenGroup(); });
 groupPasswordClose?.addEventListener('click', () => groupPasswordModal.classList.add('hidden'));
 groupPasswordModal?.addEventListener('click', e => { if (e.target === groupPasswordModal) groupPasswordModal.classList.add('hidden'); });
 groupEditSave?.addEventListener('click', saveNewGroup);
@@ -2774,7 +2958,7 @@ function finishAccountLogin() {
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
-  if (Notification.permission === 'granted') setupWebPush().catch(() => {});
+  setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
@@ -3034,9 +3218,9 @@ updateAdvancedTools();
     if(offer)(async()=>{try{const o=await pc.createOffer();await pc.setLocalDescription(o);socket.emit('call-signal',{callId:activeCallId,to:id,kind:'offer',data:pc.localDescription})}catch(_){showToast('Could not connect a participant')}})();
     updateStatus();return pc}
   async function media(type){if(!navigator.mediaDevices?.getUserMedia)throw new Error('Your browser does not support microphone/camera calls.');return navigator.mediaDevices.getUserMedia({audio:true,video:type==='video'?{facingMode:{ideal:cameraFacing},width:{ideal:1280},height:{ideal:720}}:false})}
-  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=type==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
+  async function start(type){if(isActive()||!currentGroupId)return;try{cameraFacing='user';localStream=await media(type);activeCallType=type;activeCallId=newId();callStartedByMe=true;cameraOff=(type==='video');if(type==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('Call Ended'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(type==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=type==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=type==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} updateStatus();socket.emit('call-start',{callId:activeCallId,type,groupId:currentGroupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Could not start call');end(false)}})}catch(e){showToast(e?.message||'Microphone/camera permission is required')}}
   function incoming(d){if(!d?.callId||!d?.groupId||isActive()||pendingIncoming)return;const gid=String(d.groupId);const g=groups.find(x=>String(x.id)===gid)||{id:gid,name:d.groupName||'Group'};pendingIncoming=d;incomingCallName.textContent=safeText(d.fromName||'Someone',60);incomingCallType.textContent=`${d.type==='video'?'Group video':'Group audio'} call · ${safeText(g.name||'group',50)}`;incomingCallIcon.textContent=d.type==='video'?'📹':'📞';incomingCall.classList.remove('hidden')}
-  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('🔴 This call is being recorded for the group admin.'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=activeCallType==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
+  async function answer(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;try{activeCallId=d.callId;activeCallType=d.type==='video'?'video':'audio';callStartedByMe=false;cameraFacing='user';localStream=await media(activeCallType);cameraOff=(activeCallType==='video');if(activeCallType==='video'){const vt=localStream.getVideoTracks()[0];if(vt)vt.enabled=false;}showModal(); if(!recordingNoticeShown){showToast('Call Ended'); recordingNoticeShown=true;} startFeedRecording('local-'+socket.id,name||'You',localStream); if(activeCallType==='video'){localCallVideo.srcObject=localStream;localCallVideo.style.display='none'}if(callCameraBtn)callCameraBtn.textContent=activeCallType==='video'?'🚫':'📷'; if(callSwapCameraBtn){callSwapCameraBtn.style.display=activeCallType==='video'?'grid':'none';callSwapCameraBtn.textContent='🔄';callSwapCameraBtn.title='Swap camera';} socket.emit('call-join',{callId:activeCallId,groupId:d.groupId,userId,name},r=>{if(!r?.ok){showToast(r?.error||'Call ended');end(false);return}(r.peers||[]).forEach(id=>createPeer(id,'Participant',false));updateStatus()})}catch(e){showToast(e?.message||'Could not answer call')}}
   function reject(){const d=pendingIncoming;if(!d)return;incomingCall.classList.add('hidden');pendingIncoming=null;socket.emit('call-reject',{callId:d.callId,name,userId})}
   function end(notify=true){const id=activeCallId;if(notify&&id)socket.emit('call-leave',{callId:id,name,userId});[...peers.keys()].forEach(removePeer);stopFeedRecordings(); if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}if(localCallVideo)localCallVideo.srcObject=null;activeCallId='';activeCallType='';callStartedByMe=false;callModal.classList.add('hidden');callStage.querySelectorAll('.call-tile').forEach(x=>x.remove());recordingNoticeShown=false;updateStatus()}
   audioCallBtn?.addEventListener('click',()=>start('audio'));videoCallBtn?.addEventListener('click',()=>start('video'));callEndBtn?.addEventListener('click',()=>end(true));callCloseBtn?.addEventListener('click',()=>end(true));document.querySelector('.call-card')?.addEventListener('dblclick',async()=>{try{if(!document.fullscreenElement){await callModal.requestFullscreen?.()}else{await document.exitFullscreen?.()}}catch(_){callModal.classList.toggle('call-fullscreen')}});incomingAnswerBtn?.addEventListener('click',answer);incomingRejectBtn?.addEventListener('click',reject);
