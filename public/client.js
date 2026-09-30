@@ -439,6 +439,15 @@ passwordSubmit.addEventListener('click', async () => {
   let valid = false;
   if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
   else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
+  else if (pendingPasswordType === 'group') {
+    try {
+      const gid = String(groupPasswordTarget || '');
+      const r = await fetch('/api/groups/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({groupId:gid, password:supplied})});
+      const d = await r.json().catch(() => ({}));
+      valid = !!d.ok;
+      if (valid) setVerifiedGroupPassword(gid, supplied);
+    } catch (_) { valid = false; }
+  }
   else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
     try {
       const peerId = String(window.pendingPrivatePeerId || currentPrivateUser?.userId || '');
@@ -1503,7 +1512,12 @@ socket.on('group-updated', data => {
 });
 
 function applyGroupList(nextGroups) {
-  groups = Array.isArray(nextGroups) ? nextGroups : [];
+  // The sidebar is driven only by groups created by the admin and returned by
+  // /api/groups. Never inject a fake/default WhatsApp group when the server
+  // returns an empty list or is temporarily unavailable.
+  groups = Array.isArray(nextGroups) ? nextGroups.filter(g => g && g.id).map(g => ({
+    id: String(g.id), name: String(g.name || 'Group')
+  })) : [];
   currentGroupId = '';
   app?.classList.add('group-locked');
   composer?.classList.add('hidden');
@@ -1528,6 +1542,7 @@ async function loadGroups() {
     const cached = JSON.parse(localStorage.getItem('wa_group_list_cache') || '[]');
     if (Array.isArray(cached) && cached.length) applyGroupList(cached);
   } catch (_) {}
+  if (!groups.length) applyGroupList([]);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
@@ -1536,9 +1551,7 @@ async function loadGroups() {
     // Only replace the cached group list when the server actually returned a
     // successful, non-empty list. A temporary 503/network error must never
     // overwrite existing groups with the default/fallback group.
-    if (response.ok && Array.isArray(data.groups)) {
-      // The server list is authoritative: these are the groups created by admin.
-      // An empty successful list means admin currently has no groups.
+    if (response.ok && Array.isArray(data.groups) && data.groups.length) {
       applyGroupList(data.groups);
     }
   } catch (_) {
@@ -1547,6 +1560,104 @@ async function loadGroups() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function renderGroupList() {
+  if (!chatList) return;
+  chatList.innerHTML = '';
+
+  const list = Array.isArray(groups) ? groups : [];
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'group-list-empty';
+    empty.textContent = 'No groups created by admin';
+    chatList.appendChild(empty);
+    return;
+  }
+
+  list.forEach(group => {
+    const gid = String(group.id);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `chat-item${String(currentGroupId) === gid && activeChatType === 'group' ? ' active' : ''}`;
+    row.dataset.groupId = gid;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar group-avatar';
+    avatar.textContent = firstCharacter(group.name, 'G');
+
+    const summary = document.createElement('div');
+    summary.className = 'chat-summary';
+
+    const line = document.createElement('div');
+    line.className = 'chat-line group-title-line';
+    const strong = document.createElement('strong');
+    strong.textContent = group.name || 'Group';
+    const badge = document.createElement('span');
+    badge.className = `group-unread-badge${getUnreadCount(gid) > 0 ? ' show' : ''}`;
+    badge.textContent = getUnreadCount(gid) > 99 ? '99+' : String(getUnreadCount(gid));
+    line.append(strong, badge);
+
+    const previewLine = document.createElement('div');
+    previewLine.className = 'chat-line preview';
+    const preview = document.createElement('span');
+    preview.textContent = 'Tap to open group';
+    const lock = document.createElement('span');
+    lock.textContent = '🔒';
+    previewLine.append(preview, lock);
+
+    summary.append(line, previewLine);
+    row.append(avatar, summary);
+    row.addEventListener('click', () => openGroup(group));
+    chatList.appendChild(row);
+  });
+}
+
+async function openGroup(group) {
+  if (!group || !group.id) return;
+  const gid = String(group.id);
+  const verified = getVerifiedGroupPassword(gid);
+  const enter = async (password) => {
+    try {
+      const r = await fetch('/api/groups/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: gid, password: String(password || '') })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) { showToast('Wrong group password'); return; }
+      setVerifiedGroupPassword(gid, password);
+      currentGroupId = gid;
+      groupName = String(group.name || 'Group');
+      activeChatType = 'group';
+      currentPrivateUser = null;
+      localStorage.setItem('wa_group_id', gid);
+      localStorage.setItem('wa_group_name', groupName);
+      app?.classList.remove('group-locked');
+      composer?.classList.remove('hidden');
+      messageArea.innerHTML = '';
+      messages.clear();
+      deletedIds.clear();
+      readSent.clear();
+      lastRenderedDate = '';
+      updateGroupNameUI();
+      renderGroupList();
+      if (socket.connected) {
+        socket.emit('join-group', { groupId: gid, password: String(password || '') }, () => {
+          socket.emit('presence-login', { userId, deviceId }, () => {
+            socket.emit('presence-ping', { groupId: gid });
+          });
+          syncMessages().finally(markVisibleMessagesRead);
+        });
+      }
+      openChat(true);
+    } catch (_) {
+      showToast('Unable to open group. Please try again.');
+    }
+  };
+
+  if (verified) return enter(verified);
+  groupPasswordTarget = gid;
+  requestPassword('Group password', `Enter the password for ${group.name || 'this group'}.`, () => enter(passwordInput.value), 'group');
 }
 
 loadGroups();

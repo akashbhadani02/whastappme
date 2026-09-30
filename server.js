@@ -887,7 +887,7 @@ app.post('/api/private-messages', async (req, res) => {
 app.get('/api/groups', async (req, res) => {
   try {
     const collection = await getGroupSettingsCollection();
-    if (!collection) return res.status(503).json({ ok: false, retryable: true, error: 'Groups database is unavailable.' });
+    if (!collection) return res.json({ ok: true, groups: Array.from(fallbackGroups.values()).sort((a,b) => a.createdAt - b.createdAt).map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
     const groups = await collection.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1, _id: 1 }).toArray();
     res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
   } catch (error) {

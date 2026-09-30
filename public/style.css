@@ -300,3 +300,5 @@ body.dark-mode .recording-video-card{background:#202c33;border-color:#455a64}.re
 
 .new-chat-choice-list{display:grid;gap:10px;margin-top:14px}
 .new-chat-choice-list .secondary-choice{background:var(--panel-strong,#f0f2f5);color:inherit;border:1px solid var(--border,#ddd)}
+
+.group-list-empty{padding:24px 16px;text-align:center;color:#8696a0;font-size:13px;}
