@@ -336,7 +336,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=20', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=22', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -2053,6 +2053,7 @@ socket.on('connect', () => {
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
   setupWebPush().catch(() => {});
+  pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
   // Reconcile all group badges immediately on every login/reconnect. Counts are
   // user-level, so the same User ID sees the same seen/unseen state on all devices.
@@ -2108,6 +2109,7 @@ socket.on('disconnect', () => {
 });
 socket.on('reconnect', () => {
   rejoinCurrentGroupAfterReconnect().catch(() => {});
+  pollWebNotifications().catch(() => {});
 });
 socket.on('connect_error', () => {
   otherGroupMemberOnline = false;
@@ -2118,14 +2120,19 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     markVisibleMessagesRead();
     rejoinCurrentGroupAfterReconnect().catch(() => {});
-    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
+    if ('Notification' in window && Notification.permission === 'granted') {
+      setupWebPush().catch(() => {});
+      pollWebNotifications().catch(() => {});
+    }
   }
 });
 window.addEventListener('focus', () => {
   rejoinCurrentGroupAfterReconnect().catch(() => {});
+  pollWebNotifications().catch(() => {});
 });
 window.addEventListener('online', () => {
   rejoinCurrentGroupAfterReconnect().catch(() => {});
+  pollWebNotifications().catch(() => {});
   if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
 });
 // Do not emit leave-group on pagehide. Mobile browsers fire pagehide during

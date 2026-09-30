@@ -3365,7 +3365,7 @@ io.on('connection', async (socket) => {
       for (const targetId of room) {
         if (targetId === socket.id) continue;
         const target = io.sockets.sockets.get(targetId);
-        if (target && target.authorizedGroups?.has(groupId)) {
+        if (target && String(target.groupId || '') === groupId && target.authorizedGroups?.has(groupId)) {
           target.emit('incoming-call', invite);
           notified.add(targetId);
         }
@@ -3373,7 +3373,7 @@ io.on('connection', async (socket) => {
     }
     for (const target of io.sockets.sockets.values()) {
       if (notified.has(target.id)) continue;
-      if (target.authorizedGroups?.has(groupId)) {
+      if (String(target.groupId || '') === groupId && target.authorizedGroups?.has(groupId)) {
         target.emit('incoming-call', invite);
         notified.add(target.id);
       }
@@ -3383,7 +3383,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-join', async (data, ack) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (call && !socket.authorizedGroups?.has(call.groupId)) {
+    if (call && (String(socket.groupId || '') !== String(call.groupId || '') || !socket.authorizedGroups?.has(call.groupId))) {
       return typeof ack === 'function' && ack({ ok: false, error: 'You are not authorized for this group call.' });
     }
     if (!call) {
@@ -3401,9 +3401,10 @@ io.on('connection', async (socket) => {
 
   socket.on('call-signal', (data) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (!call || !call.participants.has(socket.id)) return;
+    if (!call || !call.participants.has(socket.id) || String(socket.groupId || '') !== String(call.groupId || '') || !socket.authorizedGroups?.has(call.groupId)) return;
     const to = String(data?.to || '');
-    if (!to || !call.participants.has(to)) return;
+    const targetSocket = io.sockets.sockets.get(to);
+    if (!to || !call.participants.has(to) || !targetSocket || String(targetSocket.groupId || '') !== String(call.groupId || '') || !targetSocket.authorizedGroups?.has(call.groupId)) return;
     io.to(to).emit('call-signal', {
       callId, from: socket.id, kind: String(data?.kind || ''), data: data?.data || null
     });
@@ -3425,7 +3426,7 @@ io.on('connection', async (socket) => {
     // End the call for every connected member authorized for this exact group,
     // including members who only have the incoming-call prompt open.
     for (const target of io.sockets.sockets.values()) {
-      if (!target.authorizedGroups?.has(call.groupId)) continue;
+      if (String(target.groupId || '') !== String(call.groupId || '') || !target.authorizedGroups?.has(call.groupId)) continue;
       target.emit('call-ended', payload);
       if (target.callId === call.callId) {
         target.leave(room);
@@ -3447,7 +3448,7 @@ io.on('connection', async (socket) => {
 
   socket.on('call-reject', (data) => {
     const callId = String(data?.callId || ''), call = activeCalls.get(callId);
-    if (!call || !socket.authorizedGroups?.has(call.groupId)) return;
+    if (!call || String(socket.groupId || '') !== String(call.groupId || '') || !socket.authorizedGroups?.has(call.groupId)) return;
     // Declining by ANY invited member also ends the active call for everyone
     // who has already joined it.
     terminateCall(callId, 'declined', socket.id, data?.name);
