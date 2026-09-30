@@ -891,8 +891,11 @@ app.get('/api/groups', async (req, res) => {
     const groups = await collection.find({}, { projection: { _id: 1, name: 1 } }).sort({ createdAt: 1, _id: 1 }).toArray();
     res.json({ ok: true, groups: groups.map(g => ({ id: String(g._id), name: g.name || 'WhatsApp' })) });
   } catch (error) {
+    // Never replace a user's existing group list with only the fallback group
+    // when MongoDB/Vercel is temporarily unavailable. Returning an error lets
+    // the client keep its cached group list and retry without data loss.
     console.error('Failed to load groups:', error.message);
-    res.json({ ok: true, groups: [{ id: DEFAULT_GROUP_ID, name: 'WhatsApp' }] });
+    res.status(503).json({ ok: false, retryable: true, error: 'Groups are temporarily unavailable.' });
   }
 });
 

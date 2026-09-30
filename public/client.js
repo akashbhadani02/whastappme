@@ -1533,8 +1533,13 @@ async function loadGroups() {
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const response = await fetch('/api/groups', { cache: 'no-store', signal: controller.signal });
-    const data = await response.json();
-    if (response.ok && Array.isArray(data.groups)) applyGroupList(data.groups);
+    const data = await response.json().catch(() => ({}));
+    // Only replace the cached group list when the server actually returned a
+    // successful, non-empty list. A temporary 503/network error must never
+    // overwrite existing groups with the default/fallback group.
+    if (response.ok && Array.isArray(data.groups) && data.groups.length) {
+      applyGroupList(data.groups);
+    }
   } catch (_) {
     // Keep cached groups; startup must never turn a slow Vercel response into
     // a blocking server-error screen.
