@@ -2699,13 +2699,42 @@ async function emitGroupPresence(groupId) {
   }
 }
 
+const PRESENCE_HEARTBEAT_MS = 5000;
+const PRESENCE_STALE_MS = 20000;
+setInterval(() => {
+  const now = Date.now();
+  for (const sock of io.sockets.sockets.values()) {
+    if (!sock.groupId) continue;
+    const last = Number(sock.lastPresencePingAt || 0);
+    if (!last || now - last <= PRESENCE_STALE_MS) continue;
+    const uid = String(sock.userId || '').trim();
+    const gid = normalizeGroupId(sock.groupId);
+    // Do not force-close the Socket.IO transport; its own heartbeat owns the
+    // connection lifecycle. Instead, remove the stale group membership so the
+    // UI cannot keep showing this user as online while the app is suspended.
+    try { sock.leave(`group:${gid}`); } catch (_) {}
+    sock.groupId = '';
+    if (uid && gid) updateLastSeenForUser(uid, gid).catch(() => {});
+    setImmediate(() => emitGroupPresence(gid));
+  }
+}, PRESENCE_HEARTBEAT_MS);
+
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
 
-  socket.on('presence-ping', (data) => {
-    // Presence is always recalculated from the live sockets in this exact group.
-    if (socket.groupId) emitGroupPresence(socket.groupId);
+  socket.on('presence-ping', (data, ack) => {
+    // Refresh this socket's explicit presence heartbeat. Socket.IO also has its
+    // own transport heartbeat, but keeping an app-level heartbeat makes the
+    // online/offline UI resilient to suspended/background tabs and reconnects.
+    socket.lastPresencePingAt = Date.now();
+    const requestedGroup = normalizeGroupId(data?.groupId || '');
+    if (socket.groupId && (!requestedGroup || requestedGroup === normalizeGroupId(socket.groupId))) {
+      emitGroupPresence(socket.groupId);
+      if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId });
+    } else if (typeof ack === 'function') {
+      ack({ ok: false, groupId: socket.groupId || '' });
+    }
   });
 
   // Explicit presence sync for login/re-login without requiring a page refresh.
@@ -2714,6 +2743,7 @@ io.on('connection', async (socket) => {
   socket.on('presence-login', (data, ack) => {
     const nextUserId = String(data?.userId || '').trim();
     if (nextUserId) socket.userId = nextUserId;
+    socket.lastPresencePingAt = Date.now();
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (typeof ack === 'function') ack({ ok: true, groupId: socket.groupId || '' });
   });
@@ -2756,6 +2786,7 @@ io.on('connection', async (socket) => {
   });
 
   socket.authorizedGroups = new Set([DEFAULT_GROUP_ID]);
+  socket.lastPresencePingAt = Date.now();
 
   socket.on('leave-group', async (data, ack) => {
     const requested = normalizeGroupId(data?.groupId || socket.groupId || '');
@@ -2869,6 +2900,7 @@ io.on('connection', async (socket) => {
       setImmediate(() => emitGroupPresence(previous));
     }
     socket.groupId = groupId;
+    socket.lastPresencePingAt = Date.now();
     socket.join(`group:${groupId}`);
     // Persist this user's membership/notification authorization immediately
     // after password authorization. Do not wait for chat history: a slow history

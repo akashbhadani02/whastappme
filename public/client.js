@@ -1561,7 +1561,7 @@ setInterval(() => {
   // The badge is user-level, so every group must be refreshed independently.
   if (userId && Array.isArray(groups) && groups.length) refreshAllUnreadCounts().catch(() => {});
   if (currentGroupId) syncMessages();
-}, 3000);
+}, 5000);
 
 socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
@@ -2104,6 +2104,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 window.addEventListener('focus', () => {
+  if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
+});
+window.addEventListener('online', () => {
   if (socket.connected && currentGroupId) socket.emit('presence-ping', { groupId: currentGroupId });
 });
 window.addEventListener('pagehide', () => {
