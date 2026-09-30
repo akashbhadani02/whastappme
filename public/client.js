@@ -328,57 +328,48 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
 }
 
+let webPushSetupPromise = null;
 async function setupWebPush() {
-  if (!userId) return false;
-  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
-  if (Notification.permission !== 'granted') return false;
-  try {
-    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-    await registration.update().catch(() => {});
-    await navigator.serviceWorker.ready;
-    const response = await fetch('/api/push/public-key', { cache: 'no-store' });
-    const data = await response.json();
-    if (!data.publicKey) return false;
-    const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
-    let subscription = await registration.pushManager.getSubscription();
-    // A subscription is cryptographically tied to the VAPID public key. If the
-    // Vercel key pair was rotated, reuse of the old subscription makes every
-    // send fail. Re-subscribe automatically with the currently deployed key.
-    if (subscription) {
-      try {
-        const oldKey = subscription.options?.applicationServerKey;
-        const oldBytes = oldKey ? new Uint8Array(oldKey) : null;
-        const sameKey = oldBytes && oldBytes.length === applicationServerKey.length &&
-          oldBytes.every((v, i) => v === applicationServerKey[i]);
-        if (!sameKey) {
-          await subscription.unsubscribe().catch(() => {});
-          subscription = null;
-        }
-      } catch (_) {
-        await subscription.unsubscribe().catch(() => {});
-        subscription = null;
+  if (webPushSetupPromise) return webPushSetupPromise;
+  webPushSetupPromise = (async () => {
+    if (!userId) return false;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
+    if (Notification.permission !== 'granted') return false;
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      await registration.update().catch(() => {});
+      await navigator.serviceWorker.ready;
+      const response = await fetch('/api/push/public-key', { cache: 'no-store' });
+      if (!response.ok) return false;
+      const data = await response.json().catch(() => ({}));
+      if (!data.publicKey) return false;
+      const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
+      let subscription = await registration.pushManager.getSubscription();
+      // Never unsubscribe a valid existing subscription merely because a browser
+      // does not expose applicationServerKey in subscription.options. That field
+      // is commonly unavailable and doing so can create an unsubscribe/subscribe
+      // race that silently loses notifications. Only recreate if subscribe itself
+      // fails with the current VAPID key.
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
       }
-    }
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey
+      let saveResponse = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, subscription })
       });
+      if (!saveResponse.ok) return false;
+      let saveData = await saveResponse.json().catch(() => ({}));
+      if (saveData.ok !== true) return false;
+      return true;
+    } catch (error) {
+      console.warn('Web push setup failed:', error);
+      return false;
+    } finally {
+      webPushSetupPromise = null;
     }
-    const saveResponse = await fetch('/api/push/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, subscription })
-    });
-    if (!saveResponse.ok) return false;
-    const saveData = await saveResponse.json().catch(() => ({}));
-    if (saveData.ok !== true) return false;
-    const status = await fetch(`/api/push/status?userId=${encodeURIComponent(userId)}`, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
-    return Boolean(status?.ok && Number(status?.subscriptions || 0) > 0);
-  } catch (error) {
-    console.warn('Web push setup failed:', error);
-    return false;
-  }
+  })();
+  return webPushSetupPromise;
 }
 
 function notificationSetup() {

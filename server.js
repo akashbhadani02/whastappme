@@ -2870,9 +2870,9 @@ io.on('connection', async (socket) => {
     }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
-    // Persist this user's membership/notification authorization for the group.
-    // It must survive switching to another group so every member continues to
-    // receive Web Push notifications while their browser/app is elsewhere.
+    // Persist this user's membership/notification authorization immediately
+    // after password authorization. Do not wait for chat history: a slow history
+    // query must never prevent this member from becoming eligible for push alerts.
     try {
       const uid = String(socket.userId || '').trim();
       const db = await getDb();
@@ -2886,17 +2886,12 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Group notification membership save failed:', error.message);
     }
-    // Broadcast immediately after the new member is fully registered in the
-    // room, so other users see login/re-login without refreshing.
+    // A successful password check is enough to acknowledge group entry. History
+    // is intentionally loaded in the background so notifications never depend on
+    // the speed of the messages query.
+    if (typeof ack === 'function') ack({ ok: true, groupId });
     emitGroupPresence(groupId);
-    try {
-      const history = await loadMessages('', groupId);
-      socket.emit('history', history);
-      if (typeof ack === 'function') ack({ ok: true, groupId });
-    } catch (error) {
-      socket.emit('history', []);
-      if (typeof ack === 'function') ack({ ok: false });
-    }
+    loadMessages('', groupId).then(history => socket.emit('history', history)).catch(() => socket.emit('history', []));
   });
 
   // Do not consider a socket a member of any group until the client has
