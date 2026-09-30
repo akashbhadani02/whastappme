@@ -307,7 +307,7 @@ app.get('/api/notifications/poll', async (req, res) => {
       const d = new Date(after);
       if (!Number.isNaN(d.getTime())) filter.createdAt = { $gt: d };
     }
-    const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, groupName: 1, user: 1, message: 1, createdAt: 1 } })
+    const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, groupName: 1, userId: 1, user: 1, message: 1, createdAt: 1 } })
       .sort({ createdAt: 1 }).limit(50).toArray();
 
     const settings = db.collection(GROUP_SETTINGS_COLLECTION_NAME);
@@ -318,7 +318,12 @@ app.get('/api/notifications/poll', async (req, res) => {
     res.json({ ok: true, messages: messages.map(m => ({
       ...m,
       createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt || ''),
-      groupName: groupNames.get(String(m.groupId || '')) || String(m.groupId || 'WhatsApp')
+      groupName: groupNames.get(String(m.groupId || '')) || String(m.groupId || 'WhatsApp'),
+      // For private messages the recipient must be able to open the exact
+      // private chat from the Android notification. The sender is stored in
+      // userId on the message document. Group notifications leave this empty.
+      privateUserId: m.groupId ? '' : String(m.userId || ''),
+      body: 'New message'
     })) });
   } catch (error) {
     console.error('Notification poll failed:', error.message);
@@ -2510,7 +2515,7 @@ async function sendNativeRealtimeNotification(msg) {
     // Realtime message notifications are also user-wide. Calls are not routed
     // through this path and remain strictly locked to their originating group.
     const accessDocs = await db.collection('notification_access')
-      .find({}, { projection: { userId: 1 } }).toArray();
+      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
     const allowedUsers = new Set(
       accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean)
     );
