@@ -51,26 +51,48 @@ function removeSocketFromCalls(socket) {
 
 
 function decodeBase64Url(value) {
-  return Buffer.from(String(value || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  const text = String(value || '').trim();
+  if (!text) return Buffer.alloc(0);
+  const normalized = text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
+  return Buffer.from(normalized + '='.repeat((4 - normalized.length % 4) % 4), 'base64');
 }
 
 function getVapidKeys() {
-  // Use the SAME VAPID key pair configured in Vercel whenever available.
-  // The browser receives this exact public key and the server signs with the
-  // matching private key. This avoids creating a different key on every build.
   const configuredPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
   const configuredPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
-  const privateKeyBytes = configuredPrivate
-    ? decodeBase64Url(configuredPrivate)
-    : crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key').digest();
-  if (privateKeyBytes.length !== 32) throw new Error('VAPID_PRIVATE_KEY must decode to exactly 32 bytes');
+
+  let privateKeyBytes;
+  if (configuredPrivate) {
+    if (configuredPrivate.includes('BEGIN')) {
+      // Accept a PEM EC private key as well as web-push's normal base64url key.
+      const keyObj = crypto.createPrivateKey(configuredPrivate);
+      const jwk = keyObj.export({ format: 'jwk' });
+      privateKeyBytes = Buffer.from(String(jwk.d || ''), 'base64url');
+    } else {
+      privateKeyBytes = decodeBase64Url(configuredPrivate);
+    }
+  } else {
+    privateKeyBytes = crypto.createHash('sha256')
+      .update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key')
+      .digest();
+  }
+  if (privateKeyBytes.length !== 32) {
+    throw new Error('VAPID_PRIVATE_KEY must be a 32-byte base64url key or P-256 PEM private key');
+  }
 
   const ecdh = crypto.createECDH('prime256v1');
   ecdh.setPrivateKey(privateKeyBytes);
   const derivedPublic = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
-  const publicKey = configuredPublic || derivedPublic;
-  if (decodeBase64Url(publicKey).length !== 65) throw new Error('VAPID_PUBLIC_KEY must be a valid 65-byte uncompressed P-256 public key');
-  return { privateKey: privateKeyBytes.toString('base64url'), publicKey };
+  if (configuredPublic) {
+    const configuredPublicBytes = decodeBase64Url(configuredPublic);
+    if (configuredPublicBytes.length !== 65 || configuredPublicBytes[0] !== 4) {
+      throw new Error('VAPID_PUBLIC_KEY must be a valid 65-byte uncompressed P-256 public key');
+    }
+    if (configuredPublic !== derivedPublic) {
+      throw new Error('VAPID_PUBLIC_KEY does not match VAPID_PRIVATE_KEY');
+    }
+  }
+  return { privateKey: privateKeyBytes.toString('base64url'), publicKey: derivedPublic };
 }
 
 const vapid = getVapidKeys();
@@ -274,11 +296,15 @@ app.get('/api/notifications/poll', async (req, res) => {
     const groupIds = access.map(x => normalizeGroupId(x.groupId)).filter(Boolean);
     if (!groupIds.length) return res.json({ ok: true, messages: [] });
 
+    // Notification delivery is device-level, not read-receipt-level.
+    // Another device (for example a laptop) may read the message first, but
+    // the user's phone must still receive its own notification. The Android
+    // client keeps a per-message ID set so removing readBy here does not create
+    // duplicates on the same device.
     const filter = {
       groupId: { $in: groupIds },
       userId: { $ne: userId },
-      deletedAt: { $exists: false },
-      readBy: { $ne: userId }
+      deletedAt: { $exists: false }
     };
     if (after) {
       const d = new Date(after);

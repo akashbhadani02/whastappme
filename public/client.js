@@ -339,11 +339,30 @@ async function setupWebPush() {
     const response = await fetch('/api/push/public-key', { cache: 'no-store' });
     const data = await response.json();
     if (!data.publicKey) return false;
+    const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
     let subscription = await registration.pushManager.getSubscription();
+    // A subscription is cryptographically tied to the VAPID public key. If the
+    // Vercel key pair was rotated, reuse of the old subscription makes every
+    // send fail. Re-subscribe automatically with the currently deployed key.
+    if (subscription) {
+      try {
+        const oldKey = subscription.options?.applicationServerKey;
+        const oldBytes = oldKey ? new Uint8Array(oldKey) : null;
+        const sameKey = oldBytes && oldBytes.length === applicationServerKey.length &&
+          oldBytes.every((v, i) => v === applicationServerKey[i]);
+        if (!sameKey) {
+          await subscription.unsubscribe().catch(() => {});
+          subscription = null;
+        }
+      } catch (_) {
+        await subscription.unsubscribe().catch(() => {});
+        subscription = null;
+      }
+    }
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(data.publicKey)
+        applicationServerKey
       });
     }
     const saveResponse = await fetch('/api/push/subscribe', {
