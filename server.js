@@ -50,19 +50,37 @@ function removeSocketFromCalls(socket) {
 }
 
 
+function decodeBase64Url(value) {
+  return Buffer.from(String(value || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
 function getVapidKeys() {
-  // Prefer an explicit VAPID private key. If it is not configured, derive a stable
-  // server-only key from MONGODB_URI so deployments do not need another secret.
-  const privateKeyBytes = process.env.VAPID_PRIVATE_KEY ? Buffer.from(String(process.env.VAPID_PRIVATE_KEY).replace(/-/g, '+').replace(/_/g, '/'), 'base64') : crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key').digest();
-  if (privateKeyBytes.length !== 32) throw new Error('VAPID private key must decode to 32 bytes');
+  // Use the SAME VAPID key pair configured in Vercel whenever available.
+  // The browser receives this exact public key and the server signs with the
+  // matching private key. This avoids creating a different key on every build.
+  const configuredPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  const configuredPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+  const privateKeyBytes = configuredPrivate
+    ? decodeBase64Url(configuredPrivate)
+    : crypto.createHash('sha256').update((MONGODB_URI || 'wassup-push-fallback') + ':vapid-p256-private-key').digest();
+  if (privateKeyBytes.length !== 32) throw new Error('VAPID_PRIVATE_KEY must decode to exactly 32 bytes');
+
   const ecdh = crypto.createECDH('prime256v1');
   ecdh.setPrivateKey(privateKeyBytes);
-  const publicKey = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
+  const derivedPublic = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
+  const publicKey = configuredPublic || derivedPublic;
+  if (decodeBase64Url(publicKey).length !== 65) throw new Error('VAPID_PUBLIC_KEY must be a valid 65-byte uncompressed P-256 public key');
   return { privateKey: privateKeyBytes.toString('base64url'), publicKey };
 }
 
 const vapid = getVapidKeys();
-try { webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapid.publicKey, vapid.privateKey); } catch (error) { console.error('VAPID setup failed:', error.message); }
+try {
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapid.publicKey, vapid.privateKey);
+  console.log('Web Push VAPID configured:', configuredVapidLabel());
+} catch (error) { console.error('VAPID setup failed:', error.message); }
+function configuredVapidLabel() {
+  return process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY ? 'Vercel VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY' : 'stable fallback VAPID key';
+}
 
 let mongoClientPromise = null;
 let dbPromise = null;
@@ -213,11 +231,12 @@ app.post('/api/push/subscribe', async (req, res) => {
 
 app.get('/api/push/status', async (req,res) => {
   try {
-    const userId=String(req.query?.userId||'').trim(); const db=await getDb();
-    if(!userId||!db) return res.json({ok:true,configured:Boolean(db),subscriptions:0});
-    const subscriptions=await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).countDocuments({userId});
-    res.json({ok:true,configured:true,subscriptions,vapid:Boolean(vapid.publicKey)});
-  } catch (_) { res.status(500).json({ok:false,subscriptions:0}); }
+    const userId = String(req.query?.userId || '').trim();
+    const db = await getDb();
+    if (!userId || !db) return res.json({ ok:true, configured:Boolean(db), subscriptions:0, vapid:Boolean(vapid.publicKey) });
+    const subscriptions = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).countDocuments({ userId });
+    res.json({ ok:true, configured:true, subscriptions, vapid:Boolean(vapid.publicKey) });
+  } catch (_) { res.status(500).json({ ok:false, subscriptions:0, vapid:Boolean(vapid.publicKey) }); }
 });
 
 app.post('/api/notifications/access', async (req, res) => {
@@ -2357,13 +2376,14 @@ async function sendPushToOtherUsers(msg) {
       try {
         await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
       } catch (error) {
+        console.error('Web push delivery failed:', error.statusCode || '', error.body || error.message || error);
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
         }
       }
     }));
   } catch (error) {
-    console.error('Web push failed:', error.message);
+    console.error('Web push failed:', error.stack || error.message);
   }
 }
 
@@ -2389,13 +2409,14 @@ async function sendPrivatePush(peerUserId, msg) {
       try {
         await webpush.sendNotification(doc.subscription, payload, { TTL:300, urgency:'high' });
       } catch (error) {
+        console.error('Private web push delivery failed:', error.statusCode || '', error.body || error.message || error);
         if (error.statusCode === 404 || error.statusCode === 410) {
           await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
         }
       }
     }));
   } catch (error) {
-    console.error('Private push failed:', error.message);
+    console.error('Private push failed:', error.stack || error.message);
   }
 }
 

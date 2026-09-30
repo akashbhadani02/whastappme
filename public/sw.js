@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v14-webpush-reliable';
+const CACHE = 'whatsapp-pwa-v16-single-webpush';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

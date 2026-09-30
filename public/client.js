@@ -362,58 +362,22 @@ async function setupWebPush() {
   }
 }
 
-let foregroundNotificationIds = new Set();
-function notifyIncomingMessage(msg) {
-  if (!msg || !msg.id || msg.userId === userId) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  // The service worker is the background source of truth. Foreground
-  // notifications are only a fallback when PushManager is unavailable or no
-  // subscription exists on this browser.
-  if ('serviceWorker' in navigator && 'PushManager' in window) {
-    navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
-      if (sub) return;
-      showForegroundNotification(msg);
-    }).catch(() => showForegroundNotification(msg));
-  } else {
-    showForegroundNotification(msg);
-  }
-}
-function showForegroundNotification(msg) {
-  const id = String(msg.id);
-  if (foregroundNotificationIds.has(id)) return;
-  foregroundNotificationIds.add(id);
-  if (foregroundNotificationIds.size > 200) foregroundNotificationIds = new Set([...foregroundNotificationIds].slice(-100));
-  const group = groups.find(g => String(g.id) === String(msg.groupId));
-  const privatePeer = msg.privateUserId ? privateUsers.find(u => String(u.userId) === String(msg.privateUserId)) : null;
-  const title = String(msg.privateUserId ? (msg.user || privatePeer?.name || 'Private chat') : (msg.groupName || group?.name || 'WhatsApp'));
-  const n = new Notification(title, {
-    body: 'New message',
-    tag: `wa-${id}`,
-    icon: '/icon.svg',
-    data: { groupId: msg.groupId || currentGroupId, privateUserId: msg.privateUserId || '', messageId: id }
-  });
-  n.onclick = () => {
-    try { window.focus(); } catch (_) {}
-    if (msg.privateUserId) {
-      const target = privateUsers.find(u => String(u.userId) === String(msg.privateUserId));
-      if (target) openPrivateChat(target);
-    } else if (msg.groupId && String(msg.groupId) !== String(currentGroupId)) {
-      const target = groups.find(g => String(g.id) === String(msg.groupId));
-      if (target) joinGroup(target.id, true);
-    }
-    n.close();
-  };
-}
-
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // Browsers generally allow the permission prompt only from a user gesture.
-  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
-  document.addEventListener('pointerdown', once, { once: true });
-  document.addEventListener('keydown', once, { once: true });
+  // Push subscription creation must happen after a user gesture in browsers.
+  const once = async () => {
+    const granted = await enableNotifications();
+    if (granted && userId) await setupWebPush().catch(() => {});
+    if (granted) {
+      document.removeEventListener('pointerdown', once);
+      document.removeEventListener('keydown', once);
+    }
+  };
+  document.addEventListener('pointerdown', once);
+  document.addEventListener('keydown', once);
 }
 notificationSetup();
-if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
+if ('Notification' in window && Notification.permission === 'granted' && userId) setupWebPush().catch(() => {});
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -1239,7 +1203,6 @@ function receivePrivateMessage(msg, options = {}) {
   privateLastMessages[peer] = msg;
   if (activeChatType !== 'private' || String(currentPrivateUser?.userId) !== peer) {
     renderGroupList();
-    notifyIncomingMessage({ ...msg, groupId: '', privateUserId: msg.userId });
     return;
   }
   renderMessage(msg, isIncoming ? 'incoming' : 'outgoing');
@@ -1273,7 +1236,6 @@ function receiveMessage(msg, options = {}) {
   if (msg.createdAt) lastSyncAt = lastSyncAt ? new Date(Math.max(new Date(lastSyncAt).getTime(), new Date(msg.createdAt).getTime())).toISOString() : new Date(msg.createdAt).toISOString();
   updatePreview(msg.message || (msg.type === 'image' ? '📷 Photo' : msg.type === 'video' ? '🎥 Video' : msg.type === 'audio' ? '🎤 Voice message' : msg.type === 'document' ? '📎 Document' : 'New message'));
   if (msg.userId !== userId) {
-    notifyIncomingMessage(msg);
     if (document.visibilityState === 'visible') markMessageRead(msg);
   }
 }
@@ -1292,7 +1254,6 @@ socket.on('connect', () => {
   if (userId) {
     refreshAllUnreadCounts().catch(() => {});
     loadPrivateUsers().catch(() => {});
-    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
   }
 });
 
@@ -1996,7 +1957,7 @@ socket.on('connect', () => {
   // user-level, so the same User ID sees the same seen/unseen state on all devices.
   if (userId) {
     refreshAllUnreadCounts().catch(() => {});
-    setupWebPush().catch(() => {});
+    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
   }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
