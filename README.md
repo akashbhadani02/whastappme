@@ -8,4 +8,4 @@ AUDIT/FIX NOTES
 - Fixed read receipts to use authenticated socket User ID and retry after reconnect.
 - Explicitly leaving a group removes notification authorization only after the User ID has no remaining active session in that group.
 
-- v2.2: notifications are group-only; private message notifications removed. Group notification access persists after leaving the visible group chat and is refreshed on rejoin.
+- v2.4: notifications are group-only; private message notifications removed. Group notification access persists after leaving the visible group chat and is refreshed on rejoin.

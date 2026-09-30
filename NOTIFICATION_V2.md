@@ -1,4 +1,4 @@
-# Notification v2.2 — Group-only notifications
+# Notification v2.4 — Group-only notifications
 
 - Private-message notification delivery has been removed from native Android and server notification paths.
 - Android recovery polling now returns only group messages for groups persisted in `notification_access`.

@@ -2399,12 +2399,40 @@ async function sendPushToOtherUsers(msg) {
       const group = await db.collection(GROUP_SETTINGS_COLLECTION_NAME).findOne({ _id: gid }, { projection: { name: 1 } });
       groupName = String(group?.name || gid || 'WhatsApp').trim();
     }
-    const payload = JSON.stringify({ title: groupName || 'WhatsApp', body: 'New message', messageId: msg.id, groupId: gid, groupName: groupName || 'WhatsApp', notificationType: 'group-message', url: '/#chat' });
+    const payload = JSON.stringify({
+      title: groupName || 'WhatsApp',
+      body: 'New message',
+      messageId: String(msg.id),
+      groupId: gid,
+      groupName: groupName || 'WhatsApp',
+      notificationType: 'group-message',
+      url: '/#chat'
+    });
+    // Deliver to EVERY saved push subscription belonging to every member who
+    // has previously joined this group. This is intentionally independent of
+    // Socket.IO room membership, so a member can be completely offline from
+    // the PWA UI and still receive the browser/OS Web Push notification.
     await Promise.all(docs.map(async (doc) => {
-      try { await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' }); }
-      catch (error) {
-        if (error.statusCode === 404 || error.statusCode === 410) await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (error.statusCode === 404 || error.statusCode === 410) {
+            await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteOne({ _id: doc._id });
+            return;
+          }
+          if (attempt === 0 && [408, 429, 500, 502, 503, 504].includes(Number(error.statusCode))) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+            continue;
+          }
+          break;
+        }
       }
+      if (lastError) console.error('Web Push delivery failed:', lastError.statusCode || '', lastError.message || lastError);
     }));
   } catch (error) { console.error('Group web push failed:', error.stack || error.message); }
 }

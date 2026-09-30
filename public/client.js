@@ -28,7 +28,7 @@ let userId = localStorage.getItem('wa_user_id') || '';
 // notification permission, the same PushSubscription can receive messages
 // for every group the User ID has previously joined.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js?v=27', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
+  navigator.serviceWorker.register('/sw.js?v=28', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
 }
 
 function syncAndroidNotificationIdentity() {
@@ -347,7 +347,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=27', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=28', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });

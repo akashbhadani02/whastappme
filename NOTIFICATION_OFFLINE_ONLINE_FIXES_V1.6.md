@@ -1,4 +1,4 @@
-# Notification + Online/Offline Fix v1.6
+# Notification + Online/Offline Fix v2.4
 
 - Private-message notification polling now includes the sender user ID, so Android notification taps can open the correct private chat.
 - Group native notification eligibility is now scoped to the exact group instead of every group the user has ever joined.
