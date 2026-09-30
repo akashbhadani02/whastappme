@@ -310,7 +310,7 @@ app.get('/api/notifications/poll', async (req, res) => {
       const d = new Date(after);
       if (!Number.isNaN(d.getTime())) filter.createdAt = { $gt: d };
     }
-    const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, user: 1, message: 1, createdAt: 1 } })
+    const messages = await collection.find(filter, { projection: { _id: 0, id: 1, groupId: 1, groupName: 1, user: 1, message: 1, createdAt: 1 } })
       .sort({ createdAt: 1 }).limit(50).toArray();
 
     const settings = db.collection(GROUP_SETTINGS_COLLECTION_NAME);

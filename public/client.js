@@ -397,6 +397,45 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+let webNotificationCursor = localStorage.getItem('wa_notification_cursor') || '';
+let webNotificationPrimed = false;
+const webNotificationSeen = new Set();
+async function pollWebNotifications() {
+  if (!userId || !('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const qs = new URLSearchParams({ userId });
+    if (webNotificationCursor) qs.set('after', webNotificationCursor);
+    const response = await fetch(`/api/notifications/poll?${qs.toString()}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    if (!data.ok || !Array.isArray(data.messages)) return;
+    let newest = webNotificationCursor;
+    for (const msg of data.messages) {
+      const id = String(msg.id || '');
+      const created = String(msg.createdAt || '');
+      if (created && (!newest || created > newest)) newest = created;
+      if (!id || webNotificationSeen.has(id)) continue;
+      webNotificationSeen.add(id);
+      if (!webNotificationPrimed) continue;
+      const groupTitle = String(msg.groupName || 'WhatsApp').trim() || 'WhatsApp';
+      const registration = await navigator.serviceWorker?.ready;
+      if (registration?.showNotification) {
+        await registration.showNotification(groupTitle, {
+          body: 'New message', icon: '/icon.svg', badge: '/icon.svg',
+          tag: `wa-${id}`, renotify: true,
+          data: { url: '/#chat', messageId: id, groupId: String(msg.groupId || '') }
+        });
+      }
+    }
+    if (newest && newest !== webNotificationCursor) {
+      webNotificationCursor = newest;
+      localStorage.setItem('wa_notification_cursor', newest);
+    }
+    webNotificationPrimed = true;
+  } catch (_) {}
+}
+setInterval(pollWebNotifications, 3000);
+
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 }
@@ -1374,6 +1413,29 @@ socket.on('unread-message', data => {
   // for marking it read; do not create a duplicate badge here.
   if (String(data.groupId) === String(currentGroupId || '')) return;
   incrementUnread(data.groupId);
+});
+
+// Browser realtime notification fallback. The server emits this event to every
+// authorized member, while Web Push handles closed/background browsers. This
+// keeps laptop/desktop notifications working even if a push subscription is
+// temporarily unavailable. Never expose the message preview.
+socket.on('native-notification', async data => {
+  if (!data?.id || !data?.groupId) return;
+  if (String(data.userId || '') === String(userId || '')) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const registration = await navigator.serviceWorker?.ready;
+    if (!registration?.showNotification) return;
+    const groupTitle = String(data.groupName || 'WhatsApp').trim() || 'WhatsApp';
+    await registration.showNotification(groupTitle, {
+      body: 'New message',
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      tag: `wa-${String(data.id)}`,
+      renotify: true,
+      data: { url: '/#chat', messageId: String(data.id), groupId: String(data.groupId) }
+    });
+  } catch (_) {}
 });
 
 function markMessageRead(msg) {
@@ -2958,6 +3020,7 @@ function finishAccountLogin() {
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
   setupWebPush().catch(() => {});
+  pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
