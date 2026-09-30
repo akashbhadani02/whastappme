@@ -289,12 +289,10 @@ app.get('/api/notifications/poll', async (req, res) => {
     const db = await getDb();
     if (!collection || !db) return res.json({ ok: true, messages: [] });
 
-    // Notification access is granted only after the user successfully joins a
-    // password-protected group. This keeps background notifications group-scoped
-    // without requiring Firebase or trusting arbitrary group IDs from the app.
-    const access = await db.collection('notification_access').find({ userId }).project({ _id: 0, groupId: 1 }).toArray();
-    const groupIds = access.map(x => normalizeGroupId(x.groupId)).filter(Boolean);
-    if (!groupIds.length) return res.json({ ok: true, messages: [] });
+    // Message notifications are intentionally user-wide: a message sent in
+    // Group A may notify a user currently using Group B (and vice versa).
+    // Calls remain strictly group-scoped elsewhere in the signaling layer.
+    // A valid user session is enough; no group password is trusted here.
 
     // Notification delivery is device-level, not read-receipt-level.
     // Another device (for example a laptop) may read the message first, but
@@ -302,7 +300,6 @@ app.get('/api/notifications/poll', async (req, res) => {
     // client keeps a per-message ID set so removing readBy here does not create
     // duplicates on the same device.
     const filter = {
-      groupId: { $in: groupIds },
       userId: { $ne: userId },
       deletedAt: { $exists: false }
     };
@@ -2389,11 +2386,20 @@ async function sendPushToOtherUsers(msg) {
     if (!db) return;
     const senderUserId = String(msg.userId || '').trim();
     const gid = normalizeGroupId(msg.groupId);
-    // Push only to users who have actually entered this group on at least one
-    // device. This prevents a Group A message from notifying a Group B-only user.
+    // Message notifications are user-wide by design: Group A messages may
+    // notify users who are currently viewing Group B, and vice versa.
+    // This does NOT change call routing; call-start/call-join stay group-scoped.
     const accessDocs = await db.collection('notification_access')
-      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+      .find({}, { projection: { userId: 1 } }).toArray();
     const allowedUsers = new Set(accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean));
+    // Also include users with a stored push subscription, so a user who has
+    // not opened a group recently can still receive a background push.
+    const pushUsers = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
+      .find({}, { projection: { userId: 1 } }).toArray();
+    for (const x of pushUsers) {
+      const uid = String(x?.userId || '').trim();
+      if (uid) allowedUsers.add(uid);
+    }
     if (senderUserId) allowedUsers.delete(senderUserId);
     if (!allowedUsers.size) return;
     const docs = await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME)
@@ -2476,8 +2482,10 @@ async function sendNativeRealtimeNotification(msg) {
     const senderUserId = String(msg.userId || '').trim();
 
     // Only users who have actually joined this group are eligible.
+    // Realtime message notifications are also user-wide. Calls are not routed
+    // through this path and remain strictly locked to their originating group.
     const accessDocs = await db.collection('notification_access')
-      .find({ groupId: gid }, { projection: { userId: 1 } }).toArray();
+      .find({}, { projection: { userId: 1 } }).toArray();
     const allowedUsers = new Set(
       accessDocs.map(x => String(x?.userId || '').trim()).filter(Boolean)
     );
