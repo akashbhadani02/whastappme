@@ -1,6 +1,6 @@
 # WhatsApp Android wrapper - realtime group notifications
 
-The Android wrapper uses a native Socket.IO realtime notification channel as the primary path, with a 2-second HTTP polling fallback. The notification service also checks Android notification permission/channel state and uses a short partial wake lock while polling.
+The Android wrapper uses a native Socket.IO realtime notification channel as the primary path, with a 5-second HTTP polling fallback. The notification service also checks Android notification permission/channel state and uses a short partial wake lock while polling.
 
 ## Notification behavior
 - Group member messages trigger a native Android notification immediately when the

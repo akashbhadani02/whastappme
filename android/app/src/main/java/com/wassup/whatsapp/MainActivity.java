@@ -15,6 +15,7 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private WebView web;
@@ -47,29 +48,22 @@ public class MainActivity extends Activity {
         web.loadUrl(BuildConfig.APP_URL);
         setContentView(web);
 
-        // Start the notification worker as soon as the app is installed/launched.
-        // On Android 13+ the worker can run, but alert notifications require the
-        // POST_NOTIFICATIONS permission. Ask for it once the WebView is ready.
-        ensureNotificationPermissionAndService();
-        if (Build.VERSION.SDK_INT < 33 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
-        }
-    }
+        // Firebase-free background notifications depend on the foreground
+        // service not being battery-optimized away. Ask once; the user can
+        // decline and notifications will still work while Android keeps the service alive.
+        requestBatteryOptimizationExemption();
 
-    private void ensureNotificationPermissionAndService() {
+        // Ask for notification permission only after the activity/WebView is ready.
+        // This avoids racing the media permission dialog and makes the Android
+        // notification flow reliable on Android 13+.
         if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
-            return;
+        } else {
+            startNotificationService();
         }
-        startNotificationService();
-        // Do not repeatedly launch the battery-optimization screen. It is a
-        // one-time setup aid and Android OEMs can otherwise show it on every
-        // resume, which looks like a broken notification prompt.
-        android.content.SharedPreferences prefs = getSharedPreferences("wassup", MODE_PRIVATE);
-        if (!prefs.getBoolean("batteryPromptShown", false)) {
-            prefs.edit().putBoolean("batteryPromptShown", true).apply();
-            requestBatteryOptimizationExemption();
+        if (Build.VERSION.SDK_INT < 33 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
         }
     }
 
@@ -114,9 +108,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void setAppUrl(String url) {
             if (url == null || url.trim().isEmpty()) return;
             getSharedPreferences("wassup", MODE_PRIVATE).edit().putString("appUrl", url.trim()).apply();
-            // The WebView may provide the real production URL after the service
-            // has already started with the build-time placeholder. Kick the
-            // service so it reconnects immediately instead of waiting for poll.
             startNotificationService();
         }
     }
@@ -124,10 +115,9 @@ public class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
-            // Start/restart the worker after the notification permission result.
-            // If the user denied it, Android will keep the app's notification
-            // channel disabled; the service still stays alive so permission can
-            // be granted later from Android Settings.
+            // Start the foreground notification worker after the notification
+            // permission result, regardless of whether media permissions are
+            // still pending.
             startNotificationService();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, MEDIA_PERMISSION_REQUEST);
@@ -139,9 +129,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        // If the user enabled notifications from Android Settings while the app
-        // was paused, immediately bring the notification worker back online.
-        ensureNotificationPermissionAndService();
+        startNotificationService();
     }
 
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }

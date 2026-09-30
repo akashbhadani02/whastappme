@@ -14,7 +14,7 @@ Mobile notifications need **Web Push**, not only `new Notification()` from the p
 
 ### VAPID
 
-For production, set the matching `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and optionally `VAPID_SUBJECT` in Vercel Environment Variables. This build uses those exact keys for browser subscription and server delivery; it does not create a second VAPID pair when both are present.
+The server derives a stable VAPID key from `MONGODB_URI`, so no extra VAPID secret is required for this project. If you want an explicit VAPID private key, set `VAPID_PRIVATE_KEY` and optionally `VAPID_SUBJECT` in Vercel Environment Variables.
 
 ## GitHub
 

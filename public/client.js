@@ -26,10 +26,8 @@ let userId = localStorage.getItem('wa_user_id') || '';
 function syncAndroidNotificationIdentity() {
   try {
     if (window.AndroidBridge) {
-      // Save the URL first so the native background listener has everything it
-      // needs before it starts. This is intentionally Firebase-free.
-      window.AndroidBridge.setAppUrl(window.location.origin);
       if (userId) window.AndroidBridge.setUserId(String(userId));
+      window.AndroidBridge.setAppUrl(window.location.origin);
     }
   } catch (_) {}
 }
@@ -334,37 +332,24 @@ async function setupWebPush() {
   if (Notification.permission !== 'granted') return false;
   try {
     const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-    await registration.update().catch(() => {});
     await navigator.serviceWorker.ready;
     const response = await fetch('/api/push/public-key', { cache: 'no-store' });
     const data = await response.json();
     if (!data.publicKey) return false;
-    const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
     let subscription = await registration.pushManager.getSubscription();
-    // A subscription is cryptographically tied to the VAPID public key. If the
-    // Vercel key pair was rotated, reuse of the old subscription makes every
-    // send fail. Re-subscribe automatically with the currently deployed key.
-    if (subscription) {
-      try {
-        const oldKey = subscription.options?.applicationServerKey;
-        const oldBytes = oldKey ? new Uint8Array(oldKey) : null;
-        const sameKey = oldBytes && oldBytes.length === applicationServerKey.length &&
-          oldBytes.every((v, i) => v === applicationServerKey[i]);
-        if (!sameKey) {
-          await subscription.unsubscribe().catch(() => {});
-          subscription = null;
-        }
-      } catch (_) {
-        await subscription.unsubscribe().catch(() => {});
-        subscription = null;
-      }
+    const keyFingerprint = String(data.publicKey || '').slice(0, 24);
+    const savedFingerprint = localStorage.getItem('wa_vapid_public_fingerprint') || '';
+    if (subscription && savedFingerprint && savedFingerprint !== keyFingerprint) {
+      try { await subscription.unsubscribe(); } catch (_) {}
+      subscription = null;
     }
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey
+        applicationServerKey: urlBase64ToUint8Array(data.publicKey)
       });
     }
+    localStorage.setItem('wa_vapid_public_fingerprint', keyFingerprint);
     const saveResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -372,31 +357,27 @@ async function setupWebPush() {
     });
     if (!saveResponse.ok) return false;
     const saveData = await saveResponse.json().catch(() => ({}));
-    if (saveData.ok !== true) return false;
-    const status = await fetch(`/api/push/status?userId=${encodeURIComponent(userId)}`, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
-    return Boolean(status?.ok && Number(status?.subscriptions || 0) > 0);
+    return saveData.ok === true;
   } catch (error) {
     console.warn('Web push setup failed:', error);
     return false;
   }
 }
 
+// Web Push is the single browser notification source of truth.
+// Live Socket.IO messages are rendered in-app; background/desktop notifications
+// are delivered by the server through the service worker.
+function notifyIncomingMessage(msg) { return; }
+
 function notificationSetup() {
   if (!('Notification' in window)) return;
-  // Push subscription creation must happen after a user gesture in browsers.
-  const once = async () => {
-    const granted = await enableNotifications();
-    if (granted && userId) await setupWebPush().catch(() => {});
-    if (granted) {
-      document.removeEventListener('pointerdown', once);
-      document.removeEventListener('keydown', once);
-    }
-  };
-  document.addEventListener('pointerdown', once);
-  document.addEventListener('keydown', once);
+  // Browsers generally allow the permission prompt only from a user gesture.
+  const once = async () => { const granted = await enableNotifications(); if (granted) await setupWebPush(); document.removeEventListener('pointerdown', once); document.removeEventListener('keydown', once); };
+  document.addEventListener('pointerdown', once, { once: true });
+  document.addEventListener('keydown', once, { once: true });
 }
 notificationSetup();
-if ('Notification' in window && Notification.permission === 'granted' && userId) setupWebPush().catch(() => {});
+if ('Notification' in window && Notification.permission === 'granted') setupWebPush();
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -1269,13 +1250,6 @@ socket.on('history', history => {
   }
 });
 
-socket.on('connect', () => {
-  if (userId) {
-    refreshAllUnreadCounts().catch(() => {});
-    loadPrivateUsers().catch(() => {});
-  }
-});
-
 socket.on('message', receiveMessage);
 socket.on('media', receiveMessage);
 socket.on('private-history', history => {
@@ -1493,7 +1467,6 @@ socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
   groupName = String(data.name);
   localStorage.setItem('wa_group_name', groupName);
-  startRestPresence();
   updateGroupNameUI();
 });
 
@@ -1526,336 +1499,48 @@ socket.on('group-updated', data => {
   if (!data || !data.id) return;
   const group = groups.find(g => g.id === data.id);
   if (group && data.name) { group.name = data.name; renderGroupList(); }
-  if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName);
-  startRestPresence(); updateGroupNameUI(); }
+  if (data.id === currentGroupId && data.name) { groupName = data.name; localStorage.setItem('wa_group_name', groupName); updateGroupNameUI(); }
 });
 
-async function loadGroups() {
-  try {
-    const response = await fetch('/api/groups', { cache: 'no-store' });
-    const data = await response.json();
-    groups = Array.isArray(data.groups) ? data.groups : [{ id: 'main', name: 'WhatsApp' }];
-    // Never restore an unlocked group automatically. Every time a group is opened
-    // (including after leaving it or reopening it later), its password is required.
-    const saved = groups.find(g => g.id === currentGroupId);
-    const selected = saved || groups[0];
-    currentGroupId = '';
-    app?.classList.add('group-locked');
-    composer?.classList.add('hidden');
-    messageArea.innerHTML = '';
-    messages.clear();
-    deletedIds.clear();
-    starredIds.clear();
-    pinnedIds.clear();
-    deletedForMeIds.clear();
-    lastRenderedDate = '';
-    if (selected) {
-      groupName = selected.name;
-      localStorage.setItem('wa_group_name', groupName);
-  startRestPresence();
-      updateGroupNameUI();
-    } else {
-      groupName = '';
-      localStorage.removeItem('wa_group_id');
-      localStorage.removeItem('wa_group_name');
-      updateGroupNameUI();
-    }
-    renderGroupList();
-    // Startup must not fetch unread counts/history for every group.
-    // Only the group the user explicitly opens is synchronized.
-  } catch (_) {
-    groups = [];
-    currentGroupId = '';
-    renderGroupList();
-    updateGroupNameUI();
-  }
-}
-
-function renderGroupList() {
-  if (!chatList) return;
-  chatList.innerHTML = '';
-
-  const privateSection = document.createElement('div');
-  privateSection.className = 'chat-section-label';
-  privateSection.textContent = 'Private chats';
-  chatList.appendChild(privateSection);
-
-  const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
-  visiblePrivate.forEach(user => {
-    const button = document.createElement('button');
-    button.className = 'chat-item' + (activeChatType === 'private' && currentPrivateUser?.userId === user.userId ? ' active' : '');
-    button.type = 'button';
-    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar private-avatar'; avatar.textContent = firstCharacter(user.name);
-    const summary = document.createElement('div'); summary.className = 'chat-summary';
-    const last = privateLastMessages[user.userId];
-    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Private message';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
-    summary.querySelector('strong').textContent = user.name;
-    summary.querySelector('.preview span').textContent = preview;
-    const badge = summary.querySelector('.group-unread-badge');
-    const unread = Number(privateUnreadCounts[user.userId] || 0);
-    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
-    button.append(avatar, summary);
-    button.addEventListener('click', () => openPrivateChat(user));
-    chatList.appendChild(button);
-  });
-
-  const groupSection = document.createElement('div');
-  groupSection.className = 'chat-section-label';
-  groupSection.textContent = 'Groups';
-  chatList.appendChild(groupSection);
-
-  groups.forEach(group => {
-    const button = document.createElement('button');
-    button.className = 'chat-item' + (activeChatType === 'group' && group.id === currentGroupId ? ' active' : '');
-    button.type = 'button';
-    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
-    const summary = document.createElement('div'); summary.className = 'chat-summary';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
-    summary.querySelector('strong').textContent = group.name;
-    const badge = summary.querySelector('.group-unread-badge');
-    const unread = getUnreadCount(group.id);
-    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
-    button.append(avatar, summary);
-    button.addEventListener('click', () => openGroup(group));
-    chatList.appendChild(button);
-  });
-}
-
-async function loadPrivateUsers() {
-  if (!userId) return;
-  try {
-    const r = await fetch(`/api/users?userId=${encodeURIComponent(userId)}`, { cache:'no-store' });
-    const d = await r.json().catch(() => ({}));
-    if (d.ok) privateUsers = Array.isArray(d.users) ? d.users : [];
-    renderGroupList();
-  } catch (_) {}
-}
-
-function openPrivatePicker() {
-  if (!privateChatModal) return;
-  privateChatSearch.value = '';
-  renderPrivateUserList('');
-  privateChatModal.classList.remove('hidden');
-  setTimeout(() => privateChatSearch.focus(), 40);
-}
-
-function renderPrivateUserList(filter='') {
-  if (!privateUserList) return;
-  const q = String(filter || '').trim().toLowerCase();
-  privateUserList.innerHTML = '';
-  const list = privateUsers.filter(u => String(u.userId) !== String(userId) && (!q || String(u.name).toLowerCase().includes(q) || String(u.userId).toLowerCase().includes(q)));
-  if (!list.length) {
-    privateUserList.innerHTML = '<div class="private-empty">No other users found.</div>';
-    return;
-  }
-  list.forEach(user => {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'private-user-row';
-    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small></small></div>`;
-    row.querySelector('.avatar').textContent = firstCharacter(user.name);
-    row.querySelector('strong').textContent = user.name;
-    row.querySelector('small').textContent = user.userId;
-    row.addEventListener('click', () => {
-      privateChatModal.classList.add('hidden');
-      openPrivateChat(user);
-    });
-    privateUserList.appendChild(row);
-  });
-}
-
-async function openPrivateChat(user, suppliedPassword='') {
-  if (!user || !user.userId || String(user.userId) === String(userId)) return;
-  let password = suppliedPassword;
-  if (!password) {
-    try {
-      const r = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
-      const d = await r.json().catch(() => ({}));
-      if (!d.exists) {
-        window.pendingPrivatePeerId = String(user.userId);
-        requestPassword('Set private chat password', 'Set a password for this private chat. Share it with the other person.', () => openPrivateChat(user, '__SET_BY_MODAL__'), 'private-setup');
-        return;
-      }
-    } catch (_) {
-      showToast('Could not check private chat password');
-      return;
-    }
-    window.pendingPrivatePeerId = String(user.userId);
-    requestPassword('Private chat password', 'Enter the password set for this private chat.', () => openPrivateChat(user, '__VERIFY_BY_MODAL__'), 'private-verify');
-    return;
-  }
-  if (password === '__SET_BY_MODAL__' || password === '__VERIFY_BY_MODAL__') {
-    password = window.privatePasswordForOpen || '';
-    window.privatePasswordForOpen = '';
-  }
-  if (!password) return;
-  window.privateChatPasswords = window.privateChatPasswords || {};
-  window.privateChatPasswords[String(user.userId)] = password;
-  activeChatType = 'private';
-  currentPrivateUser = user;
-  privateUnreadCounts[user.userId] = 0;
-  composer?.classList.remove('hidden');
-  app?.classList.remove('group-locked');
-  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
+function applyGroupList(nextGroups) {
+  groups = Array.isArray(nextGroups) && nextGroups.length ? nextGroups : [{ id: 'main', name: 'WhatsApp' }];
+  currentGroupId = '';
+  app?.classList.add('group-locked');
+  composer?.classList.add('hidden');
   messageArea.innerHTML = '';
-  updatePrivateHeader();
-  renderGroupList();
-  let privateSocketReady = false;
-  try {
-    if (socket.connected) {
-      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId, password }, result => {
-        privateSocketReady = !!result?.ok;
-        resolve();
-      }));
-    }
-  } catch (_) {}
-  if (!privateSocketReady) {
-    try {
-      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
-      const d = await r.json().catch(() => ({}));
-      if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
-    } catch (_) {}
-  }
-  openChat();
-  requestAnimationFrame(() => scrollToBottom());
-}
-
-
-function updatePrivateHeader() {
-  if (!currentPrivateUser) return;
-  groupName = currentPrivateUser.name;
-  groupNameHeader.textContent = currentPrivateUser.name;
-  groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
-  if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
-  onlineStatus.textContent = 'private chat';
-  onlineStatus.className = 'offline';
-  document.querySelector('#audioCallBtn')?.classList.add('hidden');
-  document.querySelector('#videoCallBtn')?.classList.add('hidden');
-}
-
-function updateGroupHeader() {
+  messages.clear();
+  deletedIds.clear();
+  starredIds.clear();
+  pinnedIds.clear();
+  deletedForMeIds.clear();
+  lastRenderedDate = '';
+  groupName = '';
+  localStorage.removeItem('wa_group_id');
+  localStorage.setItem('wa_group_list_cache', JSON.stringify(groups));
   updateGroupNameUI();
+  renderGroupList();
 }
 
-
-async function openGroup(group) {
-  if (!group) return;
-  activeChatType = 'group';
-  currentPrivateUser = null;
-
-  // Do not ask repeatedly inside the same tab. Once this tab has successfully
-  // verified a group's password, switching away and back can reuse that
-  // verification. sessionStorage is intentionally used instead of localStorage
-  // so closing the tab/browser session forces a fresh password next time.
-  const cachedPassword = group.id === 'main' ? '' : getVerifiedGroupPassword(group.id);
-  if (group.id === 'main' || cachedPassword) {
-    await joinGroup(group.id, true);
-    return;
-  }
-
-  groupPasswordTarget = group;
-  groupPasswordTitle.textContent = `Open ${group.name}`;
-  groupPasswordHelp.textContent = "Enter this group's password to open it.";
-  groupPasswordInput.value = ''; groupPasswordError.textContent = '';
-  groupPasswordModal.classList.remove('hidden');
-  setTimeout(() => groupPasswordInput.focus(), 50);
-}
-
-async function verifyAndOpenGroup() {
-  const group = groupPasswordTarget;
-  if (!group) return;
-  const password = groupPasswordInput.value;
-  if (!password) { groupPasswordError.textContent = 'Enter the group password'; return; }
-
-  // Prevent double-clicks and remove the feeling that the app is stuck.
-  groupPasswordSubmit.disabled = true;
-  const oldLabel = groupPasswordSubmit.textContent;
-  groupPasswordSubmit.textContent = 'Opening…';
-  groupPasswordError.textContent = '';
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
+async function loadGroups() {
+  // Cache-first startup: show the selection UI immediately and refresh the
+  // lightweight group list in the background. No history/unread data is loaded.
   try {
-    const response = await fetch('/api/groups/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId: group.id, password }),
-      cache: 'no-store',
-      signal: controller.signal
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      groupPasswordError.textContent = response.status === 404 ? 'Group not found' : 'Wrong group password';
-      groupPasswordInput.select();
-      return;
-    }
-
-    groupPasswordModal.classList.add('hidden');
-    setVerifiedGroupPassword(group.id, password);
-    groupPasswordTarget = null;
-
-    // Open the UI immediately. Message history loads in the background so a
-    // slow MongoDB/network connection cannot make the password screen spin.
-    await joinGroup(group.id, true);
-  } catch (error) {
-    groupPasswordError.textContent = error?.name === 'AbortError'
-      ? 'Server is taking too long. Please try again.'
-      : 'Could not verify password';
+    const cached = JSON.parse(localStorage.getItem('wa_group_list_cache') || '[]');
+    if (Array.isArray(cached) && cached.length) applyGroupList(cached);
+  } catch (_) {}
+  if (!groups.length) applyGroupList([{ id: 'main', name: 'WhatsApp' }]);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('/api/groups', { cache: 'no-store', signal: controller.signal });
+    const data = await response.json();
+    if (response.ok && Array.isArray(data.groups)) applyGroupList(data.groups);
+  } catch (_) {
+    // Keep cached groups; startup must never turn a slow Vercel response into
+    // a blocking server-error screen.
   } finally {
     clearTimeout(timeout);
-    groupPasswordSubmit.disabled = false;
-    groupPasswordSubmit.textContent = oldLabel;
   }
-}
-
-async function joinGroup(groupId, openAfter=true) {
-  activeChatType = 'group';
-  currentPrivateUser = null;
-  document.querySelector('#audioCallBtn')?.classList.remove('hidden');
-  document.querySelector('#videoCallBtn')?.classList.remove('hidden');
-  const group = groups.find(g => g.id === groupId) || { id: groupId, name: 'WhatsApp' };
-  currentGroupId = groupId || 'main';
-  // Optimistically clear while opening, then reconcile against the persisted
-  // User-ID readBy state after the history/read receipts arrive.
-  setUnreadCount(currentGroupId, 0);
-  otherGroupMemberOnline = false;
-  setOnlineStatus('offline');
-  groupName = group.name || 'WhatsApp';
-  app?.classList.remove('group-locked');
-  composer?.classList.remove('hidden');
-  localStorage.setItem('wa_group_id', currentGroupId);
-  localStorage.setItem('wa_group_name', groupName);
-  startRestPresence();
-  messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
-  messageArea.innerHTML = '';
-  updateGroupNameUI(); renderGroupList();
-  loadLocalMessageHistory();
-  await new Promise(resolve => {
-    if (!socket.connected) { resolve(); return; }
-    socket.emit('join-group', { groupId: currentGroupId, password: currentGroupId === 'main' ? '' : (getVerifiedGroupPassword(currentGroupId) || '') }, () => {
-      // Persist notification authorization server-side after the password-protected
-      // group join succeeds. This lets the native background service receive only
-      // notifications from groups this User ID has actually entered.
-      if (userId) {
-        fetch('/api/notifications/access', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, groupId: currentGroupId })
-        }).catch(() => {});
-      }
-      if (Notification.permission === 'granted') setupWebPush().catch(() => {});
-      socket.emit('presence-login', { userId, deviceId }, () => {
-        socket.emit('presence-ping', { groupId: currentGroupId });
-        resolve();
-      });
-    });
-  });
-  // Never block opening the chat on history synchronization.
-  // The chat becomes usable immediately; history is reconciled in the background.
-  syncMessages().catch(() => {});
-  fetch(`/api/calls/active?userId=${encodeURIComponent(userId)}&groupId=${encodeURIComponent(currentGroupId)}`, {cache:'no-store'}).then(r=>r.json()).then(x=>{ if(x?.ok && x.call && !isActive()) incoming(x.call); }).catch(()=>{});
-  if (openAfter) openChat();
 }
 
 loadGroups();
@@ -1949,19 +1634,6 @@ onlineStatus?.addEventListener('click', (event) => {
   if (window.matchMedia?.('(max-width: 760px)').matches) showCurrentLastSeen(event);
 });
 
-
-let presenceTimer = null;
-async function syncRestPresence() {
-  if (!userId || !currentGroupId || activeChatType !== 'group') return;
-  try {
-    await fetch('/api/presence/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,groupId:currentGroupId,deviceId})});
-    const r=await fetch(`/api/presence/status?userId=${encodeURIComponent(userId)}&groupId=${encodeURIComponent(currentGroupId)}`,{cache:'no-store'});
-    const x=await r.json(); if(x?.ok) setGroupPresence(!!x.online,currentGroupId,x.lastSeen||{},null,null);
-  } catch(_) {}
-}
-function startRestPresence(){ clearInterval(presenceTimer); syncRestPresence(); presenceTimer=setInterval(syncRestPresence,5000); }
-startRestPresence();
-
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
   setGroupPresence(!!data.online, data.groupId, data.lastSeen, data.latestLastSeen, data.latestLastSeenUserId);
@@ -1989,14 +1661,8 @@ socket.on('connect', () => {
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
   socket.emit('register-user', { userId, name, deviceId });
-  setupWebPush().catch(() => {});
+  if (Notification.permission === 'granted') setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
-  // Reconcile all group badges immediately on every login/reconnect. Counts are
-  // user-level, so the same User ID sees the same seen/unseen state on all devices.
-  if (userId) {
-    refreshAllUnreadCounts().catch(() => {});
-    if ('Notification' in window && Notification.permission === 'granted') setupWebPush().catch(() => {});
-  }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
   if (!currentGroupId) return;
@@ -2144,7 +1810,6 @@ async function joinPrivateUserAndOpen() {
     syncAndroidNotificationIdentity();
     closePrivateUserJoinModal();
     socket.emit('register-user', { userId, name, deviceId });
-    setupWebPush().catch(() => {});
     socket.emit('presence-login', { userId, deviceId });
     const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
     privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
@@ -2977,7 +2642,7 @@ function finishAccountLogin() {
   accountModal.classList.add('hidden');
   updateMyNameUI();
   socket.emit('register-user', { userId, name, deviceId });
-  setupWebPush().catch(() => {});
+  if (Notification.permission === 'granted') setupWebPush().catch(() => {});
   loadPrivateUsers().catch(() => {});
   socket.emit('presence-login', { userId, deviceId });
   if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
@@ -3080,7 +2745,6 @@ function saveGroupName() {
   if (nextName === groupName) { closeGroupNameModal(); return; }
   groupName = nextName;
   localStorage.setItem('wa_group_name', groupName);
-  startRestPresence();
   updateGroupNameUI();
   const localGroup = groups.find(g => g.id === currentGroupId); if (localGroup) localGroup.name = groupName; renderGroupList();
   socket.emit('rename-group', { groupId: currentGroupId, name: groupName }, result => {

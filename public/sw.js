@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v17-single-vapid-push';
+const CACHE = 'whatsapp-pwa-v15-single-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -13,29 +13,60 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });
 
+async function chatIsOpenAndVisible() {
+  const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  return list.some((client) => {
+    try {
+      const visible = client.visibilityState === 'visible' || client.focused === true;
+      const url = new URL(client.url);
+      return visible && url.hash === '#chat';
+    } catch (_) { return false; }
+  });
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
-  try {
-    data = event.data ? event.data.json() : {};
-  } catch (_) {
-    data = {};
-  }
+  try { data = event.data ? event.data.json() : {}; } catch (_) {}
 
   event.waitUntil((async () => {
-    const messageId = data.messageId || '';
+    const isCall = data.kind === 'incoming-call';
+    // Message pushes are suppressed only while the user is actively viewing the
+    // chat. Calls are never suppressed: an incoming call must alert the user.
+    if (!isCall && await chatIsOpenAndVisible()) return;
+
     const groupName = String(data.groupName || data.title || 'WhatsApp').trim() || 'WhatsApp';
+    const messageId = String(data.messageId || '');
+    const callId = String(data.callId || '');
+    const title = isCall
+      ? String(data.title || 'Incoming call')
+      : groupName;
+    const body = isCall
+      ? String(data.body || 'Incoming group call')
+      : 'New message';
+
     const options = {
-      // Do not put the actual message text in the notification.
-      body: 'New message',
+      body,
       icon: data.icon || '/icon.svg',
       badge: data.badge || '/icon.svg',
-      tag: messageId ? `wa-${messageId}` : 'wa-message',
-      renotify: false,
-      data: { url: data.url || '/#chat', messageId, groupId: data.groupId || '' },
-      vibrate: [150, 80, 150]
+      tag: isCall ? `wa-call-${callId}` : (messageId ? `wa-${messageId}` : 'wa-message'),
+      renotify: isCall,
+      requireInteraction: isCall,
+      silent: false,
+      vibrate: isCall ? [400, 150, 400, 150, 700] : [150, 80, 150],
+      data: {
+        url: data.url || '/#chat',
+        messageId,
+        callId,
+        groupId: data.groupId || '',
+        kind: data.kind || 'message'
+      },
+      ...(isCall ? { actions: [
+        { action: 'open-call', title: 'Open call' },
+        { action: 'dismiss-call', title: 'Dismiss' }
+      ] } : {})
     };
 
-    await self.registration.showNotification(groupName, options);
+    await self.registration.showNotification(title, options);
   })());
 });
 
