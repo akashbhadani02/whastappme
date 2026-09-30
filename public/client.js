@@ -2709,8 +2709,6 @@ adminCallRecordingsDownloadAll?.addEventListener('click', () => {
 adminGroupsClose?.addEventListener('click', () => adminGroupsModal.classList.add('hidden'));
 adminGroupsModal?.addEventListener('click', e => { if (e.target === adminGroupsModal) adminGroupsModal.classList.add('hidden'); });
 adminNewGroupBtn?.addEventListener('click', () => { adminGroupsModal.classList.add('hidden'); openGroupEditor(); });
-groupPasswordSubmit?.addEventListener('click', verifyAndOpenGroup);
-groupPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyAndOpenGroup(); });
 groupPasswordClose?.addEventListener('click', () => groupPasswordModal.classList.add('hidden'));
 groupPasswordModal?.addEventListener('click', e => { if (e.target === groupPasswordModal) groupPasswordModal.classList.add('hidden'); });
 groupEditSave?.addEventListener('click', saveNewGroup);
