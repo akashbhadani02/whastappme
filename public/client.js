@@ -397,6 +397,14 @@ function notificationSetup() {
 }
 notificationSetup();
 if ('Notification' in window && Notification.permission === 'granted' && userId) setupWebPush().catch(() => {});
+window.addEventListener('online', () => {
+  if ('Notification' in window && Notification.permission === 'granted' && userId) setupWebPush().catch(() => {});
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && 'Notification' in window && Notification.permission === 'granted' && userId) {
+    setupWebPush().catch(() => {});
+  }
+});
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -1776,7 +1784,7 @@ async function verifyAndOpenGroup() {
     const response = await fetch('/api/groups/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId: group.id, password }),
+      body: JSON.stringify({ groupId: group.id, password, userId }),
       cache: 'no-store',
       signal: controller.signal
     });

@@ -953,7 +953,28 @@ app.post('/api/groups/verify', async (req, res) => {
     }
     const group = await collection.findOne({ _id: groupId });
     if (!group) return res.status(404).json({ ok: false });
-    res.json({ ok: password === String(group.password || '') });
+    const valid = password === String(group.password || '');
+    // A successfully verified password is the authoritative membership event.
+    // Persist it before the client opens the group so notifications do not
+    // depend on a Socket.IO join succeeding on that particular device.
+    if (valid) {
+      const userId = String(req.body?.userId || '').trim();
+      if (userId) {
+        try {
+          const db = await getDb();
+          if (db) {
+            await db.collection('notification_access').updateOne(
+              { userId, groupId },
+              { $set: { userId, groupId, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { upsert: true }
+            );
+          }
+        } catch (membershipError) {
+          console.error('Group membership notification save failed:', membershipError.message);
+        }
+      }
+    }
+    res.json({ ok: valid });
   } catch (error) {
     res.status(500).json({ ok: false });
   }
@@ -2477,7 +2498,8 @@ async function sendNativeRealtimeNotification(msg) {
       groupId: gid,
       groupName,
       type: String(msg.type || 'message'),
-      body: String(msg.message || msg.text || (msg.type === 'audio' ? 'Audio message' : msg.type === 'video' ? 'Video' : msg.type === 'image' ? 'Photo' : 'New message')).slice(0, 180)
+      // Privacy: never expose message text/preview in native notifications.
+      body: 'New message'
     };
 
     // This is a native Android realtime channel. It is deliberately separate
@@ -2530,8 +2552,13 @@ async function broadcastSaved(event, msg) {
   }
   publishRealtimeEvent(event, saved);
   if (event === 'message' || event === 'media') {
-    await sendNativeRealtimeNotification(saved);
-    await sendPushToOtherUsers(saved);
+    // Both delivery paths are independent: Web Push reaches sleeping/closed
+    // browsers, while the native Socket.IO path reaches the Android app.
+    // Run them together so one slow provider cannot delay the other.
+    await Promise.allSettled([
+      sendNativeRealtimeNotification(saved),
+      sendPushToOtherUsers(saved)
+    ]);
   }
   return saved;
 }

@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v17-single-vapid-push';
+const CACHE = 'whatsapp-pwa-v19-all-devices-group-notification';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

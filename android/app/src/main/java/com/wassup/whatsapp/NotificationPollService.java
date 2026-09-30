@@ -160,7 +160,7 @@ public class NotificationPollService extends Service {
                 String id = data.optString("id", "");
                 String groupName = data.optString("groupName", "WhatsApp");
                 String groupId = data.optString("groupId", "");
-                String body = data.optString("body", "New message");
+                String body = "New message";
                 if (id.isEmpty()) return;
 
                 // Do not show the sender's own message. The server also filters
@@ -276,7 +276,7 @@ public class NotificationPollService extends Service {
                             id,
                             m.optString("groupName", "WhatsApp"),
                             m.optString("groupId", ""),
-                            m.optString("body", "New message")
+                            "New message"
                     );
                 }
             }
@@ -317,7 +317,7 @@ public class NotificationPollService extends Service {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(com.wassup.whatsapp.R.drawable.ic_launcher)
                 .setContentTitle(title)
-                .setContentText(body == null || body.trim().isEmpty() ? "New message" : body.trim())
+                .setContentText("New message")
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
