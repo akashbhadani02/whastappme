@@ -2715,12 +2715,6 @@ io.on('connection', async (socket) => {
       // this exact group. Another device/browser in the same group keeps them online.
       if (uid) await updateLastSeenForUser(uid, previous);
       setImmediate(() => emitGroupPresence(previous));
-      try {
-        if (uid) {
-          const db = await getDb();
-          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
-        }
-      } catch (_) {}
     }
     if (typeof ack === 'function') ack({ ok: true });
   });
@@ -2819,16 +2813,26 @@ io.on('connection', async (socket) => {
       // Switching groups is also an offline transition for the old group, but
       // only when no other session for this User ID remains in that group.
       if (uid) await updateLastSeenForUser(uid, previous);
-      try {
-        if (uid) {
-          const db = await getDb();
-          if (db && !isUserActiveInGroup(uid, previous)) await db.collection('notification_access').deleteOne({ userId: uid, groupId: previous });
-        }
-      } catch (_) {}
       setImmediate(() => emitGroupPresence(previous));
     }
     socket.groupId = groupId;
     socket.join(`group:${groupId}`);
+    // Persist this user's membership/notification authorization for the group.
+    // It must survive switching to another group so every member continues to
+    // receive Web Push notifications while their browser/app is elsewhere.
+    try {
+      const uid = String(socket.userId || '').trim();
+      const db = await getDb();
+      if (db && uid && groupId) {
+        await db.collection('notification_access').updateOne(
+          { userId: uid, groupId },
+          { $set: { userId: uid, groupId, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+          { upsert: true }
+        );
+      }
+    } catch (error) {
+      console.error('Group notification membership save failed:', error.message);
+    }
     // Broadcast immediately after the new member is fully registered in the
     // room, so other users see login/re-login without refreshing.
     emitGroupPresence(groupId);
