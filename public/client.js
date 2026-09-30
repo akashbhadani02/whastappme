@@ -1503,7 +1503,7 @@ socket.on('group-updated', data => {
 });
 
 function applyGroupList(nextGroups) {
-  groups = Array.isArray(nextGroups) && nextGroups.length ? nextGroups : [{ id: 'main', name: 'WhatsApp' }];
+  groups = Array.isArray(nextGroups) ? nextGroups : [];
   currentGroupId = '';
   app?.classList.add('group-locked');
   composer?.classList.add('hidden');
@@ -1528,7 +1528,6 @@ async function loadGroups() {
     const cached = JSON.parse(localStorage.getItem('wa_group_list_cache') || '[]');
     if (Array.isArray(cached) && cached.length) applyGroupList(cached);
   } catch (_) {}
-  if (!groups.length) applyGroupList([{ id: 'main', name: 'WhatsApp' }]);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
@@ -1537,7 +1536,9 @@ async function loadGroups() {
     // Only replace the cached group list when the server actually returned a
     // successful, non-empty list. A temporary 503/network error must never
     // overwrite existing groups with the default/fallback group.
-    if (response.ok && Array.isArray(data.groups) && data.groups.length) {
+    if (response.ok && Array.isArray(data.groups)) {
+      // The server list is authoritative: these are the groups created by admin.
+      // An empty successful list means admin currently has no groups.
       applyGroupList(data.groups);
     }
   } catch (_) {
