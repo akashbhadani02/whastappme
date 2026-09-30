@@ -34,7 +34,7 @@ public class NotificationPollService extends Service {
     private static final String CHANNEL_ID = "wassup_messages_v8";
     private static final String FG_CHANNEL_ID = "wassup_background_v8";
     private static final int SERVICE_ID = 7001;
-    private static final long RECONNECT_INTERVAL_MS = 2000L;
+    private static final long RECONNECT_INTERVAL_MS = 1000L;
 
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();
@@ -58,7 +58,7 @@ public class NotificationPollService extends Service {
 
         // Polling remains as a recovery path. Realtime Socket.IO is the primary
         // notification path and normally delivers the alert immediately.
-        executor.scheduleWithFixedDelay(this::poll, 1, 2, TimeUnit.SECONDS);
+        executor.scheduleWithFixedDelay(this::poll, 1, 1, TimeUnit.SECONDS);
         connectRealtimeIfNeeded();
     }
 
@@ -235,13 +235,14 @@ public class NotificationPollService extends Service {
                     "&after=" + URLEncoder.encode(after, "UTF-8");
 
             HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection();
-            c.setConnectTimeout(5000);
-            c.setReadTimeout(5000);
+            c.setConnectTimeout(3500);
+            c.setReadTimeout(3500);
             c.setRequestMethod("GET");
             c.setUseCaches(false);
             c.setRequestProperty("Cache-Control", "no-cache, no-store");
             c.setRequestProperty("Accept", "application/json");
-            c.setRequestProperty("User-Agent", "WhatsAppAndroidNotification/2.0");
+            c.setRequestProperty("User-Agent", "WhatsAppAndroidNotification/3.0");
+            c.setRequestProperty("X-Notification-Client", "android-native");
 
             int status = c.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {
@@ -302,6 +303,11 @@ public class NotificationPollService extends Service {
         synchronized (seen) {
             if (seen.contains("notified:" + id)) return;
             seen.add("notified:" + id);
+            if (seen.size() > 500) {
+                // Keep memory bounded; server cursor prevents replay of old messages.
+                String first = seen.iterator().next();
+                seen.remove(first);
+            }
         }
 
         Intent open = new Intent(this, MainActivity.class);
