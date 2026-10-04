@@ -28,7 +28,7 @@ let userId = localStorage.getItem('wa_user_id') || '';
 // notification permission, the same PushSubscription can receive messages
 // for every group the User ID has previously joined.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js?v=28', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
+  navigator.serviceWorker.register('/sw.js?v=29', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
 }
 
 function syncAndroidNotificationIdentity() {
@@ -347,7 +347,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=28', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=29', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
@@ -441,13 +441,23 @@ async function pollWebNotifications() {
       if (!id || webNotificationSeen.has(id)) continue;
       webNotificationSeen.add(id);
       if (!webNotificationPrimed) continue;
+      const msgGroupId = String(msg.groupId || '');
+      // If the user is actively viewing the same group, the incoming message
+      // itself is already visible; do not create a duplicate OS alert.
+      // If another group receives the message, alert even when this tab is
+      // currently visible so group-to-group notifications are never missed.
+      const viewingSameGroup = document.visibilityState === 'visible'
+        && String(currentGroupId || '') === msgGroupId
+        && activeChatType !== 'private';
+      if (viewingSameGroup) continue;
+
       const groupTitle = String(msg.groupName || 'WhatsApp').trim() || 'WhatsApp';
       const registration = await navigator.serviceWorker?.ready;
       if (registration?.showNotification) {
         await registration.showNotification(groupTitle, {
           body: 'New message', icon: '/icon.svg', badge: '/icon.svg',
           tag: `wa-${id}`, renotify: true,
-          data: { url: '/#chat', messageId: id, groupId: String(msg.groupId || '') }
+          data: { url: '/#chat', messageId: id, groupId: msgGroupId }
         });
       }
     }
@@ -1448,8 +1458,13 @@ socket.on('native-notification', async data => {
   // notification path, so the WebView must not create duplicate alerts.
   if (window.AndroidBridge) return;
   if (!data?.id || !data?.groupId) return;
-  if (!document.hidden) return;
   if (String(data.userId || '') === String(userId || '')) return;
+  // The active group is already rendered in the chat. For every other group,
+  // show a notification even if the app tab itself is currently visible.
+  const sameVisibleGroup = document.visibilityState === 'visible'
+    && String(currentGroupId || '') === String(data.groupId || '')
+    && activeChatType !== 'private';
+  if (sameVisibleGroup) return;
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const registration = await navigator.serviceWorker?.ready;
