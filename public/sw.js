@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v29-group-push';
+const CACHE = 'whatsapp-pwa-v30-group-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -22,7 +22,7 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch (_) {
-    data = {};
+    try { data = { body: event.data ? event.data.text() : '' }; } catch (_) { data = {}; }
   }
 
   event.waitUntil((async () => {
@@ -45,10 +45,53 @@ self.addEventListener('push', (event) => {
   })());
 });
 
+async function openPushIdentityDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('wa-push', 1);
+    req.onupgradeneeded = () => {
+      try { req.result.createObjectStore('identity'); } catch (_) {}
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function readPushIdentity(key) {
+  const db = await openPushIdentityDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('identity', 'readonly');
+    const req = tx.objectStore('identity').get(key);
+    req.onsuccess = () => { try { db.close(); } catch (_) {} resolve(req.result || ''); };
+    req.onerror = () => { try { db.close(); } catch (_) {} reject(req.error); };
+  });
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const raw = atob((base64String + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
+
 self.addEventListener('pushsubscriptionchange', (event) => {
-  // Browsers may rotate a PushSubscription. The page will resync on next
-  // launch/visibility change, so do not fabricate a subscription here.
-  event.waitUntil(Promise.resolve());
+  // A browser/OS may rotate a subscription while the PWA is not open. Renew it
+  // from the service worker so locked/background PWA notifications keep working.
+  event.waitUntil((async () => {
+    try {
+      const userId = String(await readPushIdentity('userId') || '').trim();
+      const publicKey = String(await readPushIdentity('publicKey') || '').trim();
+      if (!userId || !publicKey) return;
+      const registration = self.registration;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, subscription })
+      });
+    } catch (_) {}
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

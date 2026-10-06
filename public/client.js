@@ -336,6 +336,27 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
 }
 
+async function savePushIdentityForServiceWorker(nextUserId, publicKey) {
+  if (!('indexedDB' in window)) return;
+  await new Promise((resolve, reject) => {
+    const req = indexedDB.open('wa-push', 1);
+    req.onupgradeneeded = () => {
+      try { req.result.createObjectStore('identity'); } catch (_) {}
+    };
+    req.onsuccess = () => {
+      try {
+        const db = req.result;
+        const tx = db.transaction('identity', 'readwrite');
+        tx.objectStore('identity').put(String(nextUserId || ''), 'userId');
+        tx.objectStore('identity').put(String(publicKey || ''), 'publicKey');
+        tx.oncomplete = () => { try { db.close(); } catch (_) {} resolve(); };
+        tx.onerror = () => { try { db.close(); } catch (_) {} reject(tx.error); };
+      } catch (e) { reject(e); }
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 let webPushSetupPromise = null;
 async function setupWebPush() {
   // The bundled Android app has its own persistent native notification service.
@@ -377,6 +398,12 @@ async function setupWebPush() {
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
       }
+      // Keep the identity in IndexedDB too. If the browser rotates the push
+      // subscription while the PWA is locked/backgrounded, sw.js can renew
+      // the subscription without waiting for the app page to reopen.
+      try {
+        await savePushIdentityForServiceWorker(String(userId), data.publicKey);
+      } catch (_) {}
       let saveResponse = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -685,6 +712,46 @@ deleteSelectedBtn?.addEventListener('click', () => {
   requestPassword('Delete for everyone', `Delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
 });
 
+// Turn shared URLs into safe, tappable links while keeping message text plain by default.
+function renderMessageText(container, value) {
+  const text = String(value ?? '');
+  const urlRe = /(https?:\/\/[^\s<>]+|www\.[^\s<>]+)/gi;
+  let last = 0;
+  let match;
+
+  while ((match = urlRe.exec(text)) !== null) {
+    if (match.index > last) {
+      container.appendChild(document.createTextNode(text.slice(last, match.index)));
+    }
+
+    let rawUrl = match[0];
+    // Do not include common sentence punctuation in the clickable URL.
+    let trailing = '';
+    while (/[.,!?;:)]$/.test(rawUrl)) {
+      trailing = rawUrl.slice(-1) + trailing;
+      rawUrl = rawUrl.slice(0, -1);
+    }
+
+    const href = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.referrerPolicy = 'no-referrer';
+    link.textContent = rawUrl;
+    link.title = 'Open link';
+    link.addEventListener('click', e => e.stopPropagation());
+    container.appendChild(link);
+
+    if (trailing) container.appendChild(document.createTextNode(trailing));
+    last = match.index + match[0].length;
+  }
+
+  if (last < text.length) {
+    container.appendChild(document.createTextNode(text.slice(last)));
+  }
+}
+
 function renderMessage(msg, direction) {
   if (!msg || !msg.id || deletedIds.has(msg.id) || deletedForMeIds.has(String(msg.id)) || messages.has(msg.id)) return;
   if (msg.createdAt) {
@@ -734,7 +801,10 @@ function renderMessage(msg, direction) {
       content.appendChild(actions);
     }
   } else {
-    const text=document.createElement('div'); text.className='message-text'; text.textContent=msg.message || ''; content.appendChild(text);
+    const text=document.createElement('div');
+    text.className='message-text';
+    renderMessageText(text, msg.message || '');
+    content.appendChild(text);
   }
   el.appendChild(content);
   if (msg.replyTo?.message) { const q=document.createElement('div'); q.className='reply-quote'; q.innerHTML=`<strong></strong><span></span>`; q.querySelector('strong').textContent=msg.replyTo.user||'Reply'; q.querySelector('span').textContent=msg.replyTo.message; el.insertBefore(q, content); }

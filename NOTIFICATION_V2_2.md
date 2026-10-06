@@ -9,3 +9,9 @@
 - No Firebase/FCM is used.
 
 Important: Chrome notification permission must be allowed. If the browser/app is force-stopped or notifications are blocked by OS/browser settings, no web-only solution can override that restriction.
+
+## v2.3 locked/background reliability
+- PWA push subscription identity is also stored in IndexedDB.
+- The service worker renews a rotated PushSubscription in `pushsubscriptionchange`, so a locked/background PWA does not need to be opened just to repair a rotated subscription.
+- Service worker push handling accepts both JSON and text payloads.
+- The notification path remains Web Push for the PWA and native background service for the Android APK.
