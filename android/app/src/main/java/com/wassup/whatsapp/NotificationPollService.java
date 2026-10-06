@@ -34,8 +34,8 @@ public class NotificationPollService extends Service {
     private static final String CHANNEL_ID = "wassup_messages_v9";
     private static final String FG_CHANNEL_ID = "wassup_background_v9";
     private static final int SERVICE_ID = 7001;
-    private static final long RECONNECT_INTERVAL_MS = 1000L;
-    private static final long POLL_INTERVAL_MS = 1500L;
+    private static final long RECONNECT_INTERVAL_MS = 500L;
+    private static final long POLL_INTERVAL_MS = 10000L;
 
     private ScheduledExecutorService executor;
     private final HashSet<String> seen = new HashSet<>();

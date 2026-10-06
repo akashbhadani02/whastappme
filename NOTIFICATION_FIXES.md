@@ -14,3 +14,10 @@ Android version: 1.5 (versionCode 6). Build and install a new APK for these nati
 - Android notification client sends an explicit native-client header for diagnostics.
 - Android version bumped to 1.7 / versionCode 8.
 - Web Push service-worker cache/version bumped so stale notification workers are replaced.
+
+
+## Instant notification delivery
+- Socket.IO/native realtime and Web Push are the primary notification paths.
+- Browser polling is recovery-only (30 seconds) and is not used for normal instant delivery.
+- Web Push uses high urgency with a short TTL (60 seconds) so queued alerts do not become stale.
+- Android native realtime reconnect is aggressive; HTTP polling remains a 10-second recovery path only.

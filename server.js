@@ -2416,7 +2416,7 @@ async function sendPushToOtherUsers(msg) {
       let lastError = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          await webpush.sendNotification(doc.subscription, payload, { TTL: 300, urgency: 'high' });
+          await webpush.sendNotification(doc.subscription, payload, { TTL: 60, urgency: 'high' });
           lastError = null;
           break;
         } catch (error) {
@@ -2426,7 +2426,8 @@ async function sendPushToOtherUsers(msg) {
             return;
           }
           if (attempt === 0 && [408, 429, 500, 502, 503, 504].includes(Number(error.statusCode))) {
-            await new Promise(resolve => setTimeout(resolve, 250));
+            // Retry immediately: notification latency is more important than
+            // adding a fixed delay. The second attempt has no intentional wait.
             continue;
           }
           break;

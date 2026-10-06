@@ -495,7 +495,8 @@ async function pollWebNotifications() {
     webNotificationPrimed = true;
   } catch (_) {}
 }
-setInterval(pollWebNotifications, 5000);
+// Recovery only. Instant notifications use Web Push/Socket.IO; polling is not the primary path.
+setInterval(pollWebNotifications, 30000);
 
 function now() {
   return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
