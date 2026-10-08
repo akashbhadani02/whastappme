@@ -2359,7 +2359,7 @@ window.addEventListener('popstate', () => {
   }
 });
 document.querySelector('#newChatBtn').addEventListener('click', () => {
-  newChatChoiceModal?.classList.remove('hidden');
+  openPrivateUserCreateModal();
 });
 newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classList.add('hidden'));
 newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
@@ -2462,9 +2462,10 @@ async function createPrivateUserAndOpen() {
       // Admin-created users are credentials for the other person to use in
       // New Chat -> Join Private Chat. Do not automatically switch the admin
       // identity into the new account.
-      alert(`User added successfully!\n\nName: ${created.name}\nPassword: ${password}\n\nGive this Name + Password to the other person. They can use New Chat → Join Private Chat to start chatting with you.`);
+      alert(`User added successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nGive this Login ID + Password to the other person.`);
       await loadAdminAllUsers();
     } else {
+      alert(`User created successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nShare this Login ID + Password with the other person so they can join your personal chat.`);
       await openPrivateChat(created, password);
       showToast(`Private chat created for ${created.name}`);
     }
@@ -2791,7 +2792,7 @@ async function loadAdminAllUsers(){
       row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button>';
       const cb=row.querySelector('.admin-user-select'); cb.dataset.userId=String(user.userId||'');
       row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
-      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''}`;
+      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''}${user.kind==='private_user' ? ' • Login ID: '+String(user.userId||'-')+' • Password: '+String(user.shareablePassword||'-') : ''}`;
       row.querySelector('.single-user-delete').addEventListener('click', async()=>{
         if (!confirm(`Delete ${String(user.name||'User')}? Their account, private-chat password/settings and private data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
         try{

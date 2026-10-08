@@ -742,14 +742,33 @@ app.post('/api/admin/users', async (req, res) => {
       {},
       { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1, lastSeenAt:1, createdBy:1 } }
     ).sort({ createdAt:-1, name:1 }).limit(10000).toArray();
-    res.json({ ok:true, users:docs.map(u => ({
-      userId:String(u._id),
-      name:String(u.name || 'User').slice(0,60),
-      kind:String(u.kind || 'user'),
-      createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
-      updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
-      lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || '')
-    })) });
+
+    const privateIds = docs.filter(u => String(u.kind || '') === 'private_user').map(u => String(u._id));
+    const passwordByUser = new Map();
+    if (privateIds.length) {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) {
+        const rows = await settings.find({ userB:{ $in:privateIds } }, { projection:{ userB:1, password:1 } }).toArray();
+        for (const row of rows) passwordByUser.set(String(row.userB), String(row.password || ''));
+      } else {
+        for (const row of fallbackPrivateChatSettings.values()) {
+          if (row?.userB && privateIds.includes(String(row.userB))) passwordByUser.set(String(row.userB), String(row.password || ''));
+        }
+      }
+    }
+
+    res.json({ ok:true, users:docs.map(u => {
+      const id=String(u._id), kind=String(u.kind || 'user');
+      return {
+        userId:id,
+        name:String(u.name || 'User').slice(0,60),
+        kind,
+        createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
+        updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
+        lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || ''),
+        shareablePassword:kind==='private_user' ? (passwordByUser.get(id) || '') : ''
+      };
+    }) });
   } catch (error) {
     console.error('Admin users load failed:', error.message);
     res.status(500).json({ ok:false, users:[], error:'Could not load users' });
