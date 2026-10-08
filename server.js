@@ -338,6 +338,42 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 });
 
 
+app.post('/api/account/register', async (req, res) => {
+  try {
+    const displayName = String(req.body?.name || '').trim().slice(0, 60);
+    const password = String(req.body?.password || '');
+    if (!displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
+    if (password.length < 4 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+
+    let userId = '';
+    for (let i = 0; i < 20; i++) {
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let candidate = 'WA-';
+      for (let j = 0; j < 8; j++) candidate += alphabet[Math.floor(Math.random() * alphabet.length)];
+      const exists = await profiles.findOne({ _id:candidate }, { projection:{ _id:1 } });
+      if (!exists) { userId = candidate; break; }
+    }
+    if (!userId) return res.status(500).json({ ok:false, error:'Could not generate a unique User ID.' });
+
+    const now = new Date();
+    await profiles.insertOne({
+      _id:userId,
+      name:displayName,
+      kind:'user',
+      password,
+      createdAt:now,
+      updatedAt:now
+    });
+
+    res.json({ ok:true, user:{ userId, name:displayName } });
+  } catch (error) {
+    console.error('Account registration failed:', error.message);
+    res.status(500).json({ ok:false, error:'Could not create account.' });
+  }
+});
+
 app.post('/api/account/login', async (req, res) => {
   try {
     const userId = String(req.body?.userId || '').trim().toUpperCase();

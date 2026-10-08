@@ -309,34 +309,6 @@ const groupEditName = document.querySelector('#groupEditName');
 const groupEditPassword = document.querySelector('#groupEditPassword');
 const groupEditError = document.querySelector('#groupEditError');
 const groupEditSave = document.querySelector('#groupEditSave');
-
-menuBtn?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  // The three-dot button itself is protected: ask for the admin password
-  // before showing any admin menu options.
-  if (adminUnlocked) {
-    appMenu?.classList.toggle('hidden');
-    return;
-  }
-  requestAdminThen(() => {
-    if (adminMenuLocked) adminMenuLocked.classList.add('hidden');
-    if (adminMenuUnlocked) adminMenuUnlocked.classList.remove('hidden');
-    appMenu?.classList.remove('hidden');
-  });
-});
-document.addEventListener('click', () => appMenu?.classList.add('hidden'));
-installAppBtn?.addEventListener('click', () => {
-  appMenu?.classList.add('hidden');
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  if (isAndroid) {
-    window.location.href = '/whatsapp.apk';
-  } else {
-    showToast('Android phone પર આ shortcutથી WhatsApp APK install કરો.');
-  }
-});
-
-let pendingAction = null;
-let pendingPasswordType = 'admin';
 const messages = new Map();
 const deletedIds = new Set();
 const readSent = new Set();
@@ -3359,13 +3331,13 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = userId || '';
-  accountNameInput.placeholder = 'User ID (given by Admin)';
-  accountNameInput.setAttribute('autocomplete','username');
+  accountNameInput.value = '';
+  accountNameInput.placeholder = 'Your Name';
+  accountNameInput.setAttribute('autocomplete','name');
   if (accountPasswordInput) {
     accountPasswordInput.value = '';
-    accountPasswordInput.placeholder = 'Password (given by Admin)';
-    accountPasswordInput.setAttribute('autocomplete','current-password');
+    accountPasswordInput.placeholder = 'Create Password';
+    accountPasswordInput.setAttribute('autocomplete','new-password');
   }
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
@@ -3375,25 +3347,28 @@ function openAccountModal(force = false) {
 }
 
 async function finishAccountLogin() {
-  const loginId = normalizeUserId(accountNameInput.value || '');
+  const enteredName = String(accountNameInput.value || '').trim().slice(0, 60);
   const loginPassword = String(accountPasswordInput?.value || '');
-  if (!loginId) { accountError.textContent = 'Enter the User ID given by Admin'; accountNameInput.focus(); return; }
-  if (loginPassword.length < 4 || loginPassword.length > 100) { accountError.textContent = 'Enter your password'; accountPasswordInput?.focus(); return; }
+  if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput.focus(); return; }
+  if (loginPassword.length < 4 || loginPassword.length > 100) { accountError.textContent = 'Create a password (4-100 characters)'; accountPasswordInput?.focus(); return; }
   accountContinueBtn.disabled = true;
-  accountError.textContent = 'Checking account…';
+  accountError.textContent = 'Saving account…';
   try {
-    const r = await fetch('/api/account/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:loginId, password:loginPassword}), cache:'no-store' });
+    const r = await fetch('/api/account/register', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:enteredName, password:loginPassword}), cache:'no-store' });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Login failed');
-    userId = String(d.user.userId || loginId);
-    name = String(d.user.name || '').trim().slice(0,60);
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create account');
+    userId = String(d.user.userId || '');
+    name = String(d.user.name || enteredName).trim().slice(0,60);
     localStorage.setItem('wa_user_id', userId);
     localStorage.setItem('wa_name', name);
     syncAndroidNotificationIdentity();
+    accountGenerated.textContent = `User ID: ${userId}`;
+    accountGenerated.style.display = 'block';
+    accountError.textContent = 'Account saved successfully.';
     accountModal.classList.add('hidden');
     updateMyNameUI();
     updateGroupNameUI();
-    socket.emit('register-user', { userId, name, deviceId }, result => {
+    socket.emit('register-user', { userId, name, password: loginPassword, deviceId }, result => {
       if (result?.ok) loadPrivateUsers().catch(() => {});
     });
     enableNotifications().then(granted => { if (granted) return setupWebPush(); }).catch(() => {});
@@ -3402,9 +3377,7 @@ async function finishAccountLogin() {
     socket.emit('presence-login', { userId, deviceId });
     if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
   } catch (e) {
-    accountError.textContent = e?.message || 'Login failed';
-    localStorage.removeItem('wa_user_id');
-    localStorage.removeItem('wa_name');
+    accountError.textContent = e?.message || 'Could not create account';
   } finally {
     accountContinueBtn.disabled = false;
   }

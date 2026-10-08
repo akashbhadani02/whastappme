@@ -59,7 +59,7 @@
           </div>
         </button>
       </div>
-      <div class="sidebar-footer">🔒 Your messages are private on this device</div>
+      <div class="sidebar-footer" id="sidebarFooter"><div class="sidebar-footer-note">🔒 Your messages are private on this device</div></div>
     </aside>
 
     <section class="chat-panel">
@@ -128,11 +128,11 @@
     <div class="modal-card">
       <div class="lock-icon">👤</div>
       <h3 id="accountTitle">WhatsApp Account</h3>
-      <p id="accountHelp">Admin creates your account. Enter the User ID and password given by Admin.</p>
-      <input id="accountNameInput" type="text" maxlength="60" autocomplete="username" placeholder="User ID (given by Admin)">
-      <input id="accountPasswordInput" type="password" maxlength="100" autocomplete="current-password" placeholder="Password (given by Admin)" style="margin-top:10px">
+      <p id="accountHelp">Create your account with your name and password. Your User ID will be generated automatically.</p>
+      <input id="accountNameInput" type="text" maxlength="60" autocomplete="username" placeholder="Your Name">
+      <input id="accountPasswordInput" type="password" maxlength="100" autocomplete="current-password" placeholder="Create Password" style="margin-top:10px">
       <div class="password-error" id="accountError"></div>
-      <button class="primary-btn" id="accountContinueBtn">Continue</button>
+      <button class="primary-btn" id="accountContinueBtn">Create Account</button>
       <div id="accountGenerated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
     </div>
   </div>
