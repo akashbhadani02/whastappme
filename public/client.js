@@ -994,9 +994,9 @@ function deleteMessage(messageId, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-message', {id, conversationId}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
+      socket.emit('private-delete-message', {id, conversationId, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
     } else {
-      socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-message', {id, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
   updateSelectionUI();
@@ -1019,9 +1019,9 @@ function deleteMessages(messageIds, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-messages', {ids, conversationId}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
+      socket.emit('private-delete-messages', {ids, conversationId, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
     } else {
-      socket.emit('delete-messages', {ids}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-messages', {ids, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
 }
@@ -1032,16 +1032,14 @@ function clearChat(broadcast=true) {
   updatePreview('No messages yet');
   if (broadcast) {
     if (activeChatType === 'private') {
-      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient()}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
+      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient(), password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
     } else {
-      socket.emit('clear-chat', {by:name});
+      socket.emit('clear-chat', {by:name, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Chat could not be cleared'); });
     }
   }
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', activeChatType === 'private' ? 'Enter this personal chat password to clear the chat. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to clear this chat.', () => {
-  if (activeChatType === 'private' && privateChatPasswordForCurrent()) clearChat(true); else clearChat(true);
-}, activeChatType === 'private' ? 'private-action' : 'admin'));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', 'Enter password deoxy to clear this chat. All messages, photos, videos and audio will be moved to the Admin Recycle Bin.', () => { clearChat(true); }, 'delete'));
 
 const cameraModal = document.querySelector('#cameraModal');
 const cameraPreview = document.querySelector('#cameraPreview');
