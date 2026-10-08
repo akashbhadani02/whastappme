@@ -343,7 +343,7 @@ app.post('/api/account/register', async (req, res) => {
     const displayName = String(req.body?.name || '').trim().slice(0, 60);
     const password = String(req.body?.password || '');
     if (!displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
-    if (password.length < 4 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (password.length < 1 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
 
@@ -435,6 +435,7 @@ app.get('/api/users', async (req, res) => {
     const users = docs.map(u => ({
       userId: String(u._id),
       name: String(u.name || u._id).slice(0, 60),
+      online: isUserOnline(String(u._id)),
       lastSeenAt: u.lastSeenAt || null
     }));
     res.json({ ok:true, users });
@@ -493,7 +494,7 @@ app.post('/api/admin/private-user/create', async (req, res) => {
     const chatPassword = String(req.body?.chatPassword || '');
     if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
-    if (chatPassword.length < 4 || chatPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (chatPassword.length < 1 || chatPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
     if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a user.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
@@ -524,7 +525,7 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     const password = String(req.body?.password || '');
     if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
     if (creatorId.length > 200) return res.status(400).json({ ok:false, error:'Invalid creator.' });
-    if (password.length < 4 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (password.length < 1 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
     if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a private user.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
@@ -578,7 +579,7 @@ app.post('/api/admin/private-user/change-password', async (req, res) => {
     const newPassword = String(req.body?.newPassword || '');
     if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
     if (!userId) return res.status(400).json({ ok:false, error:'User ID is required.' });
-    if (newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
     const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1 } });
@@ -605,12 +606,48 @@ app.post('/api/admin/private-user/change-password', async (req, res) => {
   }
 });
 
+app.post('/api/user/change-password', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    if (!userId || newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 1-100 characters.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ password:1, name:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User not found.' });
+    const old = await getPrivateUserPassword(userId);
+    if (!old || old !== currentPassword) return res.status(403).json({ ok:false, error:'Current password is incorrect.' });
+    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
+    try {
+      for (const target of io.sockets.sockets.values()) {
+        const cid = String(target.privateAuthorizedPrivateChat || '');
+        if (cid && cid.includes(`:${userId}:`)) {
+          target.leave(`private:${cid}`);
+          target.privateAuthorizedPrivateChat = '';
+          target.emit('private-password-changed', { userId });
+        }
+      }
+    } catch (_) {}
+    // Remove legacy per-conversation passwords for this user so the account
+    // password is the single source of truth going forward.
+    try {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) await settings.deleteMany({ userB:userId });
+    } catch (_) {}
+    res.json({ ok:true, userId, name:String(profile.name || '') });
+  } catch (error) {
+    console.error('Private user password change failed:', error.message);
+    res.status(500).json({ ok:false, error:'Could not change password.' });
+  }
+});
+
 app.post('/api/private-user/change-password', async (req, res) => {
   try {
     const userId = String(req.body?.userId || '').trim();
     const currentPassword = String(req.body?.currentPassword || '');
     const newPassword = String(req.body?.newPassword || '');
-    if (!userId || newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 4-100 characters.' });
+    if (!userId || newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 1-100 characters.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
     const profile = await profiles.findOne({ _id:userId }, { projection:{ password:1, name:1 } });
@@ -655,7 +692,7 @@ async function getPrivateChatSetting(conversationId) {
 
 async function createPrivateChatSetting(conversationId, userA, userB, password) {
   const clean = String(password || '');
-  if (!conversationId || !clean || clean.length < 4 || clean.length > 100) return { ok:false, error:'Password must be 4-100 characters.' };
+  if (!conversationId || !clean || clean.length < 1 || clean.length > 100) return { ok:false, error:'Password must be 1-100 characters.' };
   const collection = await getPrivateChatSettingsCollection();
   const document = { _id:String(conversationId), userA:String(userA), userB:String(userB), password:clean, createdAt:new Date() };
   if (!collection) {
@@ -943,6 +980,7 @@ app.post('/api/admin/users', async (req, res) => {
         createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
         updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
         lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || ''),
+        online:isUserOnline(id),
         shareablePassword:passwordByUser.get(id) || ''
       };
     }) });
@@ -3002,6 +3040,24 @@ setInterval(() => {
   }
 }, PRESENCE_HEARTBEAT_MS);
 
+function isUserOnline(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return false;
+  for (const sock of io.sockets.sockets.values()) {
+    if (String(sock.userId || '').trim() === uid) return true;
+  }
+  return false;
+}
+
+function broadcastUserPresence(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return;
+  const payload = { userId: uid, online: isUserOnline(uid) };
+  for (const viewer of io.sockets.sockets.values()) {
+    try { viewer.emit('user-presence', payload); } catch (_) {}
+  }
+}
+
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
   const uploads = new Map();
@@ -3065,6 +3121,10 @@ io.on('connection', async (socket) => {
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
+    if (registrationOk && socket.userId) {
+      if (previousUserId && previousUserId !== socket.userId) broadcastUserPresence(previousUserId);
+      broadcastUserPresence(socket.userId);
+    }
     if (typeof ack === 'function') ack({ ok: registrationOk, userId: socket.userId, error: registrationOk ? '' : 'User account not found.' });
   });
 
@@ -3125,7 +3185,7 @@ io.on('connection', async (socket) => {
 
       const history = await loadPrivateMessages(conversationId);
       socket.emit('private-history', history);
-      if (typeof ack === 'function') ack({ ok:true, conversationId });
+      if (typeof ack === 'function') ack({ ok:true, conversationId, peerOnline:isUserOnline(peer) });
     } catch (error) {
       socket.emit('private-history', []);
       if (typeof ack === 'function') ack({ ok:false, error:'Could not open personal chat.' });
@@ -3770,10 +3830,12 @@ io.on('connection', async (socket) => {
       setImmediate(async () => {
         await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
         await emitGroupPresence(disconnectedGroupId);
+        broadcastUserPresence(disconnectedUserId);
       });
     }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
+    if (!disconnectedGroupId && disconnectedUserId) setImmediate(() => broadcastUserPresence(disconnectedUserId));
     uploads.clear();
     // Socket.IO removes the socket from its rooms before/around disconnect; defer
     // the calculation one tick so the departed user is definitely excluded.

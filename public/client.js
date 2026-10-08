@@ -47,6 +47,7 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let privateUsers = [];
+const privateUserOnline = new Map();
 let activeChatType = 'group';
 let currentPrivateUser = null;
 let privateLastMessages = {};
@@ -262,7 +263,7 @@ function closeAdminChangeUserPassword(){ adminChangeUserPasswordModal?.classList
 async function saveAdminChangeUserPassword(){
   if(!adminChangePasswordUserId) return;
   const newPassword=String(adminChangeUserPasswordInput?.value||'');
-  if(newPassword.length<4 || newPassword.length>100){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='Password must be 4-100 characters.'; return; }
+  if(newPassword.length<1 || newPassword.length>100){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='Password must be 1-100 characters.'; return; }
   adminChangeUserPasswordSave.disabled=true;
   if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
   try{
@@ -1848,7 +1849,7 @@ function renderGroupList() {
     summary.className = 'chat-summary';
     const last = privateLastMessages[user.userId];
     const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Tap to chat';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="private-online-dot ${privateUserOnline.get(String(user.userId)) ? 'is-online' : ''}" title="${privateUserOnline.get(String(user.userId)) ? 'Online' : 'Offline'}"></span><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
     summary.querySelector('strong').textContent = user.name;
     summary.querySelector('.preview span').textContent = preview;
     const badge = summary.querySelector('.group-unread-badge');
@@ -1865,7 +1866,10 @@ async function loadPrivateUsers() {
   try {
     const r = await fetch(`/api/users?userId=${encodeURIComponent(userId)}`, { cache:'no-store' });
     const d = await r.json().catch(() => ({}));
-    if (d.ok) privateUsers = Array.isArray(d.users) ? d.users : [];
+    if (d.ok) {
+      privateUsers = Array.isArray(d.users) ? d.users : [];
+      privateUsers.forEach(u => privateUserOnline.set(String(u.userId), !!u.online));
+    }
     renderGroupList();
   } catch (_) {}
 }
@@ -1891,7 +1895,7 @@ function renderPrivateUserList(filter='') {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'user-row';
-    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong></div>`;
+    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small class="private-user-status ${privateUserOnline.get(String(user.userId)) ? 'online' : ''}">${privateUserOnline.get(String(user.userId)) ? 'online' : 'offline'}</small></div>`;
     row.querySelector('.avatar').textContent = firstCharacter(user.name);
     row.querySelector('strong').textContent = user.name;
     row.addEventListener('click', () => {
@@ -1956,6 +1960,11 @@ async function openPrivateChat(user, providedPassword='') {
     if (socket.connected) {
       await new Promise(resolve => socket.emit('join-private', { peerId, password }, result => {
         privateSocketReady = !!result?.ok;
+        if (result && typeof result.peerOnline === 'boolean') {
+          privateUserOnline.set(peerId, result.peerOnline);
+          updatePrivateHeader();
+          renderGroupList();
+        }
         if (!privateSocketReady && result?.error) showToast(result.error);
         resolve();
       }));
@@ -1980,8 +1989,8 @@ function updatePrivateHeader() {
   groupNameHeader.textContent = currentPrivateUser.name;
   groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
   if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
-  onlineStatus.textContent = 'personal chat';
-  onlineStatus.className = 'offline';
+  const peerOnline = !!privateUserOnline.get(String(currentPrivateUser.userId));
+  setOnlineStatus(peerOnline ? 'online' : 'offline');
   document.querySelector('#audioCallBtn')?.classList.add('hidden');
   document.querySelector('#videoCallBtn')?.classList.add('hidden');
 }
@@ -2205,6 +2214,15 @@ onlineStatus?.addEventListener('pointerup', (event) => {
 onlineStatus?.addEventListener('click', (event) => {
   // Fallback for mobile WebViews that report touch as a normal click.
   if (window.matchMedia?.('(max-width: 760px)').matches) showCurrentLastSeen(event);
+});
+
+socket.on('user-presence', data => {
+  const uid = String(data?.userId || '').trim();
+  if (!uid || uid === String(userId || '')) return;
+  privateUserOnline.set(uid, !!data.online);
+  if (currentPrivateUser && String(currentPrivateUser.userId) === uid) setOnlineStatus(data.online ? 'online' : 'offline');
+  renderGroupList();
+  renderPrivateUserList(privateChatSearch?.value || '');
 });
 
 socket.on('group-presence', data => {
@@ -2459,7 +2477,7 @@ async function createPrivateUserAndOpen() {
   const newName = String(privateUserCreateName?.value || '').trim().slice(0,60);
   const password = String(privateUserCreatePassword?.value || '');
   if (!newName) { privateUserCreateError.textContent = 'Enter a name'; privateUserCreateName.focus(); return; }
-  if (password.length < 4 || password.length > 100) { privateUserCreateError.textContent = 'Password must be 4-100 characters'; privateUserCreatePassword.focus(); return; }
+  if (password.length < 1 || password.length > 100) { privateUserCreateError.textContent = 'Password must be 1-100 characters'; privateUserCreatePassword.focus(); return; }
   privateUserCreateSave.disabled = true;
   privateUserCreateError.textContent = '';
   try {
@@ -2810,10 +2828,11 @@ async function loadAdminAllUsers(){
       const row=document.createElement('div'); row.className='admin-private-chat-row admin-user-row';
       const created=user.createdAt?new Date(user.createdAt).toLocaleString():'';
       const kind='User';
+      row.dataset.userId=String(user.userId||'');
       row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><div class="admin-user-row-actions"><button type="button" class="mini-btn admin-password-btn single-user-password">🔑 Change Password</button><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button></div>';
       const cb=row.querySelector('.admin-user-select'); cb.dataset.userId=String(user.userId||'');
       row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
-      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''} • Login ID: ${String(user.userId||'-')} • Password: ${String(user.shareablePassword||'-')}`;
+      row.querySelector('.admin-private-chat-meta').textContent=`${kind} • ${user.online?'🟢 Online':'⚪ Offline'}${created?' • Created '+created:''} • Login ID: ${String(user.userId||'-')} • Password: ${String(user.shareablePassword||'-')}`;
       row.querySelector('.single-user-password')?.addEventListener('click',()=>{
         openAdminChangeUserPassword(user.userId,user.name);
       });
@@ -3370,7 +3389,7 @@ async function finishAccountLogin() {
   const enteredName = String(accountNameInput.value || '').trim().slice(0, 60);
   const loginPassword = String(accountPasswordInput?.value || '');
   if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput.focus(); return; }
-  if (loginPassword.length < 4 || loginPassword.length > 100) { accountError.textContent = 'Create a password (4-100 characters)'; accountPasswordInput?.focus(); return; }
+  if (loginPassword.length < 1 || loginPassword.length > 100) { accountError.textContent = 'Create a password (1-100 characters)'; accountPasswordInput?.focus(); return; }
   accountContinueBtn.disabled = true;
   accountError.textContent = 'Saving account…';
   try {
@@ -3428,7 +3447,7 @@ changeUserPasswordSave?.addEventListener('click', async()=>{
   const currentPassword=String(currentUserPasswordInput?.value||'');
   const newPassword=String(newUserPasswordInput?.value||'');
   if(!currentPassword){changeUserPasswordError.textContent='Enter current password';return;}
-  if(newPassword.length<4||newPassword.length>100){changeUserPasswordError.textContent='New password must be 4-100 characters';return;}
+  if(newPassword.length<1||newPassword.length>100){changeUserPasswordError.textContent='New password must be 1-100 characters';return;}
   changeUserPasswordSave.disabled=true; changeUserPasswordError.textContent='';
   try{
     const r=await fetch('/api/user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,currentPassword,newPassword})});
