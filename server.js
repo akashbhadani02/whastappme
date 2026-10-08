@@ -347,6 +347,20 @@ app.post('/api/account/register', async (req, res) => {
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
 
+    // If the same Name + Password already belongs to an existing account,
+    // treat this as that user's login instead of creating a duplicate account.
+    const existingAccount = await profiles.findOne(
+      { name: displayName, password },
+      { projection: { _id:1, name:1 } }
+    );
+    if (existingAccount?._id) {
+      return res.json({
+        ok:true,
+        existing:true,
+        user:{ userId:String(existingAccount._id), name:String(existingAccount.name || displayName) }
+      });
+    }
+
     let userId = '';
     for (let i = 0; i < 20; i++) {
       const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -3024,34 +3038,34 @@ io.on('connection', async (socket) => {
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
     const requestedPassword = String(data?.password || '');
+    let registrationOk = true;
     if (socket.userId) {
       try {
         const profiles = await getUserProfilesCollection();
         if (profiles) {
           const existing = await profiles.findOne({ _id: socket.userId });
-          if (existing?.name) {
-            if (!existing.password && requestedPassword.length >= 4) {
-              await profiles.updateOne({ _id: socket.userId }, { $set: { password: requestedPassword, kind: existing.kind || 'user', updatedAt: new Date() } });
+          // A browser may only register an identity that is already persisted
+          // by /api/account/register or by the Admin user-creation flow.
+          // Never create arbitrary users from a client-supplied User ID.
+          if (!existing) {
+            registrationOk = false;
+            socket.userId = '';
+          } else {
+            if (existing?.name) {
+              socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
             }
-            socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
-          } else if (requestedName) {
-            const set = { name: requestedName, kind: 'user', updatedAt: new Date() };
-            if (requestedPassword.length >= 4) set.password = requestedPassword;
-            await profiles.updateOne(
-              { _id: socket.userId },
-              { $set: set, $setOnInsert: { createdAt: new Date(), kind: 'user' } },
-              { upsert: true }
-            );
-            socket.emit('user-profile', { userId: socket.userId, name: requestedName });
           }
+        } else {
+          registrationOk = false;
         }
       } catch (error) {
-        console.error('Failed to sync user profile:', error.message);
+        registrationOk = false;
+        console.error('Failed to validate user profile:', error.message);
       }
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
-    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
+    if (typeof ack === 'function') ack({ ok: registrationOk, userId: socket.userId, error: registrationOk ? '' : 'User account not found.' });
   });
 
   socket.on('register-admin', (data, ack) => {
