@@ -22,8 +22,22 @@
         </div>
       </div>
       <div class="app-menu hidden" id="appMenu">
-        <!-- <button id="installAppBtn" type="button">📲 Install WhatsApp</button> -->
-        <button id="adminGroupsBtn" type="button">🔐 Admin Login</button></div>
+        <!-- Admin controls are revealed only after the password is verified. -->
+        <div id="adminMenuLocked">
+          <button id="adminGroupsBtn" type="button">🔐 Admin Login</button>
+        </div>
+        <div id="adminMenuUnlocked" class="hidden">
+          <div class="admin-menu-title">🔐 Admin Controls</div>
+          <button id="adminMenuPanelBtn" type="button">⚙️ Admin Panel</button>
+          <button id="adminMenuCallBtn" type="button">🎙️ Call Recordings</button>
+          <button id="adminMenuPhotosBtn" type="button">📷 Photos</button>
+          <button id="adminMenuVideosBtn" type="button">🎥 Videos</button>
+          <button id="adminMenuPrivateBtn" type="button">💬 Private Users</button>
+          <button id="adminMenuRecycleBtn" type="button">♻️ Recycle Bin</button>
+          <button id="adminMenuDeleteBtn" type="button" class="admin-menu-danger">🗑 Delete User</button>
+          <button id="adminMenuLogoutBtn" type="button">🔒 Lock Admin</button>
+        </div>
+      </div>
       <div class="search-wrap">
         <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">

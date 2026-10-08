@@ -181,6 +181,16 @@ const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
 const installAppBtn = document.querySelector('#installAppBtn');
 const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
+const adminMenuLocked = document.querySelector('#adminMenuLocked');
+const adminMenuUnlocked = document.querySelector('#adminMenuUnlocked');
+const adminMenuPanelBtn = document.querySelector('#adminMenuPanelBtn');
+const adminMenuCallBtn = document.querySelector('#adminMenuCallBtn');
+const adminMenuPhotosBtn = document.querySelector('#adminMenuPhotosBtn');
+const adminMenuVideosBtn = document.querySelector('#adminMenuVideosBtn');
+const adminMenuPrivateBtn = document.querySelector('#adminMenuPrivateBtn');
+const adminMenuRecycleBtn = document.querySelector('#adminMenuRecycleBtn');
+const adminMenuDeleteBtn = document.querySelector('#adminMenuDeleteBtn');
+const adminMenuLogoutBtn = document.querySelector('#adminMenuLogoutBtn');
 const newGroupBtn = document.querySelector('#newGroupBtn');
 const adminGroupsModal = document.querySelector('#adminGroupsModal');
 const adminGroupsClose = document.querySelector('#adminGroupsClose');
@@ -261,6 +271,8 @@ menuBtn?.addEventListener('click', (e) => {
     return;
   }
   requestAdminThen(() => {
+    if (adminMenuLocked) adminMenuLocked.classList.add('hidden');
+    if (adminMenuUnlocked) adminMenuUnlocked.classList.remove('hidden');
     appMenu?.classList.remove('hidden');
   });
 });
@@ -3168,7 +3180,15 @@ async function saveNewGroup() {
   }
 }
 
-adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminGroups); });
+adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(() => { if (adminMenuLocked) adminMenuLocked.classList.add('hidden'); if (adminMenuUnlocked) adminMenuUnlocked.classList.remove('hidden'); appMenu?.classList.remove('hidden'); openAdminGroups(); }); });
+adminMenuPanelBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroups(); });
+adminMenuCallBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminCallRecordings(); });
+adminMenuPhotosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('image'); });
+adminMenuVideosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('video'); });
+adminMenuPrivateBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminPrivateChats(); });
+adminMenuRecycleBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminRecycle(); });
+adminMenuDeleteBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); adminDeleteUserBtn?.click(); });
+adminMenuLogoutBtn?.addEventListener('click', () => { adminUnlocked=false; if(adminMenuUnlocked) adminMenuUnlocked.classList.add('hidden'); if(adminMenuLocked) adminMenuLocked.classList.remove('hidden'); appMenu?.classList.add('hidden'); try{socket.emit('unregister-admin');}catch(_){} showToast('Admin locked'); });
 adminCallRecordingsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminCallRecordings); });
 adminCallRecordingsClose?.addEventListener('click', () => adminCallRecordingsModal.classList.add('hidden'));
 adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === adminCallRecordingsModal) adminCallRecordingsModal.classList.add('hidden'); });
