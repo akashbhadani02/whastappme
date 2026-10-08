@@ -800,3 +800,12 @@ button,input,textarea{touch-action:manipulation}
   .composer{min-height:52px;padding-top:4px;padding-bottom:calc(4px + env(safe-area-inset-bottom))}
   .modal-card{max-height:calc(100dvh - 10px);padding-top:16px;padding-bottom:12px}
 }
+
+/* Admin all-users responsive controls */
+.admin-users-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 12px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.03)}
+.admin-select-all{display:flex;align-items:center;gap:7px;font-weight:700;margin-right:auto;cursor:pointer}
+.admin-user-row{display:flex;align-items:center;gap:10px}
+.admin-user-check{display:flex;align-items:center;gap:10px;min-width:0;flex:1;cursor:pointer}
+.admin-user-check .admin-private-chat-info{min-width:0}
+.admin-user-select{width:18px;height:18px;flex:0 0 auto}
+@media(max-width:600px){.admin-users-toolbar{display:grid;grid-template-columns:1fr 1fr}.admin-users-toolbar .admin-select-all{grid-column:1/-1;margin:0}.admin-users-toolbar button{width:100%;font-size:12px;padding:9px 7px}.admin-user-row{align-items:flex-start}.admin-user-row .single-user-delete{font-size:11px;padding:8px 7px;flex:0 0 auto}.admin-user-check{align-items:flex-start}.admin-user-check .admin-private-chat-info{overflow:hidden}.admin-user-check .admin-private-chat-users,.admin-user-check .admin-private-chat-meta{white-space:normal;overflow-wrap:anywhere}}
