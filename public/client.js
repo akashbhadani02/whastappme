@@ -994,9 +994,9 @@ function deleteMessage(messageId, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-message', {id, conversationId, deletePassword: 'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
+      socket.emit('private-delete-message', {id, conversationId}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
     } else {
-      socket.emit('delete-message', {id, deletePassword: 'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
   updateSelectionUI();
@@ -1019,9 +1019,9 @@ function deleteMessages(messageIds, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-messages', {ids, conversationId, deletePassword: 'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
+      socket.emit('private-delete-messages', {ids, conversationId}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
     } else {
-      socket.emit('delete-messages', {ids, deletePassword: 'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-messages', {ids}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
 }
