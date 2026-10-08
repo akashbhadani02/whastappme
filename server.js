@@ -398,6 +398,45 @@ function generatePrivateUserId() {
   return out;
 }
 
+app.post('/api/admin/private-user/create', async (req, res) => {
+  try {
+    const adminPassword = String(req.body?.password || '');
+    const creatorId = String(req.body?.creatorId || '').trim();
+    const displayName = String(req.body?.name || '').trim().slice(0, 60);
+    const chatPassword = String(req.body?.chatPassword || '');
+    if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
+    if (chatPassword.length < 4 || chatPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a user.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1 } });
+    if (!creator) return res.status(403).json({ ok:false, error:'Admin account profile was not found.' });
+    let userId = '';
+    for (let i=0; i<8; i++) {
+      const candidate = generatePrivateUserId();
+      try {
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        userId = candidate;
+        break;
+      } catch (e) {
+        if (e?.code !== 11000) throw e;
+      }
+    }
+    if (!userId) return res.status(500).json({ ok:false, error:'Could not create user.' });
+    const conversationId = privateConversationId(creatorId, userId);
+    const setting = await createPrivateChatSetting(conversationId, creatorId, userId, chatPassword);
+    if (!setting.ok) {
+      await profiles.deleteOne({ _id:userId });
+      return res.status(400).json(setting);
+    }
+    res.json({ ok:true, user:{ userId, name:displayName }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId });
+  } catch (error) {
+    console.error('Admin private user creation failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not create user.' });
+  }
+});
+
 app.post('/api/private-chat/create-user', async (req, res) => {
   try {
     const creatorId = String(req.body?.creatorId || '').trim();

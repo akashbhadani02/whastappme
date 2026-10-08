@@ -2447,14 +2447,27 @@ async function createPrivateUserAndOpen() {
   privateUserCreateSave.disabled = true;
   privateUserCreateError.textContent = '';
   try {
-    const r = await fetch('/api/private-chat/create-user', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ creatorId:userId, name:newName, password }) });
+    const adminMode = !!adminUnlocked;
+    const endpoint = adminMode ? '/api/admin/private-user/create' : '/api/private-chat/create-user';
+    const body = adminMode
+      ? { password:PASSWORD, creatorId:userId, name:newName, chatPassword:password }
+      : { creatorId:userId, name:newName, password };
+    const r = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create private user');
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create user');
     const created = { userId:String(d.user.userId), name:String(d.user.name || newName) };
     privateUsers = [created, ...privateUsers.filter(u => String(u.userId) !== created.userId)];
     closePrivateUserCreateModal();
-    await openPrivateChat(created, password);
-    showToast(`Private chat created for ${created.name}`);
+    if (adminMode) {
+      // Admin-created users are credentials for the other person to use in
+      // New Chat -> Join Private Chat. Do not automatically switch the admin
+      // identity into the new account.
+      alert(`User added successfully!\n\nName: ${created.name}\nPassword: ${password}\n\nGive this Name + Password to the other person. They can use New Chat → Join Private Chat to start chatting with you.`);
+      await loadAdminAllUsers();
+    } else {
+      await openPrivateChat(created, password);
+      showToast(`Private chat created for ${created.name}`);
+    }
   } catch (e) {
     privateUserCreateError.textContent = e?.message || 'Could not create private user';
   } finally { privateUserCreateSave.disabled = false; }
@@ -2595,7 +2608,7 @@ adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.
 adminAllUsersClose?.addEventListener('click', () => adminAllUsersModal?.classList.add('hidden'));
 adminAllUsersModal?.addEventListener('click', e => { if(e.target===adminAllUsersModal) adminAllUsersModal.classList.add('hidden'); });
 adminAllUsersRefresh?.addEventListener('click', loadAdminAllUsers);
-adminAllUsersAddUser?.addEventListener('click', () => { if (!adminUnlocked) return requestAdminThen(() => adminAllUsersAddUser?.click()); openPrivateUserCreateModal(); });
+adminAllUsersAddUser?.addEventListener('click', () => { if (!adminUnlocked) return requestAdminThen(openPrivateUserCreateModal); openPrivateUserCreateModal(); });
 adminAllUsersBack?.addEventListener('click', () => {
   adminAllUsersModal?.classList.add('hidden');
   if (adminUnlocked) { adminGroupsModal?.classList.remove('hidden'); loadAdminGroups?.(); }

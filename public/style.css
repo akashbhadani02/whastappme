@@ -834,3 +834,6 @@ button,input,textarea{touch-action:manipulation}
   .admin-users-card .admin-users-toolbar .admin-select-all{grid-column:1/-1}
   .admin-users-card .admin-users-toolbar button{width:100%;min-height:42px}
 }
+/* Add User form: make credentials fields easy to use on mobile/desktop */
+#privateUserCreateModal .modal-card input{width:100%;box-sizing:border-box;min-height:46px}
+#privateUserCreateModal .primary-btn{width:100%;min-height:46px}
