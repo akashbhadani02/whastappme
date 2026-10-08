@@ -254,7 +254,15 @@ const groupEditSave = document.querySelector('#groupEditSave');
 
 menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
-  appMenu?.classList.toggle('hidden');
+  // The three-dot button itself is protected: ask for the admin password
+  // before showing any admin menu options.
+  if (adminUnlocked) {
+    appMenu?.classList.toggle('hidden');
+    return;
+  }
+  requestAdminThen(() => {
+    appMenu?.classList.remove('hidden');
+  });
 });
 document.addEventListener('click', () => appMenu?.classList.add('hidden'));
 installAppBtn?.addEventListener('click', () => {
