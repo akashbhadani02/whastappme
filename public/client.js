@@ -1482,6 +1482,25 @@ socket.on('history', history => {
   }
 });
 
+// If Admin deletes this account, the old local identity must be discarded.
+// The next time the app is opened/continued, the user is treated as a new user
+// and receives a fresh User ID after entering a new name + password.
+socket.on('account-deleted', (info) => {
+  try {
+    localStorage.removeItem('wa_user_id');
+    localStorage.removeItem('wa_name');
+  } catch (_) {}
+  userId = '';
+  name = '';
+  try { window.privateChatPasswords = {}; } catch (_) {}
+  try {
+    if (socket.connected) socket.disconnect();
+  } catch (_) {}
+  updateMyNameUI?.();
+  alert('Your account was deleted by Admin. Please create a new account with a new name and password.');
+  setTimeout(() => openAccountModal(true), 50);
+});
+
 socket.on('connect', () => {
   if (userId) {
     refreshAllUnreadCounts().catch(() => {});
