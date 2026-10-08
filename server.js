@@ -30,6 +30,7 @@ const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
+const MESSAGE_DELETE_PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const PRIVATE_CHAT_SETTINGS_COLLECTION_NAME = 'private_chat_settings';
 const DEFAULT_GROUP_ID = 'main';
@@ -3545,15 +3546,20 @@ io.on('connection', async (socket) => {
   socket.on('private-delete-message', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const id = String(data?.id || '').trim();
-    if (!conversationId || !id || socket.privateAuthorizedPrivateChat !== conversationId) {
+    if (!conversationId || !id) {
       return typeof ack === 'function' && ack({ok:false, error:'Personal chat authorization required.'});
     }
-    if (String(data?.deletePassword || '') !== ADMIN_PASSWORD) {
+    if (String(data?.deletePassword || '') !== MESSAGE_DELETE_PASSWORD) {
       return typeof ack === 'function' && ack({ok:false, error:'Delete password required.'});
     }
     try {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
+      const parts = conversationId.split(':');
+      const participants = new Set([String(parts[0] || ''), String(parts[1] || '')]);
+      if (!participants.has(String(socket.userId || ''))) {
+        return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
+      }
       const existing = await collection.findOne({ id, conversationId, deletedAt:{ $exists:false } });
       if (existing) {
         await movePrivateMessagesToRecycleBin([existing], conversationId, 'private-message-delete');
@@ -3570,15 +3576,20 @@ io.on('connection', async (socket) => {
   socket.on('private-delete-messages', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const ids = Array.isArray(data?.ids) ? [...new Set(data.ids.map(x=>String(x||'').trim()).filter(Boolean))].slice(0,500) : [];
-    if (!conversationId || !ids.length || socket.privateAuthorizedPrivateChat !== conversationId) {
+    if (!conversationId || !ids.length) {
       return typeof ack === 'function' && ack({ok:false, error:'Personal chat authorization required.'});
     }
-    if (String(data?.deletePassword || '') !== ADMIN_PASSWORD) {
+    if (String(data?.deletePassword || '') !== MESSAGE_DELETE_PASSWORD) {
       return typeof ack === 'function' && ack({ok:false, error:'Delete password required.'});
     }
     try {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
+      const parts = conversationId.split(':');
+      const participants = new Set([String(parts[0] || ''), String(parts[1] || '')]);
+      if (!participants.has(String(socket.userId || ''))) {
+        return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
+      }
       const existing = await collection.find({ id:{ $in:ids }, conversationId, deletedAt:{ $exists:false } }).toArray();
       if (existing.length) {
         await movePrivateMessagesToRecycleBin(existing, conversationId, 'private-message-delete');
