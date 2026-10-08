@@ -843,3 +843,23 @@ button,input,textarea{touch-action:manipulation}
 .admin-user-row-actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center;justify-content:flex-end;margin-left:auto}
 .admin-password-btn{background:#0ea5e9!important;border-color:#0ea5e9!important;color:#fff!important}
 @media(max-width:560px){.admin-user-row-actions{width:100%;justify-content:flex-start;margin-top:8px}.admin-user-row-actions .mini-btn{flex:1;min-width:145px}}
+
+/* Final fix: prevent the 3-dot admin menu from leaving an empty white strip. */
+#appMenu.hidden,
+.app-menu.hidden {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+}
+#appMenu:not(.hidden) {
+  display: block !important;
+  visibility: visible !important;
+  height: auto !important;
+  max-height: calc(100dvh - 78px);
+}

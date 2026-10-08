@@ -606,6 +606,12 @@ function closePassword() {
   passwordModal.classList.add('hidden');
   pendingAction = null;
   pendingPasswordType = 'admin';
+  // Never leave an empty admin menu after cancelling/closing login.
+  if (!adminUnlocked) {
+    try { adminMenuLocked?.classList.remove('hidden'); } catch (_) {}
+    try { adminMenuUnlocked?.classList.add('hidden'); } catch (_) {}
+    try { appMenu?.classList.add('hidden'); } catch (_) {}
+  }
 }
 
 passwordSubmit.addEventListener('click', async () => {
