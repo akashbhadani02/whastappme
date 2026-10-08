@@ -683,3 +683,120 @@ html,body{max-width:100%;overflow-x:hidden}
 .private-user-row:hover{background:rgba(0,229,255,.08)}
 .private-user-row strong{display:block}
 .private-user-row small{display:block;opacity:.55;margin-top:2px}
+
+/* ===== Final responsive pass: mobile + desktop ===== */
+*{min-width:0}
+img,video,canvas{max-width:100%}
+button,input,textarea{touch-action:manipulation}
+
+/* Comfortable desktop workspace */
+@media (min-width:761px){
+  .app-shell{width:min(1500px,100vw);height:min(96dvh,920px)}
+  .sidebar{width:380px;min-width:340px}
+  .chat-bg{padding-left:clamp(28px,5vw,90px);padding-right:clamp(28px,5vw,90px)}
+  .message{max-width:min(70%,680px)}
+  .modal-card{max-width:440px}
+}
+
+/* Phones: WhatsApp-like single panel, no horizontal scrolling */
+@media (max-width:760px){
+  html,body{width:100%;height:100%;overflow:hidden}
+  body{display:block;background:#fff}
+  .app-shell{width:100vw;height:100dvh;max-width:none;border-radius:0;box-shadow:none;position:relative;overflow:hidden}
+  .sidebar{width:100%;min-width:0;height:100%;border-right:0}
+  .sidebar-top{height:58px;min-height:58px;padding:0 8px 0 10px}
+  .avatar{width:40px;height:40px;font-size:16px}
+  .top-actions{gap:0}
+  .top-actions .icon-btn{width:42px;height:42px;font-size:22px}
+  .search-wrap{height:42px;min-height:42px;margin:7px 9px 5px;padding:0 12px}
+  .chat-list{padding-bottom:4px}
+  .chat-item{gap:11px;padding:10px 10px;min-height:64px}
+  .chat-line strong{font-size:15px}
+  .chat-line span{font-size:11px}
+  .sidebar-footer{padding:9px 8px calc(9px + env(safe-area-inset-bottom))}
+
+  .chat-panel{position:absolute;inset:0;z-index:20;width:100%;height:100%;display:none}
+  .app-shell.chat-open .sidebar{display:none}
+  .app-shell.chat-open .chat-panel{display:flex}
+  .chat-header{height:58px;min-height:58px;padding:0 7px 0 3px;gap:5px}
+  .back-btn{display:grid;place-items:center;width:42px;height:42px;font-size:32px}
+  .chat-header .avatar{width:38px;height:38px}
+  .contact-info strong{font-size:15px}
+  .contact-info span{font-size:11px}
+  .header-actions{gap:0}
+  .header-actions .icon-btn{width:39px;height:39px;font-size:19px}
+  .selection-actions{gap:0}
+  .selection-actions .icon-btn{width:37px;height:37px;font-size:18px}
+  .selection-actions span{max-width:62px;overflow:hidden;text-overflow:ellipsis}
+  .chat-bg{padding:10px 8px 12px;gap:3px;background-size:16px 16px}
+  .message{max-width:88%;font-size:14px;padding:6px 8px 5px}
+  .message-text{font-size:14px}
+  .message .media-wrap{max-width:82vw}
+  .message .media-wrap img,.message .media-wrap video{max-width:82vw;max-height:300px}
+  .typing-bar{bottom:63px;left:10px}
+  .composer{min-height:58px;padding:7px 6px calc(7px + env(safe-area-inset-bottom));gap:4px}
+  .composer .round-btn{width:38px;height:38px;font-size:18px}
+  .composer textarea{min-height:40px;max-height:110px;padding:10px 11px;font-size:16px}
+  .send-btn{width:40px;height:40px}
+
+  .modal{padding:8px;align-items:center;overflow:hidden}
+  .modal-card{width:min(100%,430px);max-width:430px;max-height:calc(100dvh - 16px);padding:24px 16px calc(20px + env(safe-area-inset-bottom));border-radius:14px;overflow:auto}
+  .modal-card h3{font-size:19px;line-height:1.3}
+  .modal-card p{line-height:1.45}
+  .modal-card input{font-size:16px;min-height:44px}
+  .primary-btn{min-height:44px}
+
+  /* 3-dot menu */
+  .app-menu{position:absolute;right:8px;top:54px;z-index:50;width:min(220px,calc(100vw - 20px));background:#fff;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.22);padding:6px;overflow:hidden}
+  .app-menu button{width:100%;text-align:left;padding:12px 13px;border-radius:7px;font-size:14px;min-height:44px}
+  .app-menu button:active{background:#f0f2f5}
+
+  /* Admin and other long-content pages/modals */
+  .admin-card,.admin-media-view-card,.admin-media-folder-card,.recycle-admin-card{width:100%!important;max-width:none!important;max-height:calc(100dvh - 16px)!important;border-radius:14px;padding:20px 12px calc(18px + env(safe-area-inset-bottom));overflow:hidden}
+  #adminGroupsList,#adminPrivateChatsList,#adminGroupMediaList,#adminCallRecordingsList,#adminRecycleList{overflow:auto;min-height:0}
+  .admin-main-recycle-row{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .admin-main-recycle-row .mini-btn{min-height:44px;font-size:12px}
+  .admin-row-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .admin-row-actions button,.admin-delete-btn,.admin-save-btn{min-height:44px}
+  .admin-media-folder-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .recording-video-grid{grid-template-columns:1fr}
+  .recycle-item{flex-direction:column;align-items:stretch}
+  .recycle-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .recycle-actions button{min-height:42px}
+  .admin-private-chat-row{flex-direction:column;align-items:stretch}
+  .admin-private-chat-row .admin-delete-btn{width:100%;min-height:44px}
+
+  /* Call/camera/media fullscreen */
+  .call-modal,.camera-modal,.camera-preview-modal{padding:0}
+  .call-card,.camera-card,.camera-preview-card{width:100vw;height:100dvh;max-width:none;max-height:none;border-radius:0}
+}
+
+@media (max-width:430px){
+  .header-actions #audioCallBtn,.header-actions #videoCallBtn{display:none}
+  .header-actions .icon-btn{width:37px}
+  .chat-header .contact-info{padding-right:2px}
+  .message{max-width:91%}
+  .composer .gallery-btn{display:grid}
+  .admin-main-recycle-row,.admin-row-actions,.recycle-actions{grid-template-columns:1fr!important}
+  .admin-media-folder-grid{grid-template-columns:1fr!important}
+}
+
+@media (max-width:360px){
+  .top-actions .icon-btn{width:38px}
+  .chat-header{gap:2px}
+  .header-actions .icon-btn{width:35px;font-size:17px}
+  .chat-bg{padding-left:5px;padding-right:5px}
+  .message{max-width:94%}
+  .composer{gap:2px}
+  .composer .round-btn{width:35px;height:35px}
+  .send-btn{width:37px;height:37px}
+}
+
+/* Landscape phones */
+@media (max-width:760px) and (orientation:landscape){
+  .sidebar-top,.chat-header{height:52px;min-height:52px}
+  .search-wrap{margin-top:4px;margin-bottom:4px}
+  .chat-bg{padding-top:7px;padding-bottom:7px}
+  .composer{min-height:52px;padding-top:4px;padding-bottom:calc(4px + env(safe-area-inset-bottom))}
+  .modal-card{max-height:calc(100dvh - 10px);padding-top:16px;padding-bottom:12px}
+}

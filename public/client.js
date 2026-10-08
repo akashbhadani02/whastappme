@@ -1333,7 +1333,7 @@ function showAdminMediaPopup(item, isRecording=false){
   const icon = isRecording ? (type==='audio'?'🎙️':'🎥') : ({image:'🖼️',video:'🎥',audio:'🎤',document:'📄'}[type]||'📎');
   adminMediaPopupIcon.textContent=icon;
   adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
-  adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
+  adminMediaPopupMeta.textContent=`${item.groupName||'Group'} • ${item.feedName||item.user||'User'} • ${isRecording?'Recording':type}`;
   adminMediaPopupPreview.innerHTML='';
   const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
   if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
@@ -1811,10 +1811,9 @@ function renderPrivateUserList(filter='') {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'private-user-row';
-    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small></small></div>`;
+    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong></div>`;
     row.querySelector('.avatar').textContent = firstCharacter(user.name);
     row.querySelector('strong').textContent = user.name;
-    row.querySelector('small').textContent = user.userId;
     row.addEventListener('click', () => {
       privateChatModal.classList.add('hidden');
       openPrivateChat(user);
@@ -2966,7 +2965,7 @@ function openRecycleChatView(items, groupName, targetId='') {
     const bubble=document.createElement('div');
     bubble.className='recycle-chat-bubble' + (m.userId===userId ? ' mine' : '');
     bubble.dataset.itemId=String(item.id||'');
-    const sender=document.createElement('div'); sender.className='recycle-chat-sender'; sender.textContent=String(m.user||m.senderName||m.senderId||m.userId||'Unknown user'); bubble.appendChild(sender);
+    const sender=document.createElement('div'); sender.className='recycle-chat-sender'; sender.textContent=String(m.user||m.senderName||'Unknown user'); bubble.appendChild(sender);
     const type=String(m.type||'text').toLowerCase();
     if(type==='image'||type==='video'||type==='audio'){
       const wrap=document.createElement('div'); wrap.className='recycle-chat-media';
@@ -3025,10 +3024,10 @@ async function loadAdminRecycle() {
       const m = item.message || {};
       const row = document.createElement('div'); row.className='recycle-item';
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
-      const sender = m.user || m.senderName || m.senderId || m.userId || 'Unknown user';
+      const sender = m.user || m.senderName || 'Unknown user';
       const content = m.message || m.fileName || (m.type === 'image' ? 'Photo' : m.type === 'video' ? 'Video' : m.type === 'audio' ? 'Audio' : m.type === 'document' ? 'Document' : 'Deleted message');
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      const oldGroup = item.recycleType === 'private' ? `Private chat: ${String(item.privateConversationId || item.message?.conversationId || '')}` : (item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : ''));
+      const oldGroup = item.recycleType === 'private' ? 'Private chat' : (item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : '');
       const isMainRecycle = adminRecycleGroupId === 'main';
       row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">🗑️ Delete → Main Recycle</button>'}</div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
