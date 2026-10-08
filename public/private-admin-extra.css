@@ -7,3 +7,7 @@
 .app-menu .admin-menu-danger{color:#c62828}
 .app-menu .admin-menu-danger:hover{background:#fff1f1}
 @media(max-width:760px){.app-menu{max-height:calc(100dvh - 78px);overflow-y:auto}.app-menu button{min-height:44px}}
+.admin-users-card{max-width:760px;width:min(94vw,760px)}
+.admin-users-card .admin-private-chat-row{gap:12px}
+.admin-users-card .admin-private-chat-info{min-width:0;flex:1}
+@media (max-width:600px){.admin-users-card{width:calc(100vw - 20px);max-height:88vh}.admin-users-card .admin-private-chat-row{align-items:flex-start}.admin-users-card .admin-private-chat-row .admin-delete-btn{flex:0 0 auto;white-space:nowrap}.admin-users-card .admin-private-chat-users{overflow-wrap:anywhere}}

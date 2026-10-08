@@ -216,6 +216,11 @@ const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordi
 const adminPhotosBtn = document.querySelector('#adminPhotosBtn');
 const adminVideosBtn = document.querySelector('#adminVideosBtn');
 const adminPrivateChatsBtn = document.querySelector('#adminPrivateChatsBtn');
+const adminAllUsersModal = document.querySelector('#adminAllUsersModal');
+const adminAllUsersClose = document.querySelector('#adminAllUsersClose');
+const adminAllUsersList = document.querySelector('#adminAllUsersList');
+const adminAllUsersError = document.querySelector('#adminAllUsersError');
+const adminAllUsersRefresh = document.querySelector('#adminAllUsersRefresh');
 const adminDeleteUserBtn = document.querySelector('#adminDeleteUserBtn');
 const adminPrivateChatsModal = document.querySelector('#adminPrivateChatsModal');
 const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose');
@@ -2583,6 +2588,9 @@ adminVideosBtn?.addEventListener('click', () => openAdminGroupMedia('video'));
 adminPrivateChatsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminPrivateChats); });
 adminDeleteUserBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminDeleteUser); });
 adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.classList.add('hidden'));
+adminAllUsersClose?.addEventListener('click', () => adminAllUsersModal?.classList.add('hidden'));
+adminAllUsersModal?.addEventListener('click', e => { if(e.target===adminAllUsersModal) adminAllUsersModal.classList.add('hidden'); });
+adminAllUsersRefresh?.addEventListener('click', loadAdminAllUsers);
 adminPrivateChatsModal?.addEventListener('click', e => { if (e.target === adminPrivateChatsModal) adminPrivateChatsModal.classList.add('hidden'); });
 adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats());
 
@@ -2721,6 +2729,47 @@ function closeAdminMediaPopup(){
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
+async function loadAdminAllUsers(){
+  if(!adminAllUsersList) return;
+  adminAllUsersError.textContent='';
+  adminAllUsersList.innerHTML='<div class="admin-group-row">Loading all users…</div>';
+  try{
+    const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
+    const d=await r.json();
+    if(!r.ok || !d.ok) throw new Error(d.error||'Unauthorized');
+    const users=Array.isArray(d.users)?d.users:[];
+    adminAllUsersList.innerHTML='';
+    if(!users.length){ adminAllUsersList.innerHTML='<div class="admin-group-row">No users found.</div>'; return; }
+    const heading=document.createElement('div'); heading.className='admin-group-row'; heading.textContent=`👥 All registered users (${users.length})`; adminAllUsersList.appendChild(heading);
+    users.forEach(user=>{
+      const row=document.createElement('div'); row.className='admin-private-chat-row';
+      const created=user.createdAt?new Date(user.createdAt).toLocaleString():'';
+      const kind=user.kind==='private_user'?'Private user':'User';
+      row.innerHTML='<div class="admin-private-chat-info"><div class="admin-private-chat-users"></div><div class="admin-private-chat-meta"></div></div><button type="button" class="mini-btn admin-delete-btn">🗑 Delete User</button>';
+      row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
+      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''}`;
+      row.querySelector('.admin-delete-btn').addEventListener('click',()=>{
+        requestPassword('Delete user','Enter the Admin password to permanently delete this user. Their private-chat password/settings will also be removed. Deleted messages are kept in the Main Recycle Bin.',async()=>{
+          try{
+            const rr=await fetch('/api/admin/users/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:user.userId})});
+            const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Delete failed');
+            showToast(`${String(user.name||'User')} deleted`); await loadAdminAllUsers(); await loadPrivateUsers();
+          }catch(e){showToast(e.message||'Delete failed');}
+        },'admin');
+      });
+      adminAllUsersList.appendChild(row);
+    });
+  }catch(e){adminAllUsersList.innerHTML='';adminAllUsersError.textContent=e.message||'Could not load users.';}
+}
+function openAdminAllUsers(){
+  if(!adminUnlocked) return requestAdminThen(openAdminAllUsers);
+  appMenu?.classList.add('hidden');
+  adminGroupsModal?.classList.add('hidden');
+  adminPrivateChatsModal?.classList.add('hidden');
+  adminAllUsersModal?.classList.remove('hidden');
+  loadAdminAllUsers();
+}
+
 function openAdminDeleteUser() {
   adminGroupsModal?.classList.add('hidden');
   adminPrivateChatsModal?.classList.remove('hidden');
@@ -3185,7 +3234,7 @@ adminMenuPanelBtn?.addEventListener('click', () => { appMenu?.classList.add('hid
 adminMenuCallBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminCallRecordings(); });
 adminMenuPhotosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('image'); });
 adminMenuVideosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('video'); });
-adminMenuPrivateBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminPrivateChats(); });
+adminMenuPrivateBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminAllUsers(); });
 adminMenuRecycleBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminRecycle(); });
 adminMenuDeleteBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); adminDeleteUserBtn?.click(); });
 adminMenuLogoutBtn?.addEventListener('click', () => { adminUnlocked=false; if(adminMenuUnlocked) adminMenuUnlocked.classList.add('hidden'); if(adminMenuLocked) adminMenuLocked.classList.remove('hidden'); appMenu?.classList.add('hidden'); try{socket.emit('unregister-admin');}catch(_){} showToast('Admin locked'); });

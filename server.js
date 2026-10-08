@@ -694,6 +694,83 @@ app.post('/api/admin/private-chats/delete', async (req, res) => {
   }
 });
 
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, users:[], error:'Database unavailable' });
+    const docs = await profiles.find(
+      {},
+      { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1, lastSeenAt:1, createdBy:1 } }
+    ).sort({ createdAt:-1, name:1 }).limit(10000).toArray();
+    res.json({ ok:true, users:docs.map(u => ({
+      userId:String(u._id),
+      name:String(u.name || 'User').slice(0,60),
+      kind:String(u.kind || 'user'),
+      createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
+      updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
+      lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || '')
+    })) });
+  } catch (error) {
+    console.error('Admin users load failed:', error.message);
+    res.status(500).json({ ok:false, users:[], error:'Could not load users' });
+  }
+});
+
+app.post('/api/admin/users/delete', async (req, res) => {
+  try {
+    const password = String(req.body?.password || '');
+    const userId = String(req.body?.userId || '').trim();
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Wrong admin password' });
+    if (!userId || userId.length > 200) return res.status(400).json({ ok:false, error:'Invalid user' });
+    const db = await getDb();
+    const profiles = await getUserProfilesCollection();
+    if (!db || !profiles) return res.status(503).json({ ok:false, error:'Database unavailable' });
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1, kind:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User not found' });
+    const collection = db.collection(COLLECTION_NAME);
+
+    // Keep deleted messages available to Admin in the Main Recycle Bin.
+    const userMessages = await collection.find({ userId, deletedAt:{ $exists:false } }).toArray();
+    if (userMessages.length) await movePrivateMessagesToRecycleBin(userMessages, `private:${userId}:account`, 'user-delete');
+    await collection.updateMany({ userId, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:'admin', deleteReason:'user-delete' } });
+
+    // Remove all private-chat messages where this user is either participant.
+    const privateRegex = new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`);
+    const privateRows = await collection.find({ conversationId:{ $regex:privateRegex }, deletedAt:{ $exists:false } }).toArray();
+    if (privateRows.length) await movePrivateMessagesToRecycleBin(privateRows, `private:${userId}:account`, 'user-delete');
+    await collection.updateMany({ conversationId:{ $regex:privateRegex }, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:'admin', deleteReason:'user-delete' } });
+
+    try {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) await settings.deleteMany({ $or:[{ userA:userId }, { userB:userId }] });
+      for (const key of Array.from(fallbackPrivateChatSettings.keys())) {
+        const parts=String(key).split(':');
+        if (parts.length===3 && (parts[1]===userId || parts[2]===userId)) fallbackPrivateChatSettings.delete(key);
+      }
+    } catch (_) {}
+
+    try { await db.collection(MEDIA_UPLOADS_COLLECTION_NAME).deleteMany({ $or:[{ userId }, { peerId:userId }, { conversationId:{ $regex:privateRegex } }] }); } catch (_) {}
+    try { await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteMany({ userId }); } catch (_) {}
+    try { await db.collection('notification_access').deleteMany({ userId }); } catch (_) {}
+    try { await db.collection(EVENTS_COLLECTION_NAME).deleteMany({ $or:[{'payload.userId':userId},{'payload.privateUserId':userId}] }); } catch (_) {}
+
+    for (const target of io.sockets.sockets.values()) {
+      if (String(target.userId || '') === userId) {
+        try { target.emit('account-deleted', { userId, reason:'Deleted by administrator' }); } catch (_) {}
+        try { target.disconnect(true); } catch (_) {}
+      } else {
+        try { target.emit('private-user-deleted', { userId, name:String(profile.name || 'User') }); } catch (_) {}
+      }
+    }
+    await profiles.deleteOne({ _id:userId });
+    res.json({ ok:true, userId, name:String(profile.name || 'User') });
+  } catch (error) {
+    console.error('Admin user delete failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'User delete failed' });
+  }
+});
+
 app.post('/api/admin/private-users/delete', async (req, res) => {
   try {
     const suppliedPassword = String(req.body?.password || '');
