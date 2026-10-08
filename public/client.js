@@ -10,6 +10,8 @@ const socket = io({
 
 const PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = 'kmkm';
+// Password required by every user before deleting a message/media item.
+const DELETE_PASSWORD = 'deoxy';
 const socketId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 // Stable per-installation/device identifier. The server still uses userId for
 // user-level presence, while this ID lets it distinguish multiple devices.
@@ -620,7 +622,9 @@ passwordSubmit.addEventListener('click', async () => {
   let valid = false;
   if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
   else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
-  else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
+  else if (pendingPasswordType === 'delete') {
+    valid = supplied === DELETE_PASSWORD;
+  } else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
     try {
       const peerId = String(window.pendingPrivatePeerId || currentPrivateUser?.userId || '');
       const endpoint = pendingPasswordType === 'private-setup' ? '/api/private-chat/set-password' : '/api/private-chat/verify';
@@ -773,7 +777,7 @@ cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
 deleteSelectedBtn?.addEventListener('click', () => {
   if (!selectedMessageIds.size) return;
   const ids = Array.from(selectedMessageIds);
-  requestPassword('Delete for everyone', `Delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
+  requestPassword('Delete message', `Enter delete password to delete ${ids.length} selected message${ids.length === 1 ? '' : 's'}. Deleted items will be kept in the Admin Recycle Bin.`, () => deleteMessages(ids), 'delete');
 });
 
 // Turn shared URLs into safe, tappable links while keeping message text plain by default.
@@ -909,7 +913,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete for everyone', activeChatType === 'private' ? 'Enter this personal chat password. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id), activeChatType === 'private' ? 'private-action' : 'admin');
+    requestPassword('Delete message', 'Enter delete password. Deleted messages, photos, videos and other media will be kept in the Admin Recycle Bin.', () => deleteMessage(msg.id), 'delete');
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -993,9 +997,9 @@ function deleteMessage(messageId, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-message', {id, conversationId}, (result) => { if (!result || !result.ok) showToast('Private message could not be deleted'); });
+      socket.emit('private-delete-message', {id, conversationId, deletePassword: DELETE_PASSWORD}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
     } else {
-      socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-message', {id, deletePassword: DELETE_PASSWORD}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
     }
   }
   updateSelectionUI();
@@ -1018,9 +1022,9 @@ function deleteMessages(messageIds, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-messages', {ids, conversationId}, (result) => { if (!result || !result.ok) showToast('Private messages could not be deleted'); });
+      socket.emit('private-delete-messages', {ids, conversationId, deletePassword: DELETE_PASSWORD}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
     } else {
-      socket.emit('delete-messages', {ids}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-messages', {ids, deletePassword: DELETE_PASSWORD}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
     }
   }
 }

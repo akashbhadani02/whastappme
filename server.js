@@ -26,6 +26,7 @@ const GROUP_SETTINGS_COLLECTION_NAME = 'group_settings';
 const PUSH_SUBSCRIPTIONS_COLLECTION_NAME = 'push_subscriptions';
 const MEDIA_UPLOADS_COLLECTION_NAME = 'media_uploads';
 const RECYCLE_BIN_COLLECTION_NAME = 'recycle_bin';
+const DELETE_MESSAGE_PASSWORD = 'deoxy';
 const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
@@ -3474,6 +3475,10 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('delete-message', async (data, ack) => {
+    if (String(data?.deletePassword || '') !== DELETE_MESSAGE_PASSWORD) {
+      if (typeof ack === 'function') ack({ok:false, error:'Wrong delete password'});
+      return;
+    }
     if (!data || !data.id) return;
     const groupId = normalizeGroupId(socket.groupId);
     const deleteEvent = { id: data.id, groupId };
@@ -3499,6 +3504,10 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('delete-messages', async (data, ack) => {
+    if (String(data?.deletePassword || '') !== DELETE_MESSAGE_PASSWORD) {
+      if (typeof ack === 'function') ack({ok:false, error:'Wrong delete password'});
+      return;
+    }
     const ids = Array.isArray(data?.ids)
       ? [...new Set(data.ids.map(id => String(id || '').trim()).filter(Boolean))].slice(0, 500)
       : [];
@@ -3535,6 +3544,10 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('private-delete-message', async (data, ack) => {
+    if (String(data?.deletePassword || '') !== DELETE_MESSAGE_PASSWORD) {
+      if (typeof ack === 'function') ack({ok:false, error:'Wrong delete password'});
+      return;
+    }
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const id = String(data?.id || '').trim();
     if (!conversationId || !id || socket.privateAuthorizedPrivateChat !== conversationId) {
@@ -3557,6 +3570,10 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('private-delete-messages', async (data, ack) => {
+    if (String(data?.deletePassword || '') !== DELETE_MESSAGE_PASSWORD) {
+      if (typeof ack === 'function') ack({ok:false, error:'Wrong delete password'});
+      return;
+    }
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const ids = Array.isArray(data?.ids) ? [...new Set(data.ids.map(x=>String(x||'').trim()).filter(Boolean))].slice(0,500) : [];
     if (!conversationId || !ids.length || socket.privateAuthorizedPrivateChat !== conversationId) {
