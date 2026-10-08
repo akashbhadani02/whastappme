@@ -17,7 +17,7 @@
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
-          <button class="icon-btn" id="newChatBtn" title="Create new user" aria-label="Create new user">＋</button>
+          <button class="icon-btn" id="newChatBtn" type="button" title="Create new user" aria-label="Create new user" onclick="openPrivateUserCreateModal(); return false;">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
@@ -362,6 +362,6 @@
 </div>
 <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js?v=20261008-1110"></script>
+  <script src="/client.js?v=20261008-1130"></script>
 </body>
 </html>
