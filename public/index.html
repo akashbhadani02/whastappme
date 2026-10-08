@@ -203,6 +203,18 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="adminChangeUserPasswordModal" role="dialog" aria-modal="true" aria-label="Change user password by admin">
+    <div class="modal-card small-modal">
+      <button class="modal-close" id="adminChangeUserPasswordClose" aria-label="Close">×</button>
+      <div class="lock-icon">🔑</div>
+      <h3>Admin: Change User Password</h3>
+      <p class="modal-help" id="adminChangeUserPasswordInfo">Set a new password for this user.</p>
+      <input id="adminChangeUserPasswordInput" type="password" maxlength="100" autocomplete="new-password" placeholder="New password">
+      <div class="password-error" id="adminChangeUserPasswordError"></div>
+      <button class="primary-btn" id="adminChangeUserPasswordSave">Change Password</button>
+    </div>
+  </div>
+
   <div class="modal hidden" id="adminPrivateChatsModal" role="dialog" aria-modal="true">
     <div class="modal-card admin-card">
       <button class="modal-close" id="adminPrivateChatsClose" aria-label="Close">×</button>

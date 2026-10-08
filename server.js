@@ -492,6 +492,40 @@ async function getPrivateUserPassword(userId) {
   return '';
 }
 
+app.post('/api/admin/private-user/change-password', async (req, res) => {
+  try {
+    const adminPassword = String(req.body?.password || '');
+    const userId = String(req.body?.userId || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+    if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
+    if (!userId) return res.status(400).json({ ok:false, error:'User ID is required.' });
+    if (newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const profile = await profiles.findOne({ _id:userId, kind:'private_user' }, { projection:{ _id:1, name:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'Private user not found.' });
+    await profiles.updateOne({ _id:userId, kind:'private_user' }, { $set:{ password:newPassword, updatedAt:new Date() } });
+    try {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) await settings.deleteMany({ userB:userId });
+    } catch (_) {}
+    try {
+      for (const target of io.sockets.sockets.values()) {
+        const cid = String(target.privateAuthorizedPrivateChat || '');
+        if (cid && cid.includes(`:${userId}:`)) {
+          target.leave(`private:${cid}`);
+          target.privateAuthorizedPrivateChat = '';
+          target.emit('private-password-changed', { userId, adminChanged:true });
+        }
+      }
+    } catch (_) {}
+    res.json({ ok:true, userId, name:String(profile.name || '') });
+  } catch (error) {
+    console.error('Admin private user password change failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not change user password.' });
+  }
+});
+
 app.post('/api/private-user/change-password', async (req, res) => {
   try {
     const userId = String(req.body?.userId || '').trim();

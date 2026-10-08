@@ -225,6 +225,45 @@ const adminAllUsersAddUser = document.querySelector('#adminAllUsersAddUser');
 const adminAllUsersSelectAll = document.querySelector('#adminAllUsersSelectAll');
 const adminAllUsersDeleteSelected = document.querySelector('#adminAllUsersDeleteSelected');
 const adminAllUsersBack = document.querySelector('#adminAllUsersBack');
+const adminChangeUserPasswordModal = document.querySelector('#adminChangeUserPasswordModal');
+const adminChangeUserPasswordClose = document.querySelector('#adminChangeUserPasswordClose');
+const adminChangeUserPasswordInput = document.querySelector('#adminChangeUserPasswordInput');
+const adminChangeUserPasswordSave = document.querySelector('#adminChangeUserPasswordSave');
+const adminChangeUserPasswordError = document.querySelector('#adminChangeUserPasswordError');
+const adminChangeUserPasswordInfo = document.querySelector('#adminChangeUserPasswordInfo');
+let adminChangePasswordUserId = '';
+let adminChangePasswordUserName = '';
+
+function openAdminChangeUserPassword(userId, userName){
+  if(!adminUnlocked) return requestAdminThen(() => openAdminChangeUserPassword(userId,userName));
+  adminChangePasswordUserId=String(userId||'');
+  adminChangePasswordUserName=String(userName||'User');
+  if(adminChangeUserPasswordInfo) adminChangeUserPasswordInfo.textContent=`Set a new password for ${adminChangePasswordUserName} (${adminChangePasswordUserId}). The old password is not required.`;
+  if(adminChangeUserPasswordInput) adminChangeUserPasswordInput.value='';
+  if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
+  adminChangeUserPasswordModal?.classList.remove('hidden');
+  setTimeout(()=>adminChangeUserPasswordInput?.focus(),50);
+}
+function closeAdminChangeUserPassword(){ adminChangeUserPasswordModal?.classList.add('hidden'); adminChangePasswordUserId=''; adminChangePasswordUserName=''; }
+async function saveAdminChangeUserPassword(){
+  if(!adminChangePasswordUserId) return;
+  const newPassword=String(adminChangeUserPasswordInput?.value||'');
+  if(newPassword.length<4 || newPassword.length>100){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='Password must be 4-100 characters.'; return; }
+  adminChangeUserPasswordSave.disabled=true;
+  if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
+  try{
+    const r=await fetch('/api/admin/private-user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:adminChangePasswordUserId,newPassword})});
+    const d=await r.json();
+    if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password.');
+    closeAdminChangeUserPassword();
+    showToast(`Password changed for ${adminChangePasswordUserName}`);
+    await loadAdminAllUsers();
+    await loadPrivateUsers();
+  }catch(e){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent=e.message||'Could not change password.'; }
+  finally{ adminChangeUserPasswordSave.disabled=false; }
+}
+
+
 const adminDeleteUserBtn = document.querySelector('#adminDeleteUserBtn');
 const adminPrivateChatsModal = document.querySelector('#adminPrivateChatsModal');
 const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose');
@@ -2574,6 +2613,10 @@ adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.
 adminAllUsersClose?.addEventListener('click', () => adminAllUsersModal?.classList.add('hidden'));
 adminAllUsersModal?.addEventListener('click', e => { if(e.target===adminAllUsersModal) adminAllUsersModal.classList.add('hidden'); });
 adminAllUsersRefresh?.addEventListener('click', loadAdminAllUsers);
+adminChangeUserPasswordClose?.addEventListener('click', closeAdminChangeUserPassword);
+adminChangeUserPasswordSave?.addEventListener('click', saveAdminChangeUserPassword);
+adminChangeUserPasswordInput?.addEventListener('keydown', e => { if(e.key==='Enter') saveAdminChangeUserPassword(); });
+adminChangeUserPasswordModal?.addEventListener('click', e => { if(e.target===adminChangeUserPasswordModal) closeAdminChangeUserPassword(); });
 adminAllUsersAddUser?.addEventListener('click', () => { if (!adminUnlocked) return requestAdminThen(openPrivateUserCreateModal); openPrivateUserCreateModal(); });
 adminAllUsersBack?.addEventListener('click', () => {
   adminAllUsersModal?.classList.add('hidden');
@@ -2754,10 +2797,13 @@ async function loadAdminAllUsers(){
       const row=document.createElement('div'); row.className='admin-private-chat-row admin-user-row';
       const created=user.createdAt?new Date(user.createdAt).toLocaleString():'';
       const kind=user.kind==='private_user'?'Private user':'User';
-      row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button>';
+      row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><div class="admin-user-row-actions"><button type="button" class="mini-btn admin-password-btn single-user-password">🔑 Change Password</button><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button></div>';
       const cb=row.querySelector('.admin-user-select'); cb.dataset.userId=String(user.userId||'');
       row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
       row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''}${user.kind==='private_user' ? ' • Login ID: '+String(user.userId||'-')+' • Password: '+String(user.shareablePassword||'-') : ''}`;
+      row.querySelector('.single-user-password')?.addEventListener('click',()=>{
+        openAdminChangeUserPassword(user.userId,user.name);
+      });
       row.querySelector('.single-user-delete').addEventListener('click', async()=>{
         if (!confirm(`Delete ${String(user.name||'User')}? Their account, private-chat password/settings and private data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
         try{

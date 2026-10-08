@@ -840,3 +840,6 @@ button,input,textarea{touch-action:manipulation}
 
 .small-modal{max-width:430px;width:calc(100vw - 32px)}
 .small-modal .modal-help{line-height:1.45;opacity:.8}
+.admin-user-row-actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center;justify-content:flex-end;margin-left:auto}
+.admin-password-btn{background:#0ea5e9!important;border-color:#0ea5e9!important;color:#fff!important}
+@media(max-width:560px){.admin-user-row-actions{width:100%;justify-content:flex-start;margin-top:8px}.admin-user-row-actions .mini-btn{flex:1;min-width:145px}}
