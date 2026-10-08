@@ -687,7 +687,7 @@ async function sendMessage(text) {
       if (!ack?.ok) showToast('Private message is waiting for connection — please retry');
       else {
         messages.set(msg.id, ack.message || msg);
-        const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+        const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
         if (el) el.dataset.synced = '1';
       }
     }
@@ -720,12 +720,12 @@ async function sendMessage(text) {
   } catch (error) {
     const ack = await emitAck('message', msg, 12000, 1);
     if (!ack || !ack.ok) {
-      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
       if (el) { el.classList.add('send-failed'); el.title = 'Send failed. Tap Send again when the connection returns.'; }
       showToast('Message is waiting for connection — please retry');
     } else {
       messages.set(msg.id, ack.message || msg);
-      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
       if (el) { el.dataset.synced = '1'; el.classList.remove('send-failed'); }
     }
   }
@@ -1372,7 +1372,7 @@ function isMessageDelivered(msg) {
 }
 
 function updateTicks(msg) {
-  const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+  const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
   if (!el || msg.userId !== userId) return;
   const ticks = el.querySelector('.ticks');
   if (!ticks) return;
@@ -1681,13 +1681,11 @@ async function syncMessages() {
     const data = await response.json();
     if (!Array.isArray(data.messages)) return;
 
-    // IMPORTANT: never delete a local message merely because it is missing
-    // from one sync response. A temporary Mongo/network/serverless failure can
-    // return an incomplete/empty history. Messages disappear only after the
-    // explicit delete-message / clear-chat action.
-    // Cross-device deletion reconciliation: even when Socket.IO/WebSocket is
-    // unavailable (for example on different Vercel instances), every device in
-    // the same group learns which messages were deleted and removes them locally.
+    // The API returns ONLY active (undeleted) messages. The chat UI must match
+    // that exact server state: deleted messages must never remain as blank
+    // bubbles, placeholders, or local-cache ghosts.
+    // Cross-device reconciliation is therefore based on the active ID set, while
+    // the separate deleted-ID endpoint handles the recycle-bin/delete metadata.
     try {
       const deletedResponse = await fetch(`/api/messages/deleted?groupId=${encodeURIComponent(currentGroupId)}`, { cache:'no-store' });
       if (deletedResponse.ok) {
@@ -1704,9 +1702,20 @@ async function syncMessages() {
       }
     } catch (_) {}
 
+    const activeIds = new Set(data.messages.map(msg => String(msg?.id || '')).filter(Boolean));
+    [...messages.keys()].forEach(id => {
+      const sid = String(id);
+      if (activeIds.has(sid)) return;
+      const el = document.querySelector(`.message[data-id="${CSS.escape(sid)}"]`);
+      if (el) el.remove();
+      messages.delete(sid);
+      deletedIds.add(sid);
+      selectedMessageIds.delete(sid);
+    });
+
     data.messages.forEach(msg => {
       if (!msg || !msg.id) return;
-      const existing = messages.get(msg.id);
+      const existing = messages.get(String(msg.id));
       if (!existing) {
         receiveMessage(msg);
         return;
@@ -1715,7 +1724,7 @@ async function syncMessages() {
       existing.user = msg.user || existing.user;
       existing.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
       existing.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
-      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
       const sender = el && el.querySelector('.sender');
       if (sender && existing.user) sender.textContent = existing.user;
       updateTicks(existing);
@@ -1745,7 +1754,39 @@ setInterval(() => {
   // The badge is user-level, so every group must be refreshed independently.
   if (userId && Array.isArray(groups) && groups.length) refreshAllUnreadCounts().catch(() => {});
   if (currentGroupId) syncMessages();
+  if (activeChatType === 'private' && currentPrivateUser?.userId) syncPrivateMessages();
 }, 5000);
+
+async function syncPrivateMessages() {
+  const peerId = String(currentPrivateUser?.userId || '');
+  const password = String(window.privateChatPasswords?.[peerId] || '');
+  if (!userId || !peerId || !password || activeChatType !== 'private') return;
+  try {
+    const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}&password=${encodeURIComponent(password)}`, { cache:'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok || !Array.isArray(d.messages)) return;
+    const activeIds = new Set(d.messages.map(m => String(m?.id || '')).filter(Boolean));
+    [...messages.keys()].forEach(id => {
+      const sid = String(id);
+      if (activeIds.has(sid)) return;
+      const el = document.querySelector(`.message[data-id="${CSS.escape(sid)}"]`);
+      if (el) el.remove();
+      messages.delete(sid);
+      deletedIds.add(sid);
+      selectedMessageIds.delete(sid);
+    });
+    d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
+    saveLocalMessageHistory();
+    if (!d.messages.length) {
+      lastRenderedDate = '';
+      if (messageArea) messageArea.innerHTML = '';
+      updatePreview('No messages yet');
+    } else {
+      const last = d.messages[d.messages.length - 1];
+      updatePreview(last.message || (last.type === 'image' ? '📷 Photo' : last.type === 'video' ? '🎥 Video' : last.type === 'audio' ? '🎤 Voice message' : last.type === 'document' ? '📎 Document' : 'New message'));
+    }
+  } catch (_) {}
+}
 
 socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
@@ -2139,7 +2180,7 @@ socket.on('user-renamed', data => {
   messages.forEach(msg => {
     if (msg.userId !== data.userId) return;
     msg.user = data.name;
-    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+    const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
     const sender = el && el.querySelector('.sender');
     if (sender) sender.textContent = data.name;
   });
@@ -3511,7 +3552,7 @@ function renameRenderedMessages(nextName) {
   messages.forEach(msg => {
     if (msg.userId !== userId) return;
     msg.user = nextName;
-    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
+    const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
     if (!el) return;
     const sender = el.querySelector('.sender');
     if (sender) sender.textContent = nextName;
