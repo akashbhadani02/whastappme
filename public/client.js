@@ -2472,9 +2472,9 @@ async function createPrivateUserAndOpen() {
   privateUserCreateError.textContent = '';
   try {
     const adminMode = !!adminUnlocked;
-    const endpoint = adminMode ? '/api/admin/user/create' : '/api/private-chat/create-user';
+    const endpoint = adminMode ? '/api/admin/private-user/create' : '/api/private-chat/create-user';
     const body = adminMode
-      ? { password:PASSWORD, creatorId:userId, name:newName, chatPassword:password }
+      ? { password:PASSWORD, name:newName, chatPassword:password }
       : { creatorId:userId, name:newName, password };
     const r = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
@@ -3359,8 +3359,14 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = name || '';
-  if (accountPasswordInput) accountPasswordInput.value = '';
+  accountNameInput.value = userId || '';
+  accountNameInput.placeholder = 'User ID (given by Admin)';
+  accountNameInput.setAttribute('autocomplete','username');
+  if (accountPasswordInput) {
+    accountPasswordInput.value = '';
+    accountPasswordInput.placeholder = 'Password (given by Admin)';
+    accountPasswordInput.setAttribute('autocomplete','current-password');
+  }
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
@@ -3368,41 +3374,40 @@ function openAccountModal(force = false) {
   setTimeout(() => accountNameInput.focus(), 50);
 }
 
-function finishAccountLogin() {
-  const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
-  if (!nextName) { accountError.textContent = 'Enter your name'; return; }
-  const nextPassword = String(accountPasswordInput?.value || '');
-  if (nextPassword.length < 4 || nextPassword.length > 100) { accountError.textContent = 'Create a password (4-100 characters)'; accountPasswordInput?.focus(); return; }
-  if (!userId) userId = generateUserId();
-  userId = normalizeUserId(userId);
-  name = nextName;
-  localStorage.setItem('wa_user_id', userId);
-  localStorage.setItem('wa_name', name);
-  syncAndroidNotificationIdentity();
-  accountModal.classList.add('hidden');
-  updateMyNameUI();
-  // Register only after the user has supplied BOTH name and password.
-  // The server creates the profile at this point, so the account immediately
-  // becomes visible to Admin > All Users and to other users' chat directories.
-  socket.emit('register-user', { userId, name, password: nextPassword, deviceId }, result => {
-    if (!result?.ok) {
-      accountError.textContent = result?.error || 'Could not create your account.';
-      accountModal.classList.remove('hidden');
-      return;
-    }
-    // Refresh after MongoDB registration completes so the new user appears
-    // immediately in the sidebar/chat directory and Admin can see the account.
+async function finishAccountLogin() {
+  const loginId = normalizeUserId(accountNameInput.value || '');
+  const loginPassword = String(accountPasswordInput?.value || '');
+  if (!loginId) { accountError.textContent = 'Enter the User ID given by Admin'; accountNameInput.focus(); return; }
+  if (loginPassword.length < 4 || loginPassword.length > 100) { accountError.textContent = 'Enter your password'; accountPasswordInput?.focus(); return; }
+  accountContinueBtn.disabled = true;
+  accountError.textContent = 'Checking account…';
+  try {
+    const r = await fetch('/api/account/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:loginId, password:loginPassword}), cache:'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Login failed');
+    userId = String(d.user.userId || loginId);
+    name = String(d.user.name || '').trim().slice(0,60);
+    localStorage.setItem('wa_user_id', userId);
+    localStorage.setItem('wa_name', name);
+    syncAndroidNotificationIdentity();
+    accountModal.classList.add('hidden');
+    updateMyNameUI();
+    updateGroupNameUI();
+    socket.emit('register-user', { userId, name, deviceId }, result => {
+      if (result?.ok) loadPrivateUsers().catch(() => {});
+    });
+    enableNotifications().then(granted => { if (granted) return setupWebPush(); }).catch(() => {});
+    pollWebNotifications().catch(() => {});
     loadPrivateUsers().catch(() => {});
-  });
-  // The Continue button is a user gesture, so it is the safest place to both
-  // request permission and register the Web Push subscription.
-  enableNotifications().then(granted => {
-    if (granted) return setupWebPush();
-  }).catch(() => {});
-  pollWebNotifications().catch(() => {});
-  loadPrivateUsers().catch(() => {});
-  socket.emit('presence-login', { userId, deviceId });
-  if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
+    socket.emit('presence-login', { userId, deviceId });
+    if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
+  } catch (e) {
+    accountError.textContent = e?.message || 'Login failed';
+    localStorage.removeItem('wa_user_id');
+    localStorage.removeItem('wa_name');
+  } finally {
+    accountContinueBtn.disabled = false;
+  }
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);

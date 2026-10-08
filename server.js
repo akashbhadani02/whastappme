@@ -338,6 +338,23 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 });
 
 
+app.post('/api/account/login', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim().toUpperCase();
+    const password = String(req.body?.password || '');
+    if (!userId || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1, password:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User ID not found. Ask Admin to create your account.' });
+    if (String(profile.password || '') !== password) return res.status(403).json({ ok:false, error:'Wrong password.' });
+    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || profile._id) } });
+  } catch (error) {
+    console.error('Account login failed:', error.message);
+    res.status(500).json({ ok:false, error:'Could not login.' });
+  }
+});
+
 app.get('/api/account/exists', async (req, res) => {
   try {
     const userId = String(req.query?.userId || '').trim();
@@ -421,7 +438,7 @@ function generatePrivateUserId() {
 app.post('/api/admin/private-user/create', async (req, res) => {
   try {
     const adminPassword = String(req.body?.password || '');
-    const creatorId = String(req.body?.creatorId || '').trim();
+    const creatorId = String(req.body?.creatorId || 'ADMIN').trim() || 'ADMIN';
     const displayName = String(req.body?.name || '').trim().slice(0, 60);
     const chatPassword = String(req.body?.chatPassword || '');
     if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
@@ -431,7 +448,6 @@ app.post('/api/admin/private-user/create', async (req, res) => {
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
     const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1 } });
-    if (!creator) return res.status(403).json({ ok:false, error:'Admin account profile was not found.' });
     let userId = '';
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
@@ -444,8 +460,7 @@ app.post('/api/admin/private-user/create', async (req, res) => {
       }
     }
     if (!userId) return res.status(500).json({ ok:false, error:'Could not create user.' });
-    const conversationId = privateConversationId(creatorId, userId);
-    res.json({ ok:true, user:{ userId, name:displayName }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId });
+    res.json({ ok:true, user:{ userId, name:displayName }, peer: creator ? { userId:creatorId, name:String(creator.name || creatorId) } : null });
   } catch (error) {
     console.error('Admin private user creation failed:', error.stack || error.message);
     res.status(500).json({ ok:false, error:'Could not create user.' });
