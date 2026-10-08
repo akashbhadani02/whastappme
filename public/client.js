@@ -191,6 +191,20 @@ const adminMenuPrivateBtn = document.querySelector('#adminMenuPrivateBtn');
 const adminMenuRecycleBtn = document.querySelector('#adminMenuRecycleBtn');
 const adminMenuDeleteBtn = document.querySelector('#adminMenuDeleteBtn');
 const adminMenuLogoutBtn = document.querySelector('#adminMenuLogoutBtn');
+
+// Open/close the main ⋮ menu. Admin Login is intentionally available only here.
+menuBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  appMenu?.classList.toggle('hidden');
+});
+
+document.addEventListener('click', (e) => {
+  if (!appMenu || appMenu.classList.contains('hidden')) return;
+  if (appMenu.contains(e.target) || menuBtn?.contains(e.target)) return;
+  appMenu.classList.add('hidden');
+});
+
 const newGroupBtn = document.querySelector('#newGroupBtn');
 const adminGroupsModal = document.querySelector('#adminGroupsModal');
 const adminGroupsClose = document.querySelector('#adminGroupsClose');
