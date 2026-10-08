@@ -2241,7 +2241,7 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, name, password: nextPassword, deviceId });
+  socket.emit('register-user', { userId, name, deviceId });
   setupWebPush().catch(() => {});
   pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
@@ -3530,9 +3530,59 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
-if (!userId || !name) {
+async function validateLocalAccountBeforeOpening() {
+  const savedId = normalizeUserId(localStorage.getItem('wa_user_id') || '');
+  const savedName = String(localStorage.getItem('wa_name') || '').trim();
+
+  // No local identity: this is a brand-new user/device.
+  if (!savedId || !savedName) {
+    userId = '';
+    name = '';
+    openAccountModal(true);
+    return false;
+  }
+
+  try {
+    const response = await fetch('/api/account/exists?userId=' + encodeURIComponent(savedId), { cache: 'no-store' });
+    const data = await response.json();
+
+    if (data && data.ok && data.exists) {
+      // The account still exists in MongoDB, so this device can continue as
+      // that user. Do not ask for Name/Password again on every app launch.
+      userId = savedId;
+      name = String(data.name || savedName).trim().slice(0, 60);
+      localStorage.setItem('wa_user_id', userId);
+      localStorage.setItem('wa_name', name);
+      updateMyNameUI();
+      updateGroupNameUI();
+      socket.emit('register-user', { userId, name, deviceId });
+      return true;
+    }
+  } catch (error) {
+    // If the server/database is temporarily unavailable, do not destroy a
+    // valid local account. Let the normal socket reconnect logic handle it.
+    userId = savedId;
+    name = savedName;
+    updateMyNameUI();
+    updateGroupNameUI();
+    socket.emit('register-user', { userId, name, deviceId });
+    return true;
+  }
+
+  // The User ID is no longer present in MongoDB (for example Admin deleted it).
+  // Remove the old identity and force a fresh Name + Password registration.
+  try {
+    localStorage.removeItem('wa_user_id');
+    localStorage.removeItem('wa_name');
+  } catch (_) {}
+  userId = '';
+  name = '';
+  updateMyNameUI();
   openAccountModal(true);
+  return false;
 }
+
+validateLocalAccountBeforeOpening().catch(() => openAccountModal(true));
 updateMyNameUI();
 updateGroupNameUI();
 nameSave.addEventListener('click', saveUserName);

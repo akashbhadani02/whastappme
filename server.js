@@ -338,6 +338,20 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 });
 
 
+app.get('/api/account/exists', async (req, res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    if (!userId) return res.json({ ok: true, exists: false });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok: false, exists: false, error: 'Database unavailable.' });
+    const profile = await profiles.findOne({ _id: userId }, { projection: { _id: 1, name: 1 } });
+    res.json({ ok: true, exists: !!profile, name: profile?.name || '' });
+  } catch (error) {
+    console.error('Account existence check failed:', error.message);
+    res.status(500).json({ ok: false, exists: false, error: 'Could not check account.' });
+  }
+});
+
 app.get('/api/users', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
