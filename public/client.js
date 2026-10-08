@@ -650,7 +650,7 @@ passwordSubmit.addEventListener('click', async () => {
     try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
     try { showToast('Admin login successful'); } catch (_) {}
   }
-  if (action) action();
+  if (action) action(supplied);
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
 passwordClose.addEventListener('click', closePassword);
@@ -774,7 +774,7 @@ cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
 deleteSelectedBtn?.addEventListener('click', () => {
   if (!selectedMessageIds.size) return;
   const ids = Array.from(selectedMessageIds);
-  requestPassword('Delete for everyone', `Enter password deoxy to delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone. The deleted item will go to Admin Recycle Bin.`, () => deleteMessages(ids), 'delete');
+  requestPassword('Delete for everyone', `Enter password deoxy to delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone. The deleted item will go to Admin Recycle Bin.`, (password) => deleteMessages(ids, true, password), 'delete');
 });
 
 // Turn shared URLs into safe, tappable links while keeping message text plain by default.
@@ -910,7 +910,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete for everyone', 'Enter password deoxy to delete this message for everyone. It will be moved to the Admin Recycle Bin.', () => deleteMessage(msg.id), 'delete');
+    requestPassword('Delete for everyone', 'Enter password deoxy to delete this message for everyone. It will be moved to the Admin Recycle Bin.', (password) => deleteMessage(msg.id, true, password), 'delete');
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -983,7 +983,7 @@ function privateConversationIdForClient() {
 function privateChatPasswordForCurrent() {
   return String(window.privateChatPasswords?.[String(currentPrivateUser?.userId||'')] || '');
 }
-function deleteMessage(messageId, broadcast=true) {
+function deleteMessage(messageId, broadcast=true, password='deoxy') {
   const id = String(messageId);
   const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
   if (el) el.remove();
@@ -994,16 +994,16 @@ function deleteMessage(messageId, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-message', {id, conversationId, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
+      socket.emit('private-delete-message', {id, conversationId, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
     } else {
-      socket.emit('delete-message', {id, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-message', {id, password}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
   updateSelectionUI();
   updatePreview('Message deleted');
 }
 
-function deleteMessages(messageIds, broadcast=true) {
+function deleteMessages(messageIds, broadcast=true, password='deoxy') {
   const ids = Array.from(new Set(messageIds.map(String))).filter(id => messages.has(id) || document.querySelector(`.message[data-id="${CSS.escape(id)}"]`));
   if (!ids.length) { exitSelectionMode(); return; }
   ids.forEach(id => {
@@ -1019,27 +1019,27 @@ function deleteMessages(messageIds, broadcast=true) {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-messages', {ids, conversationId, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
+      socket.emit('private-delete-messages', {ids, conversationId, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
     } else {
-      socket.emit('delete-messages', {ids, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-messages', {ids, password}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
 }
 
-function clearChat(broadcast=true) {
+function clearChat(broadcast=true, password='deoxy') {
   messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
   try { localStorage.removeItem(messageCacheKey()); } catch (_) {}
   updatePreview('No messages yet');
   if (broadcast) {
     if (activeChatType === 'private') {
-      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient(), password:'deoxy'}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
+      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient(), password}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
     } else {
-      socket.emit('clear-chat', {by:name, password:'deoxy'}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Chat could not be cleared'); });
+      socket.emit('clear-chat', {by:name, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Chat could not be cleared'); });
     }
   }
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', 'Enter password deoxy to clear this chat. All messages, photos, videos and audio will be moved to the Admin Recycle Bin.', () => { clearChat(true); }, 'delete'));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', 'Enter password deoxy to clear this chat. All messages, photos, videos and audio will be moved to the Admin Recycle Bin.', (password) => { clearChat(true, password); }, 'delete'));
 
 const cameraModal = document.querySelector('#cameraModal');
 const cameraPreview = document.querySelector('#cameraPreview');

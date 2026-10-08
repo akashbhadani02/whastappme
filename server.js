@@ -3549,16 +3549,16 @@ io.on('connection', async (socket) => {
         const existing = await collection.find(
           { $and: [groupFilter, { id: { $in: ids } }, { deletedAt: { $exists:false } }] }
         ).toArray();
-        // Only the current user's own messages are eligible for "delete for
-        // everyone". Mixed selections simply delete the messages they own.
+        // Anyone in the current group may delete any selected messages, but only
+        // after supplying the shared delete password.
         if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
           if (typeof ack === 'function') ack({ ok:false, count:0, error:'Wrong delete password.' });
           return;
         }
-        const ownMessages = existing;
-        deletableIds = ownMessages.map(m => String(m.id));
-        if (ownMessages.length) {
-          await moveMessagesToRecycleBin(ownMessages, groupId, 'message-delete');
+        const deletableMessages = existing;
+        deletableIds = deletableMessages.map(m => String(m.id));
+        if (deletableMessages.length) {
+          await moveMessagesToRecycleBin(deletableMessages, groupId, 'message-delete');
           await collection.updateMany(
             { $and: [groupFilter, { id: { $in: deletableIds } }, { deletedAt: { $exists:false } }] },
             { $set: { deletedAt: new Date(), deletedBy: uid, deleteReason: 'message-delete' } }
@@ -3590,15 +3590,15 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
       const parts = conversationId.split(':');
-      const participants = new Set([String(parts[0] || ''), String(parts[1] || '')]);
+      const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
       if (!participants.has(uid)) {
         return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
       }
-      const existing = await collection.findOne({ id, conversationId, deletedAt:{ $exists:false } });
-      if (!existing) return typeof ack === 'function' && ack({ok:false, error:'Message not found or already deleted.'});
       if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
         return typeof ack === 'function' && ack({ok:false, error:'Wrong delete password.'});
       }
+      const existing = await collection.findOne({ id, conversationId, deletedAt:{ $exists:false } });
+      if (!existing) return typeof ack === 'function' && ack({ok:false, error:'Message not found or already deleted.'});
       await movePrivateMessagesToRecycleBin([existing], conversationId, 'private-message-delete');
       await collection.updateOne(
         { _id:existing._id },
@@ -3623,7 +3623,7 @@ io.on('connection', async (socket) => {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
       const parts = conversationId.split(':');
-      const participants = new Set([String(parts[0] || ''), String(parts[1] || '')]);
+      const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
       if (!participants.has(uid)) {
         return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
       }
@@ -3631,10 +3631,10 @@ io.on('connection', async (socket) => {
       if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
         return typeof ack === 'function' && ack({ok:false,count:0,error:'Wrong delete password.'});
       }
-      const ownMessages = existing;
-      const deletableIds = ownMessages.map(x => String(x.id));
-      if (ownMessages.length) {
-        await movePrivateMessagesToRecycleBin(ownMessages, conversationId, 'private-message-delete');
+      const deletableMessages = existing;
+      const deletableIds = deletableMessages.map(x => String(x.id));
+      if (deletableMessages.length) {
+        await movePrivateMessagesToRecycleBin(deletableMessages, conversationId, 'private-message-delete');
         await collection.updateMany(
           { id:{ $in:deletableIds }, conversationId, deletedAt:{ $exists:false } },
           { $set:{ deletedAt:new Date(), deletedBy:uid, deleteReason:'private-message-delete', recycleStage:'main' } }
@@ -3653,8 +3653,11 @@ io.on('connection', async (socket) => {
 
   socket.on('private-clear-chat', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
-    if (!conversationId || socket.privateAuthorizedPrivateChat !== conversationId) {
-      return typeof ack === 'function' && ack({ok:false, error:'Private chat authorization required.'});
+    const uid = String(socket.userId || '').trim();
+    const parts = conversationId.split(':');
+    const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
+    if (!conversationId || !uid || !participants.has(uid)) {
+      return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
     }
     if (String(data?.password || '') !== MESSAGE_DELETE_PASSWORD) {
       return typeof ack === 'function' && ack({ok:false, error:'Wrong delete password.'});
