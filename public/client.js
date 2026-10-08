@@ -609,7 +609,7 @@ async function sendMessage(text) {
     privateLastMessages[peer.userId] = msg;
     try {
       const response = await fetch('/api/private-messages', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg), cache:'no-store', keepalive:true
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...msg, password:String(window.privateChatPasswords?.[String(peer.userId)] || '')}), cache:'no-store', keepalive:true
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || 'save');
@@ -619,7 +619,7 @@ async function sendMessage(text) {
       if (el) el.dataset.synced = '1';
       updateTicks(saved);
     } catch (_) {
-      const ack = await emitAck('private-message', msg, 12000, 1);
+      const ack = await emitAck('private-message', {...msg, password:String(window.privateChatPasswords?.[String(peer.userId)] || '')}, 12000, 1);
       if (!ack?.ok) showToast('Private message is waiting for connection — please retry');
       else {
         messages.set(msg.id, ack.message || msg);
@@ -1436,6 +1436,7 @@ socket.on('private-chat-deleted', data => {
     });
   }
   if (String(currentPrivateUser?.conversationId || '') === conversationId) {
+    if (window.privateChatPasswords && currentPrivateUser?.userId) delete window.privateChatPasswords[String(currentPrivateUser.userId)];
     currentPrivateUser = null;
     activeChatType = 'group';
     messages.clear();
@@ -1746,20 +1747,25 @@ function renderGroupList() {
   if (!chatList) return;
   chatList.innerHTML = '';
 
-  const privateSection = document.createElement('div');
-  privateSection.className = 'chat-section-label';
-  privateSection.textContent = 'Private chats';
-  chatList.appendChild(privateSection);
-
   const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
+  if (!visiblePrivate.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-section-label';
+    empty.textContent = 'No other users yet';
+    chatList.appendChild(empty);
+  }
+
   visiblePrivate.forEach(user => {
     const button = document.createElement('button');
     button.className = 'chat-item' + (activeChatType === 'private' && currentPrivateUser?.userId === user.userId ? ' active' : '');
     button.type = 'button';
-    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar private-avatar'; avatar.textContent = firstCharacter(user.name);
-    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar group-avatar private-avatar';
+    avatar.textContent = firstCharacter(user.name);
+    const summary = document.createElement('div');
+    summary.className = 'chat-summary';
     const last = privateLastMessages[user.userId];
-    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Private message';
+    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Tap to chat';
     summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
     summary.querySelector('strong').textContent = user.name;
     summary.querySelector('.preview span').textContent = preview;
@@ -1768,27 +1774,6 @@ function renderGroupList() {
     if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
     button.append(avatar, summary);
     button.addEventListener('click', () => openPrivateChat(user));
-    chatList.appendChild(button);
-  });
-
-  const groupSection = document.createElement('div');
-  groupSection.className = 'chat-section-label';
-  groupSection.textContent = 'Groups';
-  chatList.appendChild(groupSection);
-
-  groups.forEach(group => {
-    const button = document.createElement('button');
-    button.className = 'chat-item' + (activeChatType === 'group' && group.id === currentGroupId ? ' active' : '');
-    button.type = 'button';
-    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
-    const summary = document.createElement('div'); summary.className = 'chat-summary';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
-    summary.querySelector('strong').textContent = group.name;
-    const badge = summary.querySelector('.group-unread-badge');
-    const unread = getUnreadCount(group.id);
-    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
-    button.append(avatar, summary);
-    button.addEventListener('click', () => openGroup(group));
     chatList.appendChild(button);
   });
 }
@@ -1836,54 +1821,97 @@ function renderPrivateUserList(filter='') {
   });
 }
 
-async function openPrivateChat(user, suppliedPassword='') {
+function askPrivatePassword(user, mode='verify') {
+  return new Promise(resolve => {
+    const peerId = String(user?.userId || '');
+    if (!peerId) return resolve('');
+    window.pendingPrivatePeerId = peerId;
+    requestPassword(
+      mode === 'setup' ? 'Set personal chat password' : 'Personal chat password',
+      mode === 'setup'
+        ? `Create one password for your chat with ${String(user?.name || 'this person')}. The other person must enter this same password.`
+        : `Enter the same password shared by ${String(user?.name || 'this person')}. The chat will not open without it.`,
+      () => resolve(String(window.privatePasswordForOpen || '')),
+      mode === 'setup' ? 'private-setup' : 'private-verify'
+    );
+  });
+}
+
+async function openPrivateChat(user, providedPassword='') {
   if (!user || !user.userId || String(user.userId) === String(userId)) return;
-  let password = suppliedPassword;
-  if (!password) {
-    try {
-      const r = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
-      const d = await r.json().catch(() => ({}));
-      if (!d.exists) {
-        window.pendingPrivatePeerId = String(user.userId);
-        requestPassword('Set private chat password', 'Set a password for this private chat. Share it with the other person.', () => openPrivateChat(user, '__SET_BY_MODAL__'), 'private-setup');
-        return;
-      }
-    } catch (_) {
-      showToast('Could not check private chat password');
-      return;
+  const peerId = String(user.userId);
+
+  // Every opening must be authorized. The password is kept only in memory for
+  // the current page session; it is never stored in localStorage.
+  window.privateChatPasswords = window.privateChatPasswords || {};
+  let password = String(providedPassword || window.privateChatPasswords[peerId] || '');
+
+  // Existing conversation: require the shared password. New conversation: the
+  // first person sets the password; the second person must enter that same one.
+  try {
+    const access = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}`, {cache:'no-store'});
+    const accessData = await access.json().catch(() => ({}));
+    if (!password) {
+      if (!accessData.exists) password = await askPrivatePassword(user, 'setup');
+      else password = await askPrivatePassword(user, 'verify');
+      if (!password) return;
     }
-    window.pendingPrivatePeerId = String(user.userId);
-    requestPassword('Private chat password', 'Enter the password set for this private chat.', () => openPrivateChat(user, '__VERIFY_BY_MODAL__'), 'private-verify');
+  } catch (_) {
+    showToast('Could not check personal chat password');
     return;
   }
-  if (password === '__SET_BY_MODAL__' || password === '__VERIFY_BY_MODAL__') {
-    password = window.privatePasswordForOpen || '';
-    window.privatePasswordForOpen = '';
+
+  try {
+    const verify = await fetch('/api/private-chat/verify', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({userId, peerId, password})
+    });
+    const verifyData = await verify.json().catch(() => ({}));
+    if (!verifyData.ok) {
+      if (verifyData.needsSetup) {
+        password = await askPrivatePassword(user, 'setup');
+        if (!password) return;
+        const setResponse = await fetch('/api/private-chat/set-password', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({userId, peerId, password})
+        });
+        const setData = await setResponse.json().catch(() => ({}));
+        if (!setData.ok) { showToast(setData.error || 'Could not set password'); return; }
+      } else {
+        showToast('Wrong personal chat password');
+        return;
+      }
+    }
+  } catch (_) {
+    showToast('Could not verify personal chat password');
+    return;
   }
-  if (!password) return;
-  window.privateChatPasswords = window.privateChatPasswords || {};
-  window.privateChatPasswords[String(user.userId)] = password;
+
+  window.privateChatPasswords[peerId] = password;
   activeChatType = 'private';
   currentPrivateUser = user;
-  privateUnreadCounts[user.userId] = 0;
+  privateUnreadCounts[peerId] = 0;
   composer?.classList.remove('hidden');
   app?.classList.remove('group-locked');
   messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
-  messageArea.innerHTML = '';
+  if (messageArea) messageArea.innerHTML = '';
   updatePrivateHeader();
   renderGroupList();
+
   let privateSocketReady = false;
   try {
     if (socket.connected) {
-      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId, password }, result => {
+      await new Promise(resolve => socket.emit('join-private', { peerId, password }, result => {
         privateSocketReady = !!result?.ok;
+        if (!privateSocketReady && result?.error) showToast(result.error);
         resolve();
       }));
     }
   } catch (_) {}
+
   if (!privateSocketReady) {
     try {
-      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
+      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
       const d = await r.json().catch(() => ({}));
       if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
     } catch (_) {}
@@ -1899,7 +1927,7 @@ function updatePrivateHeader() {
   groupNameHeader.textContent = currentPrivateUser.name;
   groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
   if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
-  onlineStatus.textContent = 'private chat';
+  onlineStatus.textContent = 'personal chat';
   onlineStatus.className = 'offline';
   document.querySelector('#audioCallBtn')?.classList.add('hidden');
   document.querySelector('#videoCallBtn')?.classList.add('hidden');
@@ -2164,6 +2192,15 @@ socket.on('connect', () => {
   }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
+  if (activeChatType === 'private' && currentPrivateUser?.userId) {
+    const privatePeerId = String(currentPrivateUser.userId);
+    const privatePassword = String(window.privateChatPasswords?.[privatePeerId] || '');
+    if (privatePassword) {
+      socket.emit('join-private', { peerId: privatePeerId, password: privatePassword }, result => {
+        if (!result?.ok) showToast('Personal chat needs password again');
+      });
+    }
+  }
   if (!currentGroupId) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
@@ -2298,11 +2335,15 @@ newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classLis
 newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
 newPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  openPrivateUserCreateModal();
+  openPrivatePicker();
 });
 joinPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  openPrivateUserJoinModal();
+  openPrivatePicker();
+});
+newGroupChoice?.addEventListener('click', () => {
+  newChatChoiceModal?.classList.add('hidden');
+  showToast('Personal chat only');
 });
 
 function openPrivateUserJoinModal() {

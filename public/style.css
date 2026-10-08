@@ -668,3 +668,18 @@ html,body{max-width:100%;overflow-x:hidden}
   .admin-row-actions{grid-template-columns:1fr}
   .admin-card h3{font-size:17px}
 }
+
+/* Personal-chat-only mode */
+#joinPrivateChatChoice,
+#newGroupChoice,
+#privateUserCreateModal,
+#privateUserJoinModal,
+#newGroupBtn,
+#adminGroupsBtn { display:none !important; }
+
+.private-picker-help{margin:0 0 12px;color:var(--muted,#9ca3af);font-size:13px;line-height:1.45}
+.chat-section-label{font-weight:700;letter-spacing:.2px}
+.private-user-row{width:100%;display:flex;align-items:center;gap:12px;padding:12px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;border-radius:12px}
+.private-user-row:hover{background:rgba(0,229,255,.08)}
+.private-user-row strong{display:block}
+.private-user-row small{display:block;opacity:.55;margin-top:2px}

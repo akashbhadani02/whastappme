@@ -342,21 +342,19 @@ app.get('/api/users', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
     const profiles = await getUserProfilesCollection();
-    const settings = await getPrivateChatSettingsCollection();
     if (!profiles || !me) return res.json({ ok: true, users: [] });
 
-    // Private-chat directory is conversation-scoped. A user sees only the
-    // other participant of private chats they actually own/are part of.
-    const settingDocs = settings
-      ? await settings.find({ $or:[{ userA:me }, { userB:me }] }, { projection:{ userA:1, userB:1, _id:1, createdAt:1 } }).sort({ createdAt:-1 }).limit(500).toArray()
-      : [];
-    const peerIds = [...new Set(settingDocs.map(s => String(s.userA) === me ? String(s.userB) : String(s.userA)).filter(Boolean).filter(id => id !== me))];
-    if (!peerIds.length) return res.json({ ok:true, users:[] });
-    const docs = await profiles.find({ _id:{ $in:peerIds } }, { projection:{ _id:1, name:1, kind:1, updatedAt:1 } }).toArray();
-    const byId = new Map(docs.map(u => [String(u._id), u]));
-    const users = peerIds.filter(id => byId.has(id)).map(id => ({
-      userId:id,
-      name:String(byId.get(id)?.name || id).slice(0,60)
+    // Personal-chat directory: show every registered user except the current user.
+    // A personal conversation does not need a group invitation or a shared password.
+    const docs = await profiles.find(
+      { _id: { $ne: me }, name: { $exists: true, $ne: '' } },
+      { projection: { _id: 1, name: 1, updatedAt: 1, lastSeenAt: 1 } }
+    ).sort({ name: 1 }).limit(1000).toArray();
+
+    const users = docs.map(u => ({
+      userId: String(u._id),
+      name: String(u.name || u._id).slice(0, 60),
+      lastSeenAt: u.lastSeenAt || null
     }));
     res.json({ ok:true, users });
   } catch (error) {
@@ -886,7 +884,7 @@ app.get('/api/private-messages', async (req, res) => {
     const password = String(req.query?.password || '');
     if (!me || !peer || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
     const setting = await getPrivateChatSetting(conversationId);
-    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, messages:[], error:'Private chat password required.' });
+    if (!setting || (String(setting.password || '') && String(setting.password || '') !== password)) return res.status(403).json({ ok:false, messages:[], error:'Personal chat authorization required.' });
     const messages = await loadPrivateMessages(conversationId, req.query?.after || '');
     res.json({ ok:true, messages });
   } catch (error) {
@@ -907,7 +905,7 @@ app.post('/api/private-messages', async (req, res) => {
       return res.status(400).json({ ok:false, error:'Invalid private message' });
     }
     const setting = await getPrivateChatSetting(conversationId);
-    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, error:'Private chat password required.' });
+    if (!setting || (String(setting.password || '') && String(setting.password || '') !== password)) return res.status(403).json({ ok:false, error:'Personal chat authorization required.' });
     msg.conversationId = conversationId;
     msg.message = String(msg.message).trim().slice(0, 5000);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -2780,27 +2778,44 @@ io.on('connection', async (socket) => {
   socket.on('join-private', async (data, ack) => {
     const me = String(socket.userId || '').trim();
     const peer = String(data?.peerId || '').trim();
-    const suppliedPassword = String(data?.password || '');
     const conversationId = privateConversationId(me, peer);
-    if (!me || !peer || !conversationId) {
-      return typeof ack === 'function' && ack({ ok:false, error:'Private chat authorization failed.' });
+    if (!me || !peer || me === peer || !conversationId) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Personal chat authorization failed.' });
     }
-    const setting = await getPrivateChatSetting(conversationId);
-    if (!setting) return typeof ack === 'function' && ack({ ok:false, needsSetup:true, error:'Private chat password is not set.' });
-    if (String(setting.password || '') !== suppliedPassword) return typeof ack === 'function' && ack({ ok:false, error:'Wrong private chat password.' });
-    if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
-      socket.leave(`private:${socket.privateConversationId}`);
-    }
-    socket.privateConversationId = conversationId;
-    socket.privateAuthorizedPrivateChat = conversationId;
-    socket.join(`private:${conversationId}`);
+
     try {
+      const profiles = await getUserProfilesCollection();
+      if (profiles) {
+        const peerProfile = await profiles.findOne({ _id: peer }, { projection:{ _id:1, name:1 } });
+        if (!peerProfile) return typeof ack === 'function' && ack({ ok:false, error:'User not found.' });
+      }
+
+      // Personal chats are protected by ONE shared password. Both people must
+      // know and enter the same password before the server joins them to the
+      // private room or returns private history. Never auto-create an unlocked
+      // conversation here.
+      const password = String(data?.password || '');
+      const setting = await getPrivateChatSetting(conversationId);
+      if (!setting) {
+        return typeof ack === 'function' && ack({ ok:false, needsSetup:true, error:'Personal chat password is not set yet.' });
+      }
+      if (!password || String(setting.password || '') !== password) {
+        return typeof ack === 'function' && ack({ ok:false, error:'Wrong personal chat password.' });
+      }
+
+      if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
+        socket.leave(`private:${socket.privateConversationId}`);
+      }
+      socket.privateConversationId = conversationId;
+      socket.privateAuthorizedPrivateChat = conversationId;
+      socket.join(`private:${conversationId}`);
+
       const history = await loadPrivateMessages(conversationId);
       socket.emit('private-history', history);
       if (typeof ack === 'function') ack({ ok:true, conversationId });
     } catch (error) {
       socket.emit('private-history', []);
-      if (typeof ack === 'function') ack({ ok:false });
+      if (typeof ack === 'function') ack({ ok:false, error:'Could not open personal chat.' });
     }
   });
 
