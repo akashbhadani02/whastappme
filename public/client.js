@@ -2358,7 +2358,12 @@ window.addEventListener('popstate', () => {
     renderGroupList();
   }
 });
-document.querySelector('#newChatBtn').addEventListener('click', () => {
+document.querySelector('#newChatBtn')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  // The + button is the direct Create New User button.
+  // Do not show the old New Chat choice screen.
+  appMenu?.classList.add('hidden');
   openPrivateUserCreateModal();
 });
 newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classList.add('hidden'));

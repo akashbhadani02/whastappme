@@ -17,7 +17,7 @@
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
-          <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
+          <button class="icon-btn" id="newChatBtn" title="Create new user" aria-label="Create new user">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
@@ -279,8 +279,8 @@
     <div class="modal-card">
       <button class="modal-close" id="privateUserCreateClose" aria-label="Close">×</button>
       <div class="lock-icon">👤</div>
-      <h3>Create New User</h3>
-      <p>Anyone can create a personal-chat user here. Enter the user name and set a password. A unique Login ID will be generated automatically. Share the Name, Login ID and Password with the person who will use this account.</p>
+      <h3>＋ Create New User</h3>
+      <p>Create a personal chat account. Enter the name and set the password yourself. A unique Login ID will be generated automatically.</p>
       <input id="privateUserCreateName" type="text" maxlength="60" autocomplete="off" placeholder="User name">
       <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="Private chat password" style="margin-top:10px">
       <div class="password-error" id="privateUserCreateError"></div>
@@ -362,6 +362,6 @@
 </div>
 <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js"></script>
+  <script src="/client.js?v=20261008-1110"></script>
 </body>
 </html>
