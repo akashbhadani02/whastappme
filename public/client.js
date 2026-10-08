@@ -206,6 +206,7 @@ const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordi
 const adminPhotosBtn = document.querySelector('#adminPhotosBtn');
 const adminVideosBtn = document.querySelector('#adminVideosBtn');
 const adminPrivateChatsBtn = document.querySelector('#adminPrivateChatsBtn');
+const adminDeleteUserBtn = document.querySelector('#adminDeleteUserBtn');
 const adminPrivateChatsModal = document.querySelector('#adminPrivateChatsModal');
 const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose');
 const adminPrivateChatsList = document.querySelector('#adminPrivateChatsList');
@@ -2560,6 +2561,7 @@ function openAdminGroupMedia(type){
 adminPhotosBtn?.addEventListener('click', () => openAdminGroupMedia('image'));
 adminVideosBtn?.addEventListener('click', () => openAdminGroupMedia('video'));
 adminPrivateChatsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminPrivateChats); });
+adminDeleteUserBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminDeleteUser); });
 adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.classList.add('hidden'));
 adminPrivateChatsModal?.addEventListener('click', e => { if (e.target === adminPrivateChatsModal) adminPrivateChatsModal.classList.add('hidden'); });
 adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats());
@@ -2699,13 +2701,23 @@ function closeAdminMediaPopup(){
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
+function openAdminDeleteUser() {
+  adminGroupsModal?.classList.add('hidden');
+  adminPrivateChatsModal?.classList.remove('hidden');
+  const title = adminPrivateChatsModal?.querySelector('h3');
+  if (title) title.textContent = '🗑 Delete User';
+  loadAdminPrivateChats(true);
+}
+
 function openAdminPrivateChats() {
   adminGroupsModal?.classList.add('hidden');
   adminPrivateChatsModal?.classList.remove('hidden');
-  loadAdminPrivateChats();
+  const title = adminPrivateChatsModal?.querySelector('h3');
+  if (title) title.textContent = 'Private Chats';
+  loadAdminPrivateChats(false);
 }
 
-async function loadAdminPrivateChats() {
+async function loadAdminPrivateChats(deleteMode = false) {
   if (!adminPrivateChatsList) return;
   adminPrivateChatsError.textContent = '';
   adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading private users…</div>';
@@ -2731,7 +2743,7 @@ async function loadAdminPrivateChats() {
       return;
     }
     adminPrivateChatsList.innerHTML = '';
-    if (chats.length) {
+    if (chats.length && !deleteMode) {
       const heading = document.createElement('div');
       heading.className = 'admin-group-row';
       heading.textContent = `🔐 Private chat passwords (${chats.length})`;
@@ -2763,7 +2775,7 @@ async function loadAdminPrivateChats() {
     if (users.length) {
       const heading = document.createElement('div');
       heading.className = 'admin-group-row';
-      heading.textContent = '👤 Private users';
+      heading.textContent = deleteMode ? '🗑 Select a user to delete' : '👤 Private users';
       adminPrivateChatsList.appendChild(heading);
     }
     users.forEach(user => {
