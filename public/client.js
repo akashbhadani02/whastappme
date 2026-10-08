@@ -586,6 +586,7 @@ passwordSubmit.addEventListener('click', async () => {
   if (wasAdminPassword) {
     adminUnlocked = true;
     try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
+    try { showToast('Admin login successful'); } catch (_) {}
   }
   if (action) action();
 });
