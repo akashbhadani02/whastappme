@@ -17,27 +17,13 @@
         <button class="avatar me-avatar" id="profileAvatar" type="button" title="Change your name" aria-label="Change your name">W</button>
         <div class="top-actions">
           <button class="icon-btn" id="statusBtn" title="Status">◉</button>
-          <button class="icon-btn" id="newChatBtn" type="button" title="New chat" aria-label="New chat" onclick="openPrivateUserCreateModal(); return false;">＋</button>
+          <button class="icon-btn" id="newChatBtn" title="New chat">＋</button>
           <button class="icon-btn" id="menuBtn" title="Menu">⋮</button>
         </div>
       </div>
       <div class="app-menu hidden" id="appMenu">
-        <!-- Admin controls are revealed only after the password is verified. -->
-        <div id="adminMenuLocked">
-          <button id="adminGroupsBtn" type="button">🔐 Admin Login</button>
-        </div>
-        <div id="adminMenuUnlocked" class="hidden">
-          <div class="admin-menu-title">🔐 Admin Controls</div>
-          <button id="adminMenuPanelBtn" type="button">⚙️ Admin Panel</button>
-          <button id="adminMenuCallBtn" type="button">🎙️ Call Recordings</button>
-          <button id="adminMenuPhotosBtn" type="button">📷 Photos</button>
-          <button id="adminMenuVideosBtn" type="button">🎥 Videos</button>
-          <button id="adminMenuPrivateBtn" type="button">👥 All Users</button>
-          <button id="adminMenuRecycleBtn" type="button">♻️ Recycle Bin</button>
-          <button id="adminMenuDeleteBtn" type="button" class="admin-menu-danger">🗑 Delete User</button>
-          <button id="adminMenuLogoutBtn" type="button">🔒 Lock Admin</button>
-        </div>
-      </div>
+        <!-- <button id="installAppBtn" type="button">📲 Install WhatsApp</button> -->
+        <button id="adminGroupsBtn" type="button">🔐 Passwords / Groups</button></div>
       <div class="search-wrap">
         <span>⌕</span>
         <input id="searchInput" type="search" placeholder="Search or start new chat">
@@ -59,7 +45,7 @@
           </div>
         </button>
       </div>
-      <div class="sidebar-footer" id="sidebarFooter"><div class="sidebar-footer-note">🔒 Your messages are private on this device</div></div>
+      <div class="sidebar-footer">🔒 Your messages are private on this device</div>
     </aside>
 
     <section class="chat-panel">
@@ -128,9 +114,8 @@
     <div class="modal-card">
       <div class="lock-icon">👤</div>
       <h3 id="accountTitle">WhatsApp Account</h3>
-      <p id="accountHelp">Enter your name and password. If this account already exists, it will open automatically; otherwise a new User ID will be created and saved.</p>
-      <input id="accountNameInput" type="text" maxlength="60" autocomplete="username" placeholder="Your Name">
-      <input id="accountPasswordInput" type="password" maxlength="100" autocomplete="current-password" placeholder="Create Password" style="margin-top:10px">
+      <p id="accountHelp">Enter your name to start. Your User ID will be generated automatically.</p>
+      <input id="accountNameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="accountError"></div>
       <button class="primary-btn" id="accountContinueBtn">Continue</button>
       <div id="accountGenerated" style="display:none;margin-top:12px;text-align:center;font-weight:700"></div>
@@ -146,7 +131,6 @@
       <input id="nameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
-      <button class="secondary-btn" id="openChangeUserPasswordBtn" type="button">🔑 Change my password</button>
     </div>
   </div>
 
@@ -178,41 +162,12 @@
     <div class="modal-card admin-card">
       <button class="modal-close" id="adminGroupsClose" aria-label="Close">×</button>
       <div class="lock-icon">🔐</div>
-      <h3>🔐 Admin Panel</h3>
-      <p>Admin login successful. Manage users, chats, groups and passwords from here.</p>
-      <div class="admin-main-recycle-row"><button class="mini-btn" id="adminMainRecycleFromGroupsBtn">♻️ Main Recycle Bin</button><button class="mini-btn admin-delete-btn" id="adminAbcClearBtn">ABC</button><button class="mini-btn" id="adminCallRecordingsBtn">🎙️ Call Recordings</button><button class="mini-btn" id="adminPhotosBtn">📷 Photos</button><button class="mini-btn" id="adminVideosBtn">🎥 Videos</button><button class="mini-btn" id="adminPrivateChatsBtn">👥 All Users</button><button class="mini-btn admin-delete-btn" id="adminDeleteUserBtn">🗑 Delete User</button><button class="mini-btn admin-delete-btn" id="adminDeleteAllUsersBtn">🗑 All Users</button><button class="mini-btn admin-delete-btn" id="adminDeleteAllGroupsBtn">🗑 All Groups</button></div>
+      <h3>Password / Groups</h3>
+      <p>Admin can see and edit every group password.</p>
+      <div class="admin-main-recycle-row"><button class="mini-btn" id="adminMainRecycleFromGroupsBtn">♻️ Main Recycle Bin</button><button class="mini-btn admin-delete-btn" id="adminAbcClearBtn">ABC</button><button class="mini-btn" id="adminCallRecordingsBtn">🎙️ Call Recordings</button><button class="mini-btn" id="adminPhotosBtn">📷 Photos</button><button class="mini-btn" id="adminVideosBtn">🎥 Videos</button><button class="mini-btn" id="adminPrivateChatsBtn">💬 Private Users</button><button class="mini-btn admin-delete-btn" id="adminDeleteAllUsersBtn">🗑 All Users</button><button class="mini-btn admin-delete-btn" id="adminDeleteAllGroupsBtn">🗑 All Groups</button></div>
       <div id="adminGroupsList" class="admin-groups-list"></div>
       <div class="password-error" id="adminGroupsError"></div>
       <button class="primary-btn" id="adminNewGroupBtn">＋ Add new group</button>
-    </div>
-  </div>
-
-  <div class="modal hidden" id="adminAllUsersModal" role="dialog" aria-modal="true">
-    <div class="modal-card admin-card admin-users-card">
-      <button class="modal-close" id="adminAllUsersClose" aria-label="Close">×</button>
-      <div class="lock-icon">👥</div>
-      <h3>All Users</h3>
-      <p>All registered users. MongoDB/internal IDs are never shown here.</p>
-      <div class="admin-users-toolbar">
-        <label class="admin-select-all"><input type="checkbox" id="adminAllUsersSelectAll"> <span>Select All</span></label>
-        <button class="mini-btn admin-delete-btn" id="adminAllUsersDeleteSelected">🗑 Delete Selected</button>
-        <button class="mini-btn" id="adminAllUsersBack">← Back</button>
-        <button class="mini-btn" id="adminAllUsersAddUser">＋ Add User</button><button class="mini-btn" id="adminAllUsersRefresh">↻ Refresh</button>
-      </div>
-      <div id="adminAllUsersList" class="admin-groups-list"></div>
-      <div class="password-error" id="adminAllUsersError"></div>
-    </div>
-  </div>
-
-  <div class="modal hidden" id="adminChangeUserPasswordModal" role="dialog" aria-modal="true" aria-label="Change user password by admin">
-    <div class="modal-card small-modal">
-      <button class="modal-close" id="adminChangeUserPasswordClose" aria-label="Close">×</button>
-      <div class="lock-icon">🔑</div>
-      <h3>Admin: Change User Password</h3>
-      <p class="modal-help" id="adminChangeUserPasswordInfo">Set a new password for this user.</p>
-      <input id="adminChangeUserPasswordInput" type="password" maxlength="100" autocomplete="new-password" placeholder="New password">
-      <div class="password-error" id="adminChangeUserPasswordError"></div>
-      <button class="primary-btn" id="adminChangeUserPasswordSave">Change Password</button>
     </div>
   </div>
 
@@ -220,9 +175,9 @@
     <div class="modal-card admin-card">
       <button class="modal-close" id="adminPrivateChatsClose" aria-label="Close">×</button>
       <div class="lock-icon">💬</div>
-      <h3>Personal Chats</h3>
-      <div class="admin-private-password-box">🔑 Personal chat passwords: <strong id="adminPrivatePassword">Loading…</strong></div>
-      <p>Users only. Delete permanently removes the account and its personal chat data. Main Recycle Bin data is never removed by this action.</p>
+      <h3>Private Chats</h3>
+      <div class="admin-private-password-box">🔑 Private chat passwords: <strong id="adminPrivatePassword">Loading…</strong></div>
+      <p>Private users only. Delete permanently removes the account and its private chat data. Main Recycle Bin data is never removed by this action.</p>
       <div id="adminPrivateChatsList" class="admin-groups-list"></div>
       <div class="password-error" id="adminPrivateChatsError"></div>
       <div class="recycle-admin-actions"><button class="mini-btn" id="adminPrivateChatsRefresh">↻ Refresh</button></div>
@@ -282,45 +237,47 @@
       <button class="modal-close" id="newChatChoiceClose" aria-label="Close">×</button>
       <div class="lock-icon">＋</div>
       <h3>New chat</h3>
-      <p>Start a personal 1-to-1 conversation with any registered user.</p>
+      <p>Choose what you want to create.</p>
       <div class="new-chat-choice-list">
-        <button class="primary-btn" id="newPrivateChatChoice" type="button">💬 New Personal Chat</button>
+        <button class="primary-btn" id="newPrivateChatChoice" type="button">💬 New Private Chat</button>
+        <button class="primary-btn secondary-choice" id="joinPrivateChatChoice" type="button">🔑 Join Private Chat</button>
+        <button class="primary-btn secondary-choice" id="newGroupChoice" type="button">👥 New Group</button>
       </div>
     </div>
   </div>
 
-  <div class="modal hidden" id="privateUserCreateModal" role="dialog" aria-modal="true" aria-label="Create user">
+  <div class="modal hidden" id="privateUserCreateModal" role="dialog" aria-modal="true" aria-label="Create private user">
     <div class="modal-card">
       <button class="modal-close" id="privateUserCreateClose" aria-label="Close">×</button>
       <div class="lock-icon">👤</div>
-      <h3>＋ Create New User</h3>
-      <p>Create a new user account. Enter the name and set the password. A unique User ID will be generated automatically.</p>
+      <h3>Create private user</h3>
+      <p>Enter a name and password to create a new private-chat user.</p>
       <input id="privateUserCreateName" type="text" maxlength="60" autocomplete="off" placeholder="User name">
-      <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="User password" style="margin-top:10px">
+      <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="Private chat password" style="margin-top:10px">
       <div class="password-error" id="privateUserCreateError"></div>
-      <button class="primary-btn" id="privateUserCreateSave">＋ Add User</button>
+      <button class="primary-btn" id="privateUserCreateSave">Create & Open Chat</button>
     </div>
   </div>
 
 
-  <div class="modal hidden" id="privateUserJoinModal" role="dialog" aria-modal="true" aria-label="Join personal chat">
+  <div class="modal hidden" id="privateUserJoinModal" role="dialog" aria-modal="true" aria-label="Join private chat">
     <div class="modal-card">
       <button class="modal-close" id="privateUserJoinClose" aria-label="Close">×</button>
       <div class="lock-icon">🔑</div>
-      <h3>Join personal chat</h3>
-      <p>Enter the User ID and that user’s password to open the personal chat.</p>
-      <input id="privateUserJoinName" type="text" maxlength="60" autocomplete="off" placeholder="User ID">
-      <input id="privateUserJoinPassword" type="password" maxlength="100" autocomplete="current-password" placeholder="User password" style="margin-top:10px">
+      <h3>Join private chat</h3>
+      <p>Enter the private user name and the password shared by the chat creator.</p>
+      <input id="privateUserJoinName" type="text" maxlength="60" autocomplete="off" placeholder="Private user name">
+      <input id="privateUserJoinPassword" type="password" maxlength="100" autocomplete="current-password" placeholder="Private chat password" style="margin-top:10px">
       <div class="password-error" id="privateUserJoinError"></div>
       <button class="primary-btn" id="privateUserJoinSave">Join & Open Chat</button>
     </div>
   </div>
 
-  <div class="modal hidden" id="privateChatModal" role="dialog" aria-modal="true" aria-label="New personal chat">
+  <div class="modal hidden" id="privateChatModal" role="dialog" aria-modal="true" aria-label="New private chat">
     <div class="modal-card private-chat-picker-card">
       <button class="modal-close" id="privateChatClose" aria-label="Close">×</button>
       <div class="lock-icon">💬</div>
-      <h3>New personal chat</h3>
+      <h3>New private chat</h3>
       <p>Choose a user to start a one-to-one chat.</p>
       <input id="privateChatSearch" type="search" autocomplete="off" placeholder="Search users">
       <div id="privateUserList" class="private-user-list"></div>
@@ -376,18 +333,6 @@
 </div>
 <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js?v=20261008-1130"></script>
-
-  <div class="modal hidden" id="changeUserPasswordModal" role="dialog" aria-modal="true" aria-label="Change your user password">
-    <div class="modal-card small-modal">
-      <button class="modal-close" id="changeUserPasswordClose" aria-label="Close">×</button>
-      <h3>🔑 Change My User Password</h3>
-      <p class="modal-help">This password protects your user ID. Anyone who wants to chat with you must enter this password.</p>
-      <input id="currentUserPasswordInput" type="password" maxlength="100" autocomplete="current-password" placeholder="Current password">
-      <input id="newUserPasswordInput" type="password" maxlength="100" autocomplete="new-password" placeholder="New password" style="margin-top:10px">
-      <div class="password-error" id="changeUserPasswordError"></div>
-      <button class="primary-btn" id="changeUserPasswordSave">Change Password</button>
-    </div>
-  </div>
+  <script src="/client.js"></script>
 </body>
 </html>

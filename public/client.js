@@ -47,7 +47,6 @@ let groupName = localStorage.getItem('wa_group_name') || 'WhatsApp';
 let currentGroupId = localStorage.getItem('wa_group_id') || '';
 let groups = [];
 let privateUsers = [];
-const privateUserOnline = new Map();
 let activeChatType = 'group';
 let currentPrivateUser = null;
 let privateLastMessages = {};
@@ -182,30 +181,6 @@ const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
 const installAppBtn = document.querySelector('#installAppBtn');
 const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
-const adminMenuLocked = document.querySelector('#adminMenuLocked');
-const adminMenuUnlocked = document.querySelector('#adminMenuUnlocked');
-const adminMenuPanelBtn = document.querySelector('#adminMenuPanelBtn');
-const adminMenuCallBtn = document.querySelector('#adminMenuCallBtn');
-const adminMenuPhotosBtn = document.querySelector('#adminMenuPhotosBtn');
-const adminMenuVideosBtn = document.querySelector('#adminMenuVideosBtn');
-const adminMenuPrivateBtn = document.querySelector('#adminMenuPrivateBtn');
-const adminMenuRecycleBtn = document.querySelector('#adminMenuRecycleBtn');
-const adminMenuDeleteBtn = document.querySelector('#adminMenuDeleteBtn');
-const adminMenuLogoutBtn = document.querySelector('#adminMenuLogoutBtn');
-
-// Open/close the main ⋮ menu. Admin Login is intentionally available only here.
-menuBtn?.addEventListener('click', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  appMenu?.classList.toggle('hidden');
-});
-
-document.addEventListener('click', (e) => {
-  if (!appMenu || appMenu.classList.contains('hidden')) return;
-  if (appMenu.contains(e.target) || menuBtn?.contains(e.target)) return;
-  appMenu.classList.add('hidden');
-});
-
 const newGroupBtn = document.querySelector('#newGroupBtn');
 const adminGroupsModal = document.querySelector('#adminGroupsModal');
 const adminGroupsClose = document.querySelector('#adminGroupsClose');
@@ -231,55 +206,6 @@ const adminCallRecordingsDownloadAll = document.querySelector('#adminCallRecordi
 const adminPhotosBtn = document.querySelector('#adminPhotosBtn');
 const adminVideosBtn = document.querySelector('#adminVideosBtn');
 const adminPrivateChatsBtn = document.querySelector('#adminPrivateChatsBtn');
-const adminAllUsersModal = document.querySelector('#adminAllUsersModal');
-const adminAllUsersClose = document.querySelector('#adminAllUsersClose');
-const adminAllUsersList = document.querySelector('#adminAllUsersList');
-const adminAllUsersError = document.querySelector('#adminAllUsersError');
-const adminAllUsersRefresh = document.querySelector('#adminAllUsersRefresh');
-const adminAllUsersAddUser = document.querySelector('#adminAllUsersAddUser');
-const adminAllUsersSelectAll = document.querySelector('#adminAllUsersSelectAll');
-const adminAllUsersDeleteSelected = document.querySelector('#adminAllUsersDeleteSelected');
-const adminAllUsersBack = document.querySelector('#adminAllUsersBack');
-const adminChangeUserPasswordModal = document.querySelector('#adminChangeUserPasswordModal');
-const adminChangeUserPasswordClose = document.querySelector('#adminChangeUserPasswordClose');
-const adminChangeUserPasswordInput = document.querySelector('#adminChangeUserPasswordInput');
-const adminChangeUserPasswordSave = document.querySelector('#adminChangeUserPasswordSave');
-const adminChangeUserPasswordError = document.querySelector('#adminChangeUserPasswordError');
-const adminChangeUserPasswordInfo = document.querySelector('#adminChangeUserPasswordInfo');
-let adminChangePasswordUserId = '';
-let adminChangePasswordUserName = '';
-
-function openAdminChangeUserPassword(userId, userName){
-  if(!adminUnlocked) return requestAdminThen(() => openAdminChangeUserPassword(userId,userName));
-  adminChangePasswordUserId=String(userId||'');
-  adminChangePasswordUserName=String(userName||'User');
-  if(adminChangeUserPasswordInfo) adminChangeUserPasswordInfo.textContent=`Set a new password for ${adminChangePasswordUserName} (${adminChangePasswordUserId}). The old password is not required.`;
-  if(adminChangeUserPasswordInput) adminChangeUserPasswordInput.value='';
-  if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
-  adminChangeUserPasswordModal?.classList.remove('hidden');
-  setTimeout(()=>adminChangeUserPasswordInput?.focus(),50);
-}
-function closeAdminChangeUserPassword(){ adminChangeUserPasswordModal?.classList.add('hidden'); adminChangePasswordUserId=''; adminChangePasswordUserName=''; }
-async function saveAdminChangeUserPassword(){
-  if(!adminChangePasswordUserId) return;
-  const newPassword=String(adminChangeUserPasswordInput?.value||'');
-  if(newPassword.length<1 || newPassword.length>100){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='Password must be 1-100 characters.'; return; }
-  adminChangeUserPasswordSave.disabled=true;
-  if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
-  try{
-    const r=await fetch('/api/admin/user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:adminChangePasswordUserId,newPassword})});
-    const d=await r.json();
-    if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password.');
-    closeAdminChangeUserPassword();
-    showToast(`Password changed for ${adminChangePasswordUserName}`);
-    await loadAdminAllUsers();
-    await loadPrivateUsers();
-  }catch(e){ if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent=e.message||'Could not change password.'; }
-  finally{ adminChangeUserPasswordSave.disabled=false; }
-}
-
-
-const adminDeleteUserBtn = document.querySelector('#adminDeleteUserBtn');
 const adminPrivateChatsModal = document.querySelector('#adminPrivateChatsModal');
 const adminPrivateChatsClose = document.querySelector('#adminPrivateChatsClose');
 const adminPrivateChatsList = document.querySelector('#adminPrivateChatsList');
@@ -324,6 +250,24 @@ const groupEditName = document.querySelector('#groupEditName');
 const groupEditPassword = document.querySelector('#groupEditPassword');
 const groupEditError = document.querySelector('#groupEditError');
 const groupEditSave = document.querySelector('#groupEditSave');
+
+menuBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  appMenu?.classList.toggle('hidden');
+});
+document.addEventListener('click', () => appMenu?.classList.add('hidden'));
+installAppBtn?.addEventListener('click', () => {
+  appMenu?.classList.add('hidden');
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (isAndroid) {
+    window.location.href = '/whatsapp.apk';
+  } else {
+    showToast('Android phone પર આ shortcutથી WhatsApp APK install કરો.');
+  }
+});
+
+let pendingAction = null;
+let pendingPasswordType = 'admin';
 const messages = new Map();
 const deletedIds = new Set();
 const readSent = new Set();
@@ -607,12 +551,6 @@ function closePassword() {
   passwordModal.classList.add('hidden');
   pendingAction = null;
   pendingPasswordType = 'admin';
-  // Never leave an empty admin menu after cancelling/closing login.
-  if (!adminUnlocked) {
-    try { adminMenuLocked?.classList.remove('hidden'); } catch (_) {}
-    try { adminMenuUnlocked?.classList.add('hidden'); } catch (_) {}
-    try { appMenu?.classList.add('hidden'); } catch (_) {}
-  }
 }
 
 passwordSubmit.addEventListener('click', async () => {
@@ -620,7 +558,6 @@ passwordSubmit.addEventListener('click', async () => {
   let valid = false;
   if (pendingPasswordType === 'download') valid = supplied === DOWNLOAD_PASSWORD;
   else if (pendingPasswordType === 'admin') valid = supplied === PASSWORD;
-  else if (pendingPasswordType === 'delete') valid = supplied === 'deoxy';
   else if (pendingPasswordType === 'private-setup' || pendingPasswordType === 'private-verify' || pendingPasswordType === 'private-action') {
     try {
       const peerId = String(window.pendingPrivatePeerId || currentPrivateUser?.userId || '');
@@ -630,8 +567,8 @@ passwordSubmit.addEventListener('click', async () => {
       valid = !!d.ok;
       if (!valid && d.needsSetup && pendingPasswordType === 'private-verify') {
         pendingPasswordType = 'private-setup';
-        passwordTitle.textContent = 'Set personal chat password';
-        passwordText.textContent = 'Set a password for this personal chat. Share it with the other person.';
+        passwordTitle.textContent = 'Set private chat password';
+        passwordText.textContent = 'Set a password for this private chat. Share it with the other person.';
         passwordInput.value = '';
         passwordError.textContent = '';
         setTimeout(() => passwordInput.focus(), 40);
@@ -648,9 +585,8 @@ passwordSubmit.addEventListener('click', async () => {
   if (wasAdminPassword) {
     adminUnlocked = true;
     try { socket.emit('register-admin', { password: PASSWORD }); } catch (_) {}
-    try { showToast('Admin login successful'); } catch (_) {}
   }
-  if (action) action(supplied);
+  if (action) action();
 });
 passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') passwordSubmit.click(); });
 passwordClose.addEventListener('click', closePassword);
@@ -673,7 +609,7 @@ async function sendMessage(text) {
     privateLastMessages[peer.userId] = msg;
     try {
       const response = await fetch('/api/private-messages', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...msg, password:String(window.privateChatPasswords?.[String(peer.userId)] || '')}), cache:'no-store', keepalive:true
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg), cache:'no-store', keepalive:true
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || 'save');
@@ -683,11 +619,11 @@ async function sendMessage(text) {
       if (el) el.dataset.synced = '1';
       updateTicks(saved);
     } catch (_) {
-      const ack = await emitAck('private-message', {...msg, password:String(window.privateChatPasswords?.[String(peer.userId)] || '')}, 12000, 1);
+      const ack = await emitAck('private-message', msg, 12000, 1);
       if (!ack?.ok) showToast('Private message is waiting for connection — please retry');
       else {
         messages.set(msg.id, ack.message || msg);
-        const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+        const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
         if (el) el.dataset.synced = '1';
       }
     }
@@ -720,12 +656,12 @@ async function sendMessage(text) {
   } catch (error) {
     const ack = await emitAck('message', msg, 12000, 1);
     if (!ack || !ack.ok) {
-      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
       if (el) { el.classList.add('send-failed'); el.title = 'Send failed. Tap Send again when the connection returns.'; }
       showToast('Message is waiting for connection — please retry');
     } else {
       messages.set(msg.id, ack.message || msg);
-      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
       if (el) { el.dataset.synced = '1'; el.classList.remove('send-failed'); }
     }
   }
@@ -774,7 +710,7 @@ cancelSelectionBtn?.addEventListener('click', exitSelectionMode);
 deleteSelectedBtn?.addEventListener('click', () => {
   if (!selectedMessageIds.size) return;
   const ids = Array.from(selectedMessageIds);
-  requestPassword('Delete for everyone', `Enter password deoxy to delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone. The deleted item will go to Admin Recycle Bin.`, (password) => deleteMessages(ids, true, password), 'delete');
+  requestPassword('Delete for everyone', `Delete ${ids.length} selected message${ids.length === 1 ? '' : 's'} for everyone?`, () => deleteMessages(ids));
 });
 
 // Turn shared URLs into safe, tappable links while keeping message text plain by default.
@@ -910,7 +846,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete for everyone', 'Enter password deoxy to delete this message for everyone. It will be moved to the Admin Recycle Bin.', (password) => deleteMessage(msg.id, true, password), 'delete');
+    requestPassword('Delete for everyone', activeChatType === 'private' ? 'Enter this private chat password. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id), activeChatType === 'private' ? 'private-action' : 'admin');
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -983,7 +919,7 @@ function privateConversationIdForClient() {
 function privateChatPasswordForCurrent() {
   return String(window.privateChatPasswords?.[String(currentPrivateUser?.userId||'')] || '');
 }
-function deleteMessage(messageId, broadcast=true, password='deoxy') {
+function deleteMessage(messageId, broadcast=true) {
   const id = String(messageId);
   const el=document.querySelector(`.message[data-id="${CSS.escape(id)}"]`);
   if (el) el.remove();
@@ -994,16 +930,16 @@ function deleteMessage(messageId, broadcast=true, password='deoxy') {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-message', {id, conversationId, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Message could not be deleted'); });
+      socket.emit('private-delete-message', {id, conversationId}, (result) => { if (!result || !result.ok) showToast('Private message could not be deleted'); });
     } else {
-      socket.emit('delete-message', {id, password}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-message', {id}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
   updateSelectionUI();
   updatePreview('Message deleted');
 }
 
-function deleteMessages(messageIds, broadcast=true, password='deoxy') {
+function deleteMessages(messageIds, broadcast=true) {
   const ids = Array.from(new Set(messageIds.map(String))).filter(id => messages.has(id) || document.querySelector(`.message[data-id="${CSS.escape(id)}"]`));
   if (!ids.length) { exitSelectionMode(); return; }
   ids.forEach(id => {
@@ -1019,27 +955,29 @@ function deleteMessages(messageIds, broadcast=true, password='deoxy') {
   if (broadcast) {
     if (activeChatType === 'private') {
       const conversationId = privateConversationIdForClient();
-      socket.emit('private-delete-messages', {ids, conversationId, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Messages could not be deleted'); });
+      socket.emit('private-delete-messages', {ids, conversationId}, (result) => { if (!result || !result.ok) showToast('Private messages could not be deleted'); });
     } else {
-      socket.emit('delete-messages', {ids, password}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
+      socket.emit('delete-messages', {ids}, (result) => { if (!result || !result.ok) showToast('Delete could not be synced'); });
     }
   }
 }
 
-function clearChat(broadcast=true, password='deoxy') {
+function clearChat(broadcast=true) {
   messageArea.innerHTML=''; messages.clear(); lastRenderedDate='';
   try { localStorage.removeItem(messageCacheKey()); } catch (_) {}
   updatePreview('No messages yet');
   if (broadcast) {
     if (activeChatType === 'private') {
-      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient(), password}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
+      socket.emit('private-clear-chat', {conversationId:privateConversationIdForClient()}, (result) => { if (!result || !result.ok) showToast('Private chat could not be cleared'); });
     } else {
-      socket.emit('clear-chat', {by:name, password}, (result) => { if (!result || !result.ok) showToast(result?.error || 'Chat could not be cleared'); });
+      socket.emit('clear-chat', {by:name});
     }
   }
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', 'Enter password deoxy to clear this chat. All messages, photos, videos and audio will be moved to the Admin Recycle Bin.', (password) => { clearChat(true, password); }, 'delete'));
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', activeChatType === 'private' ? 'Enter this private chat password to clear the chat. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to clear this chat.', () => {
+  if (activeChatType === 'private' && privateChatPasswordForCurrent()) clearChat(true); else clearChat(true);
+}, activeChatType === 'private' ? 'private-action' : 'admin'));
 
 const cameraModal = document.querySelector('#cameraModal');
 const cameraPreview = document.querySelector('#cameraPreview');
@@ -1372,7 +1310,7 @@ function isMessageDelivered(msg) {
 }
 
 function updateTicks(msg) {
-  const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+  const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
   if (!el || msg.userId !== userId) return;
   const ticks = el.querySelector('.ticks');
   if (!ticks) return;
@@ -1393,7 +1331,7 @@ function showAdminMediaPopup(item, isRecording=false){
   const icon = isRecording ? (type==='audio'?'🎙️':'🎥') : ({image:'🖼️',video:'🎥',audio:'🎤',document:'📄'}[type]||'📎');
   adminMediaPopupIcon.textContent=icon;
   adminMediaPopupTitle.textContent=isRecording ? 'New Call Recording' : 'New Group Media';
-  adminMediaPopupMeta.textContent=`${item.groupName||'Group'} • ${item.feedName||item.user||'User'} • ${isRecording?'Recording':type}`;
+  adminMediaPopupMeta.textContent=`${item.groupName||item.groupId||'Group'} • ${item.feedName||item.user||item.userId||'User'} • ${isRecording?'Recording':type}`;
   adminMediaPopupPreview.innerHTML='';
   const url=isRecording ? `/api/admin/call-recordings/${encodeURIComponent(item.fileId||item.id)}?password=${encodeURIComponent(PASSWORD)}` : (item.mediaId ? `/api/media/${encodeURIComponent(item.mediaId)}` : item.data);
   if(type==='image') { const el=document.createElement('img'); el.src=url; el.alt='Photo'; adminMediaPopupPreview.appendChild(el); }
@@ -1474,25 +1412,6 @@ socket.on('history', history => {
   }
 });
 
-// If Admin deletes this account, the old local identity must be discarded.
-// The next time the app is opened/continued, the user is treated as a new user
-// and receives a fresh User ID after entering a new name + password.
-socket.on('account-deleted', (info) => {
-  try {
-    localStorage.removeItem('wa_user_id');
-    localStorage.removeItem('wa_name');
-  } catch (_) {}
-  userId = '';
-  name = '';
-  try { window.privateChatPasswords = {}; } catch (_) {}
-  try {
-    if (socket.connected) socket.disconnect();
-  } catch (_) {}
-  updateMyNameUI?.();
-  alert('Your account was deleted by Admin. Please create a new account with a new name and password.');
-  setTimeout(() => openAccountModal(true), 50);
-});
-
 socket.on('connect', () => {
   if (userId) {
     refreshAllUnreadCounts().catch(() => {});
@@ -1507,7 +1426,6 @@ socket.on('private-history', history => {
   history.forEach(msg => receivePrivateMessage(msg, {history:true}));
   if (history.length) requestAnimationFrame(() => scrollToBottom());
 });
-socket.on('private-password-changed', data => { if (activeChatType === 'private' && currentPrivateUser?.userId === String(data?.userId || '')) { showToast('User password changed. Re-enter the new password.'); closeChat(); } });
 socket.on('private-chat-deleted', data => {
   const conversationId = String(data?.conversationId || '');
   if (!conversationId) return;
@@ -1518,7 +1436,6 @@ socket.on('private-chat-deleted', data => {
     });
   }
   if (String(currentPrivateUser?.conversationId || '') === conversationId) {
-    if (window.privateChatPasswords && currentPrivateUser?.userId) delete window.privateChatPasswords[String(currentPrivateUser.userId)];
     currentPrivateUser = null;
     activeChatType = 'group';
     messages.clear();
@@ -1532,7 +1449,7 @@ socket.on('private-chat-deleted', data => {
   if (typeof loadPrivateUsers === 'function') loadPrivateUsers().catch(() => {});
 });
 
-socket.on('user-deleted', data => {
+socket.on('private-user-deleted', data => {
   const deletedId = String(data?.userId || '');
   if (!deletedId) return;
 
@@ -1558,7 +1475,7 @@ socket.on('user-deleted', data => {
     }
   }
   renderGroupList();
-  showToast(`${String(data?.name || 'User')} was deleted`);
+  showToast(`${String(data?.name || 'Private user')} was deleted`);
 });
 
 socket.on('private-message', msg => {
@@ -1681,11 +1598,13 @@ async function syncMessages() {
     const data = await response.json();
     if (!Array.isArray(data.messages)) return;
 
-    // The API returns ONLY active (undeleted) messages. The chat UI must match
-    // that exact server state: deleted messages must never remain as blank
-    // bubbles, placeholders, or local-cache ghosts.
-    // Cross-device reconciliation is therefore based on the active ID set, while
-    // the separate deleted-ID endpoint handles the recycle-bin/delete metadata.
+    // IMPORTANT: never delete a local message merely because it is missing
+    // from one sync response. A temporary Mongo/network/serverless failure can
+    // return an incomplete/empty history. Messages disappear only after the
+    // explicit delete-message / clear-chat action.
+    // Cross-device deletion reconciliation: even when Socket.IO/WebSocket is
+    // unavailable (for example on different Vercel instances), every device in
+    // the same group learns which messages were deleted and removes them locally.
     try {
       const deletedResponse = await fetch(`/api/messages/deleted?groupId=${encodeURIComponent(currentGroupId)}`, { cache:'no-store' });
       if (deletedResponse.ok) {
@@ -1702,20 +1621,9 @@ async function syncMessages() {
       }
     } catch (_) {}
 
-    const activeIds = new Set(data.messages.map(msg => String(msg?.id || '')).filter(Boolean));
-    [...messages.keys()].forEach(id => {
-      const sid = String(id);
-      if (activeIds.has(sid)) return;
-      const el = document.querySelector(`.message[data-id="${CSS.escape(sid)}"]`);
-      if (el) el.remove();
-      messages.delete(sid);
-      deletedIds.add(sid);
-      selectedMessageIds.delete(sid);
-    });
-
     data.messages.forEach(msg => {
       if (!msg || !msg.id) return;
-      const existing = messages.get(String(msg.id));
+      const existing = messages.get(msg.id);
       if (!existing) {
         receiveMessage(msg);
         return;
@@ -1724,7 +1632,7 @@ async function syncMessages() {
       existing.user = msg.user || existing.user;
       existing.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
       existing.deliveredTo = Array.isArray(msg.deliveredTo) ? msg.deliveredTo : [];
-      const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+      const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
       const sender = el && el.querySelector('.sender');
       if (sender && existing.user) sender.textContent = existing.user;
       updateTicks(existing);
@@ -1754,39 +1662,7 @@ setInterval(() => {
   // The badge is user-level, so every group must be refreshed independently.
   if (userId && Array.isArray(groups) && groups.length) refreshAllUnreadCounts().catch(() => {});
   if (currentGroupId) syncMessages();
-  if (activeChatType === 'private' && currentPrivateUser?.userId) syncPrivateMessages();
 }, 5000);
-
-async function syncPrivateMessages() {
-  const peerId = String(currentPrivateUser?.userId || '');
-  const password = String(window.privateChatPasswords?.[peerId] || '');
-  if (!userId || !peerId || !password || activeChatType !== 'private') return;
-  try {
-    const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}&password=${encodeURIComponent(password)}`, { cache:'no-store' });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !Array.isArray(d.messages)) return;
-    const activeIds = new Set(d.messages.map(m => String(m?.id || '')).filter(Boolean));
-    [...messages.keys()].forEach(id => {
-      const sid = String(id);
-      if (activeIds.has(sid)) return;
-      const el = document.querySelector(`.message[data-id="${CSS.escape(sid)}"]`);
-      if (el) el.remove();
-      messages.delete(sid);
-      deletedIds.add(sid);
-      selectedMessageIds.delete(sid);
-    });
-    d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
-    saveLocalMessageHistory();
-    if (!d.messages.length) {
-      lastRenderedDate = '';
-      if (messageArea) messageArea.innerHTML = '';
-      updatePreview('No messages yet');
-    } else {
-      const last = d.messages[d.messages.length - 1];
-      updatePreview(last.message || (last.type === 'image' ? '📷 Photo' : last.type === 'video' ? '🎥 Video' : last.type === 'audio' ? '🎤 Voice message' : last.type === 'document' ? '📎 Document' : 'New message'));
-    }
-  } catch (_) {}
-}
 
 socket.on('group-renamed', data => {
   if (!data || !data.name || (data.id && data.id !== currentGroupId)) return;
@@ -1870,26 +1746,21 @@ function renderGroupList() {
   if (!chatList) return;
   chatList.innerHTML = '';
 
-  const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
-  if (!visiblePrivate.length) {
-    const empty = document.createElement('div');
-    empty.className = 'chat-section-label';
-    empty.textContent = 'No other users yet';
-    chatList.appendChild(empty);
-  }
+  const privateSection = document.createElement('div');
+  privateSection.className = 'chat-section-label';
+  privateSection.textContent = 'Private chats';
+  chatList.appendChild(privateSection);
 
+  const visiblePrivate = privateUsers.filter(u => String(u.userId) !== String(userId));
   visiblePrivate.forEach(user => {
     const button = document.createElement('button');
     button.className = 'chat-item' + (activeChatType === 'private' && currentPrivateUser?.userId === user.userId ? ' active' : '');
     button.type = 'button';
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar group-avatar private-avatar';
-    avatar.textContent = firstCharacter(user.name);
-    const summary = document.createElement('div');
-    summary.className = 'chat-summary';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar private-avatar'; avatar.textContent = firstCharacter(user.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
     const last = privateLastMessages[user.userId];
-    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Tap to chat';
-    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="private-online-dot ${privateUserOnline.get(String(user.userId)) ? 'is-online' : ''}" title="${privateUserOnline.get(String(user.userId)) ? 'Online' : 'Offline'}"></span><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
+    const preview = last ? (last.message || (last.type === 'image' ? '📷 Photo' : 'New message')) : 'Private message';
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge"></span></div><div class="chat-line preview"><span></span><span></span></div>`;
     summary.querySelector('strong').textContent = user.name;
     summary.querySelector('.preview span').textContent = preview;
     const badge = summary.querySelector('.group-unread-badge');
@@ -1899,6 +1770,27 @@ function renderGroupList() {
     button.addEventListener('click', () => openPrivateChat(user));
     chatList.appendChild(button);
   });
+
+  const groupSection = document.createElement('div');
+  groupSection.className = 'chat-section-label';
+  groupSection.textContent = 'Groups';
+  chatList.appendChild(groupSection);
+
+  groups.forEach(group => {
+    const button = document.createElement('button');
+    button.className = 'chat-item' + (activeChatType === 'group' && group.id === currentGroupId ? ' active' : '');
+    button.type = 'button';
+    const avatar = document.createElement('div'); avatar.className = 'avatar group-avatar'; avatar.textContent = firstCharacter(group.name);
+    const summary = document.createElement('div'); summary.className = 'chat-summary';
+    summary.innerHTML = `<div class="chat-line group-title-line"><strong></strong><span class="group-unread-badge" aria-label="Unread messages"></span></div><div class="chat-line preview"><span>🔒 Password protected group</span><span></span></div>`;
+    summary.querySelector('strong').textContent = group.name;
+    const badge = summary.querySelector('.group-unread-badge');
+    const unread = getUnreadCount(group.id);
+    if (unread > 0) { badge.textContent = unread > 99 ? '99+' : String(unread); badge.classList.add('show'); }
+    button.append(avatar, summary);
+    button.addEventListener('click', () => openGroup(group));
+    chatList.appendChild(button);
+  });
 }
 
 async function loadPrivateUsers() {
@@ -1906,10 +1798,7 @@ async function loadPrivateUsers() {
   try {
     const r = await fetch(`/api/users?userId=${encodeURIComponent(userId)}`, { cache:'no-store' });
     const d = await r.json().catch(() => ({}));
-    if (d.ok) {
-      privateUsers = Array.isArray(d.users) ? d.users : [];
-      privateUsers.forEach(u => privateUserOnline.set(String(u.userId), !!u.online));
-    }
+    if (d.ok) privateUsers = Array.isArray(d.users) ? d.users : [];
     renderGroupList();
   } catch (_) {}
 }
@@ -1934,10 +1823,11 @@ function renderPrivateUserList(filter='') {
   list.forEach(user => {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'user-row';
-    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small class="private-user-status ${privateUserOnline.get(String(user.userId)) ? 'online' : ''}">${privateUserOnline.get(String(user.userId)) ? 'online' : 'offline'}</small></div>`;
+    row.className = 'private-user-row';
+    row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong><small></small></div>`;
     row.querySelector('.avatar').textContent = firstCharacter(user.name);
     row.querySelector('strong').textContent = user.name;
+    row.querySelector('small').textContent = user.userId;
     row.addEventListener('click', () => {
       privateChatModal.classList.add('hidden');
       openPrivateChat(user);
@@ -1946,74 +1836,54 @@ function renderPrivateUserList(filter='') {
   });
 }
 
-function askPrivatePassword(user, mode='verify') {
-  return new Promise(resolve => {
-    const peerId = String(user?.userId || '');
-    if (!peerId) return resolve('');
-    window.pendingPrivatePeerId = peerId;
-    requestPassword(
-      mode === 'setup' ? 'Set your user password' : 'User password required',
-      mode === 'setup'
-        ? `Set the password for user ${String(user?.name || 'this person')}. Anyone who wants to chat with this user must enter this password.`
-        : `Enter the password set by ${String(user?.name || 'this person')}. The chat will not open without it.`,
-      () => resolve(String(window.privatePasswordForOpen || '')),
-      mode === 'setup' ? 'private-setup' : 'private-verify'
-    );
-  });
-}
-
-async function openPrivateChat(user, providedPassword='') {
+async function openPrivateChat(user, suppliedPassword='') {
   if (!user || !user.userId || String(user.userId) === String(userId)) return;
-  const peerId = String(user.userId);
-  window.privateChatPasswords = window.privateChatPasswords || {};
-  let password = String(providedPassword || '');
-
-  // Every time a personal chat is opened, verify the selected user's own
-  // password. It is NOT a shared conversation password.
+  let password = suppliedPassword;
   if (!password) {
-    password = await askPrivatePassword(user, 'verify');
-    if (!password) return;
+    try {
+      const r = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}`, {cache:'no-store'});
+      const d = await r.json().catch(() => ({}));
+      if (!d.exists) {
+        window.pendingPrivatePeerId = String(user.userId);
+        requestPassword('Set private chat password', 'Set a password for this private chat. Share it with the other person.', () => openPrivateChat(user, '__SET_BY_MODAL__'), 'private-setup');
+        return;
+      }
+    } catch (_) {
+      showToast('Could not check private chat password');
+      return;
+    }
+    window.pendingPrivatePeerId = String(user.userId);
+    requestPassword('Private chat password', 'Enter the password set for this private chat.', () => openPrivateChat(user, '__VERIFY_BY_MODAL__'), 'private-verify');
+    return;
   }
-
-  try {
-    const verify = await fetch('/api/private-chat/verify-user', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ userId:peerId, password })
-    });
-    const verifyData = await verify.json().catch(() => ({}));
-    if (!verifyData.ok) { showToast('Wrong user password'); return; }
-  } catch (_) { showToast('Could not verify user password'); return; }
-
-  window.privateChatPasswords[peerId] = password;
+  if (password === '__SET_BY_MODAL__' || password === '__VERIFY_BY_MODAL__') {
+    password = window.privatePasswordForOpen || '';
+    window.privatePasswordForOpen = '';
+  }
+  if (!password) return;
+  window.privateChatPasswords = window.privateChatPasswords || {};
+  window.privateChatPasswords[String(user.userId)] = password;
   activeChatType = 'private';
   currentPrivateUser = user;
-  privateUnreadCounts[peerId] = 0;
+  privateUnreadCounts[user.userId] = 0;
   composer?.classList.remove('hidden');
   app?.classList.remove('group-locked');
   messages.clear(); deletedIds.clear(); readSent.clear(); lastRenderedDate = ''; lastSyncAt = '';
-  if (messageArea) messageArea.innerHTML = '';
+  messageArea.innerHTML = '';
   updatePrivateHeader();
   renderGroupList();
-
   let privateSocketReady = false;
   try {
     if (socket.connected) {
-      await new Promise(resolve => socket.emit('join-private', { peerId, password }, result => {
+      await new Promise(resolve => socket.emit('join-private', { peerId:user.userId, password }, result => {
         privateSocketReady = !!result?.ok;
-        if (result && typeof result.peerOnline === 'boolean') {
-          privateUserOnline.set(peerId, result.peerOnline);
-          updatePrivateHeader();
-          renderGroupList();
-        }
-        if (!privateSocketReady && result?.error) showToast(result.error);
         resolve();
       }));
     }
   } catch (_) {}
-
   if (!privateSocketReady) {
     try {
-      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
+      const r = await fetch(`/api/private-messages?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(user.userId)}&password=${encodeURIComponent(password)}`, {cache:'no-store'});
       const d = await r.json().catch(() => ({}));
       if (d.ok && Array.isArray(d.messages)) d.messages.forEach(m => receivePrivateMessage(m, {history:true}));
     } catch (_) {}
@@ -2029,8 +1899,8 @@ function updatePrivateHeader() {
   groupNameHeader.textContent = currentPrivateUser.name;
   groupAvatarHeader.textContent = firstCharacter(currentPrivateUser.name);
   if (groupNameList) groupNameList.textContent = currentPrivateUser.name;
-  const peerOnline = !!privateUserOnline.get(String(currentPrivateUser.userId));
-  setOnlineStatus(peerOnline ? 'online' : 'offline');
+  onlineStatus.textContent = 'private chat';
+  onlineStatus.className = 'offline';
   document.querySelector('#audioCallBtn')?.classList.add('hidden');
   document.querySelector('#videoCallBtn')?.classList.add('hidden');
 }
@@ -2180,7 +2050,7 @@ socket.on('user-renamed', data => {
   messages.forEach(msg => {
     if (msg.userId !== data.userId) return;
     msg.user = data.name;
-    const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
     const sender = el && el.querySelector('.sender');
     if (sender) sender.textContent = data.name;
   });
@@ -2256,15 +2126,6 @@ onlineStatus?.addEventListener('click', (event) => {
   if (window.matchMedia?.('(max-width: 760px)').matches) showCurrentLastSeen(event);
 });
 
-socket.on('user-presence', data => {
-  const uid = String(data?.userId || '').trim();
-  if (!uid || uid === String(userId || '')) return;
-  privateUserOnline.set(uid, !!data.online);
-  if (currentPrivateUser && String(currentPrivateUser.userId) === uid) setOnlineStatus(data.online ? 'online' : 'offline');
-  renderGroupList();
-  renderPrivateUserList(privateChatSearch?.value || '');
-});
-
 socket.on('group-presence', data => {
   if (!data || String(data.groupId || '') !== String(currentGroupId || '')) return;
   setGroupPresence(!!data.online, data.groupId, data.lastSeen, data.latestLastSeen, data.latestLastSeenUserId);
@@ -2291,9 +2152,7 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, name, deviceId }, result => {
-    if (result?.ok) loadPrivateUsers().catch(() => {});
-  });
+  socket.emit('register-user', { userId, name, deviceId });
   setupWebPush().catch(() => {});
   pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
@@ -2305,15 +2164,6 @@ socket.on('connect', () => {
   }
   // Do not join/poll an empty group during startup. The group is joined only
   // after its password has been successfully verified.
-  if (activeChatType === 'private' && currentPrivateUser?.userId) {
-    const privatePeerId = String(currentPrivateUser.userId);
-    const privatePassword = String(window.privateChatPasswords?.[privatePeerId] || '');
-    if (privatePassword) {
-      socket.emit('join-private', { peerId: privatePeerId, password: privatePassword }, result => {
-        if (!result?.ok) showToast('Personal chat needs password again');
-      });
-    }
-  }
   if (!currentGroupId) return;
   socket.emit('join-group', {
     groupId: currentGroupId,
@@ -2441,27 +2291,18 @@ window.addEventListener('popstate', () => {
     renderGroupList();
   }
 });
-document.querySelector('#newChatBtn')?.addEventListener('click', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  // The + button opens the general personal-chat user directory.
-  // New accounts are created only during first-time onboarding.
-  appMenu?.classList.add('hidden');
-  openPrivatePicker();
+document.querySelector('#newChatBtn').addEventListener('click', () => {
+  newChatChoiceModal?.classList.remove('hidden');
 });
 newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classList.add('hidden'));
 newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
 newPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  openPrivatePicker();
+  openPrivateUserCreateModal();
 });
 joinPrivateChatChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  openPrivatePicker();
-});
-newGroupChoice?.addEventListener('click', () => {
-  newChatChoiceModal?.classList.add('hidden');
-  showToast('Personal chat only');
+  openPrivateUserJoinModal();
 });
 
 function openPrivateUserJoinModal() {
@@ -2477,23 +2318,37 @@ function closePrivateUserJoinModal() {
   if (privateUserJoinError) privateUserJoinError.textContent = '';
 }
 async function joinPrivateUserAndOpen() {
-  const joinId = normalizeUserId(privateUserJoinName?.value || '');
+  const joinName = String(privateUserJoinName?.value || '').trim().slice(0,60);
   const password = String(privateUserJoinPassword?.value || '');
-  if (!joinId) { privateUserJoinError.textContent = 'Enter the user ID'; privateUserJoinName.focus(); return; }
-  if (!password) { privateUserJoinError.textContent = 'Enter that user\'s password'; privateUserJoinPassword.focus(); return; }
+  if (!joinName) { privateUserJoinError.textContent = 'Enter the private user name'; privateUserJoinName.focus(); return; }
+  if (!password) { privateUserJoinError.textContent = 'Enter the private chat password'; privateUserJoinPassword.focus(); return; }
   privateUserJoinSave.disabled = true;
   privateUserJoinError.textContent = '';
   try {
-    const r = await fetch('/api/private-chat/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:joinId, password }) });
+    const r = await fetch('/api/private-chat/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name:joinName, password }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not verify user');
+    if (!r.ok || !d.ok || !d.user || !d.peer) throw new Error(d.error || 'Could not join private chat');
+    // The shared private user is a real private account. Logging in with its
+    // name/password makes the second person use the same conversation identity
+    // that the creator shared with them.
+    userId = normalizeUserId(d.user.userId);
+    name = String(d.user.name || joinName).slice(0,60);
+    localStorage.setItem('wa_user_id', userId);
+    localStorage.setItem('wa_name', name);
+    syncAndroidNotificationIdentity();
     closePrivateUserJoinModal();
-    privateUsers = [d.user, ...privateUsers.filter(u => String(u.userId) !== String(d.user.userId))];
-    await openPrivateChat(d.user, password);
+    socket.emit('register-user', { userId, name, deviceId });
+    setupWebPush().catch(() => {});
+    socket.emit('presence-login', { userId, deviceId });
+    const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
+    privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
+    window.privateChatPasswords = window.privateChatPasswords || {};
+    window.privateChatPasswords[peer.userId] = password;
+    await openPrivateChat(peer, password);
     await loadPrivateUsers();
-    showToast(`Chat unlocked for ${d.user.name}`);
+    showToast(`Joined private chat with ${peer.name}`);
   } catch (e) {
-    privateUserJoinError.textContent = e?.message || 'Could not verify user';
+    privateUserJoinError.textContent = e?.message || 'Could not join private chat';
   } finally { privateUserJoinSave.disabled = false; }
 }
 privateUserJoinSave?.addEventListener('click', joinPrivateUserAndOpen);
@@ -2517,35 +2372,20 @@ async function createPrivateUserAndOpen() {
   const newName = String(privateUserCreateName?.value || '').trim().slice(0,60);
   const password = String(privateUserCreatePassword?.value || '');
   if (!newName) { privateUserCreateError.textContent = 'Enter a name'; privateUserCreateName.focus(); return; }
-  if (password.length < 1 || password.length > 100) { privateUserCreateError.textContent = 'Password must be 1-100 characters'; privateUserCreatePassword.focus(); return; }
+  if (password.length < 4 || password.length > 100) { privateUserCreateError.textContent = 'Password must be 4-100 characters'; privateUserCreatePassword.focus(); return; }
   privateUserCreateSave.disabled = true;
   privateUserCreateError.textContent = '';
   try {
-    const adminMode = !!adminUnlocked;
-    const endpoint = adminMode ? '/api/admin/private-user/create' : '/api/private-chat/create-user';
-    const body = adminMode
-      ? { password:PASSWORD, name:newName, chatPassword:password }
-      : { creatorId:userId, name:newName, password };
-    const r = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const r = await fetch('/api/private-chat/create-user', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ creatorId:userId, name:newName, password }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create user');
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create private user');
     const created = { userId:String(d.user.userId), name:String(d.user.name || newName) };
     privateUsers = [created, ...privateUsers.filter(u => String(u.userId) !== created.userId)];
     closePrivateUserCreateModal();
-    if (adminMode) {
-      // Admin-created users are credentials for the other person to use.
-      alert(`User added successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nGive this Login ID + Password to the other person.`);
-      await loadAdminAllUsers();
-    } else {
-      // Any normal user can create a new private-chat account from the + button.
-      // The creator keeps their current identity; the new user's credentials are
-      // shown immediately so they can be shared with the other person.
-      alert(`New user created successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nShare these credentials with the person who should use this account.`);
-      await openPrivateChat(created, password);
-      showToast(`User created: ${created.name}`);
-    }
+    await openPrivateChat(created, password);
+    showToast(`Private chat created for ${created.name}`);
   } catch (e) {
-    privateUserCreateError.textContent = e?.message || 'Could not create user';
+    privateUserCreateError.textContent = e?.message || 'Could not create private user';
   } finally { privateUserCreateSave.disabled = false; }
 }
 privateUserCreateSave?.addEventListener('click', createPrivateUserAndOpen);
@@ -2679,46 +2519,13 @@ function openAdminGroupMedia(type){
 adminPhotosBtn?.addEventListener('click', () => openAdminGroupMedia('image'));
 adminVideosBtn?.addEventListener('click', () => openAdminGroupMedia('video'));
 adminPrivateChatsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminPrivateChats); });
-adminDeleteUserBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminDeleteUser); });
 adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.classList.add('hidden'));
-adminAllUsersClose?.addEventListener('click', () => adminAllUsersModal?.classList.add('hidden'));
-adminAllUsersModal?.addEventListener('click', e => { if(e.target===adminAllUsersModal) adminAllUsersModal.classList.add('hidden'); });
-adminAllUsersRefresh?.addEventListener('click', loadAdminAllUsers);
-adminChangeUserPasswordClose?.addEventListener('click', closeAdminChangeUserPassword);
-adminChangeUserPasswordSave?.addEventListener('click', saveAdminChangeUserPassword);
-adminChangeUserPasswordInput?.addEventListener('keydown', e => { if(e.key==='Enter') saveAdminChangeUserPassword(); });
-adminChangeUserPasswordModal?.addEventListener('click', e => { if(e.target===adminChangeUserPasswordModal) closeAdminChangeUserPassword(); });
-adminAllUsersAddUser?.addEventListener('click', () => { if (!adminUnlocked) return requestAdminThen(openPrivateUserCreateModal); openPrivateUserCreateModal(); });
-adminAllUsersBack?.addEventListener('click', () => {
-  adminAllUsersModal?.classList.add('hidden');
-  if (adminUnlocked) { adminGroupsModal?.classList.remove('hidden'); loadAdminGroups?.(); }
-});
-adminAllUsersSelectAll?.addEventListener('change', () => {
-  adminAllUsersList?.querySelectorAll('.admin-user-select').forEach(cb => { cb.checked = adminAllUsersSelectAll.checked; });
-});
-adminAllUsersDeleteSelected?.addEventListener('click', async () => {
-  if (!adminUnlocked) return requestAdminThen(() => adminAllUsersDeleteSelected?.click());
-  const selected = [...(adminAllUsersList?.querySelectorAll('.admin-user-select:checked') || [])].map(cb => String(cb.dataset.userId || '')).filter(Boolean);
-  if (!selected.length) { showToast('Select at least one user'); return; }
-  if (!confirm(`Delete ${selected.length} selected user(s)? Their account and personal chat data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
-  adminAllUsersDeleteSelected.disabled = true;
-  try {
-    const results = await Promise.all(selected.map(userId => fetch('/api/admin/users/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD,userId})}).then(async r => ({ok:r.ok, data:await r.json()}))));
-    const failed = results.filter(x => !x.ok || !x.data?.ok);
-    const done = results.length - failed.length;
-    showToast(`${done} user(s) deleted${failed.length ? `, ${failed.length} failed` : ''}`);
-    if (adminAllUsersSelectAll) adminAllUsersSelectAll.checked = false;
-    await loadAdminAllUsers();
-    await loadPrivateUsers();
-  } catch (e) { showToast(e.message || 'Delete selected failed'); }
-  finally { adminAllUsersDeleteSelected.disabled = false; }
-});
 adminPrivateChatsModal?.addEventListener('click', e => { if (e.target === adminPrivateChatsModal) adminPrivateChatsModal.classList.add('hidden'); });
 adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats());
 
 async function adminDeleteAllUsers() {
   if (!adminUnlocked) return requestAdminThen(adminDeleteAllUsers);
-  const ok = confirm('Delete ALL user accounts permanently? This will delete every account and personal chat data. Main Recycle Bin data will NOT be deleted. This cannot be undone.');
+  const ok = confirm('Delete ALL user accounts permanently? This will delete every account and private chat data. Main Recycle Bin data will NOT be deleted. This cannot be undone.');
   if (!ok) return;
   try {
     const r = await fetch('/api/admin/delete-all-users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD}) });
@@ -2851,73 +2658,16 @@ function closeAdminMediaPopup(){
 }
 
 function openAdminCallRecordings() { adminCallRecordingsModal.classList.remove('hidden'); loadAdminCallRecordings(); }
-async function loadAdminAllUsers(){
-  if(!adminAllUsersList) return;
-  adminAllUsersError.textContent='';
-  if (adminAllUsersSelectAll) adminAllUsersSelectAll.checked = false;
-  adminAllUsersList.innerHTML='<div class="admin-group-row">Loading all users…</div>';
-  try{
-    const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD})});
-    const d=await r.json();
-    if(!r.ok || !d.ok) throw new Error(d.error||'Unauthorized');
-    const users=Array.isArray(d.users)?d.users:[];
-    adminAllUsersList.innerHTML='';
-    if(!users.length){ adminAllUsersList.innerHTML='<div class="admin-group-row">No users found.</div>'; return; }
-    const heading=document.createElement('div'); heading.className='admin-group-row'; heading.textContent=`👥 All registered users (${users.length})`; adminAllUsersList.appendChild(heading);
-    users.forEach(user=>{
-      const row=document.createElement('div'); row.className='admin-private-chat-row admin-user-row';
-      const created=user.createdAt?new Date(user.createdAt).toLocaleString():'';
-      const kind='User';
-      row.dataset.userId=String(user.userId||'');
-      row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><div class="admin-user-row-actions"><button type="button" class="mini-btn admin-password-btn single-user-password">🔑 Change Password</button><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button></div>';
-      const cb=row.querySelector('.admin-user-select'); cb.dataset.userId=String(user.userId||'');
-      row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
-      row.querySelector('.admin-private-chat-meta').textContent=`${kind} • ${user.online?'🟢 Online':'⚪ Offline'}${created?' • Created '+created:''} • Login ID: ${String(user.userId||'-')} • Password: ${String(user.shareablePassword||'-')}`;
-      row.querySelector('.single-user-password')?.addEventListener('click',()=>{
-        openAdminChangeUserPassword(user.userId,user.name);
-      });
-      row.querySelector('.single-user-delete').addEventListener('click', async()=>{
-        if (!confirm(`Delete ${String(user.name||'User')}? Their account and personal chat data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
-        try{
-          const rr=await fetch('/api/admin/users/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:user.userId})});
-          const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Delete failed');
-          showToast(`${String(user.name||'User')} deleted`); await loadAdminAllUsers(); await loadPrivateUsers();
-        }catch(e){showToast(e.message||'Delete failed');}
-      });
-      adminAllUsersList.appendChild(row);
-    });
-  }catch(e){adminAllUsersList.innerHTML='';adminAllUsersError.textContent=e.message||'Could not load users.';}
-}
-
-function openAdminAllUsers(){
-  if(!adminUnlocked) return requestAdminThen(openAdminAllUsers);
-  appMenu?.classList.add('hidden');
-  adminGroupsModal?.classList.add('hidden');
-  adminPrivateChatsModal?.classList.add('hidden');
-  adminAllUsersModal?.classList.remove('hidden');
-  loadAdminAllUsers();
-}
-
-function openAdminDeleteUser() {
-  adminGroupsModal?.classList.add('hidden');
-  adminPrivateChatsModal?.classList.remove('hidden');
-  const title = adminPrivateChatsModal?.querySelector('h3');
-  if (title) title.textContent = '🗑 Delete User';
-  loadAdminPrivateChats(true);
-}
-
 function openAdminPrivateChats() {
   adminGroupsModal?.classList.add('hidden');
   adminPrivateChatsModal?.classList.remove('hidden');
-  const title = adminPrivateChatsModal?.querySelector('h3');
-  if (title) title.textContent = 'Personal Chats';
-  loadAdminPrivateChats(false);
+  loadAdminPrivateChats();
 }
 
-async function loadAdminPrivateChats(deleteMode = false) {
+async function loadAdminPrivateChats() {
   if (!adminPrivateChatsList) return;
   adminPrivateChatsError.textContent = '';
-  adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading users…</div>';
+  adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading private users…</div>';
   try {
     let privatePasswordSettings = [];
     if (adminPrivatePassword) {
@@ -2926,7 +2676,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
       privatePasswordSettings = Array.isArray(pd.passwords) ? pd.passwords : [];
       adminPrivatePassword.textContent = privatePasswordSettings.length
         ? privatePasswordSettings.map(x => `${x.userAName || x.userA} ↔ ${x.userBName || x.userB}: ${x.password}`).join('  •  ')
-        : 'No personal chat passwords set';
+        : 'No private chat passwords set';
     }
     const r = await fetch('/api/admin/private-chats', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})
@@ -2936,11 +2686,11 @@ async function loadAdminPrivateChats(deleteMode = false) {
     const users = Array.isArray(d.users) ? d.users : [];
     const chats = Array.isArray(d.chats) ? d.chats : privatePasswordSettings;
     if (!users.length && !chats.length) {
-      adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No users found.</div>';
+      adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
       return;
     }
     adminPrivateChatsList.innerHTML = '';
-    if (chats.length && !deleteMode) {
+    if (chats.length) {
       const heading = document.createElement('div');
       heading.className = 'admin-group-row';
       heading.textContent = `🔐 Private chat passwords (${chats.length})`;
@@ -2953,7 +2703,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
         row.querySelector('.admin-private-chat-meta').textContent = chat.createdAt ? `Created ${new Date(chat.createdAt).toLocaleString()}` : 'Private chat';
         row.querySelector('.admin-private-chat-password').textContent = `🔑 ${String(chat.password || '')}`;
         row.querySelector('.admin-delete-btn').addEventListener('click', () => {
-          requestPassword('Delete personal chat', `Delete this personal chat and move its messages/photos/videos/audio to the Main Recycle Bin? The users will NOT be deleted. Only Admin can permanently delete those recycle-bin items.`, async () => {
+          requestPassword('Delete private chat', `Delete this private chat and move its messages/photos/videos/audio to the Main Recycle Bin? The private users will NOT be deleted. Only Admin can permanently delete those recycle-bin items.`, async () => {
             try {
               const rr = await fetch('/api/admin/private-chats/delete', {
                 method:'POST', headers:{'Content-Type':'application/json'},
@@ -2972,7 +2722,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
     if (users.length) {
       const heading = document.createElement('div');
       heading.className = 'admin-group-row';
-      heading.textContent = deleteMode ? '🗑 Select a user to delete' : '👤 Users';
+      heading.textContent = '👤 Private users';
       adminPrivateChatsList.appendChild(heading);
     }
     users.forEach(user => {
@@ -2987,7 +2737,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
       row.querySelector('.admin-delete-btn').addEventListener('click', () => {
         requestPassword('Delete user permanently', `Delete ${String(user.name || user.userId || 'this user')} account and move their private photos/videos/audio/messages to the Main Recycle Bin? Enter the Admin password. Only Admin can permanently delete recycle-bin items.`, async () => {
           try {
-            const rr = await fetch('/api/admin/users/delete', {
+            const rr = await fetch('/api/admin/private-users/delete', {
               method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, userId:user.userId})
             });
             const dd = await rr.json();
@@ -3004,7 +2754,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
     });
   } catch (e) {
     adminPrivateChatsList.innerHTML = '';
-    adminPrivateChatsError.textContent = e.message || 'Could not load users.';
+    adminPrivateChatsError.textContent = e.message || 'Could not load private users.';
   }
 }
 
@@ -3134,7 +2884,7 @@ async function renderAdminRecycleGroupFilters(items) {
 
 
 function recycleItemGroupId(item){ return item?.recycleType === 'private' ? `private:${String(item?.privateConversationId || item?.message?.conversationId || 'unknown')}` : String(item?.deletedGroupId || item?.message?.groupId || 'main'); }
-function recycleItemGroupName(item){ return item?.recycleType === 'private' ? `Personal Chat • ${String(item?.privateConversationId || item?.message?.conversationId || 'Private')}` : String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
+function recycleItemGroupName(item){ return item?.recycleType === 'private' ? `Private Chat • ${String(item?.privateConversationId || item?.message?.conversationId || 'Private')}` : String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
 
 function openRecycleChatView(items, groupName, targetId='') {
   const view = document.querySelector('#adminRecycleChatView');
@@ -3162,7 +2912,7 @@ function openRecycleChatView(items, groupName, targetId='') {
     const bubble=document.createElement('div');
     bubble.className='recycle-chat-bubble' + (m.userId===userId ? ' mine' : '');
     bubble.dataset.itemId=String(item.id||'');
-    const sender=document.createElement('div'); sender.className='recycle-chat-sender'; sender.textContent=String(m.user||m.senderName||'Unknown user'); bubble.appendChild(sender);
+    const sender=document.createElement('div'); sender.className='recycle-chat-sender'; sender.textContent=String(m.user||m.senderName||m.senderId||m.userId||'Unknown user'); bubble.appendChild(sender);
     const type=String(m.type||'text').toLowerCase();
     if(type==='image'||type==='video'||type==='audio'){
       const wrap=document.createElement('div'); wrap.className='recycle-chat-media';
@@ -3221,10 +2971,10 @@ async function loadAdminRecycle() {
       const m = item.message || {};
       const row = document.createElement('div'); row.className='recycle-item';
       const kind = m.type === 'image' ? '🖼️ Image' : m.type === 'video' ? '🎥 Video' : m.type === 'audio' ? '🎤 Audio' : m.type === 'document' ? '📄 Document' : '💬 Message';
-      const sender = m.user || m.senderName || 'Unknown user';
+      const sender = m.user || m.senderName || m.senderId || m.userId || 'Unknown user';
       const content = m.message || m.fileName || (m.type === 'image' ? 'Photo' : m.type === 'video' ? 'Video' : m.type === 'audio' ? 'Audio' : m.type === 'document' ? 'Document' : 'Deleted message');
       const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
-      const oldGroup = item.recycleType === 'private' ? 'Private chat' : (item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : '');
+      const oldGroup = item.recycleType === 'private' ? `Private chat: ${String(item.privateConversationId || item.message?.conversationId || '')}` : (item.deletedGroupName ? `Deleted group: ${item.deletedGroupName}` : (item.deletedGroupId ? `Deleted group: ${item.deletedGroupId}` : ''));
       const isMainRecycle = adminRecycleGroupId === 'main';
       row.innerHTML = `<div class="recycle-main"><strong class="recycle-kind"></strong><span class="recycle-sender"></span><span class="recycle-name"></span><small class="recycle-meta"></small><small class="recycle-origin"></small></div><div class="recycle-actions"><button class="mini-btn recycle-view-btn">View</button><button class="mini-btn recycle-download-btn">⬇️ Download</button><button class="mini-btn recycle-restore-btn">♻️ Restore</button>${isMainRecycle ? '<button class="mini-btn admin-delete-btn recycle-delete-btn">Delete permanently</button>' : '<button class="mini-btn recycle-main-move-btn">🗑️ Delete → Main Recycle</button>'}</div>`;
       row.querySelector('.recycle-origin').textContent = oldGroup;
@@ -3357,15 +3107,7 @@ async function saveNewGroup() {
   }
 }
 
-adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(() => { if (adminMenuLocked) adminMenuLocked.classList.add('hidden'); if (adminMenuUnlocked) adminMenuUnlocked.classList.remove('hidden'); appMenu?.classList.remove('hidden'); openAdminGroups(); }); });
-adminMenuPanelBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroups(); });
-adminMenuCallBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminCallRecordings(); });
-adminMenuPhotosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('image'); });
-adminMenuVideosBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminGroupMedia('video'); });
-adminMenuPrivateBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminAllUsers(); });
-adminMenuRecycleBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); openAdminRecycle(); });
-adminMenuDeleteBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); adminDeleteUserBtn?.click(); });
-adminMenuLogoutBtn?.addEventListener('click', () => { adminUnlocked=false; if(adminMenuUnlocked) adminMenuUnlocked.classList.add('hidden'); if(adminMenuLocked) adminMenuLocked.classList.remove('hidden'); appMenu?.classList.add('hidden'); try{socket.emit('unregister-admin');}catch(_){} showToast('Admin locked'); });
+adminGroupsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminGroups); });
 adminCallRecordingsBtn?.addEventListener('click', () => { appMenu?.classList.add('hidden'); requestAdminThen(openAdminCallRecordings); });
 adminCallRecordingsClose?.addEventListener('click', () => adminCallRecordingsModal.classList.add('hidden'));
 adminCallRecordingsModal?.addEventListener('click', e => { if (e.target === adminCallRecordingsModal) adminCallRecordingsModal.classList.add('hidden'); });
@@ -3399,7 +3141,6 @@ const nameHelp = document.querySelector('#nameHelp');
 const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
-const accountPasswordInput = document.querySelector('#accountPasswordInput');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
@@ -3410,14 +3151,7 @@ function normalizeUserId(value) {
 
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
-  accountNameInput.value = '';
-  accountNameInput.placeholder = 'Your Name';
-  accountNameInput.setAttribute('autocomplete','name');
-  if (accountPasswordInput) {
-    accountPasswordInput.value = '';
-    accountPasswordInput.placeholder = 'Create Password';
-    accountPasswordInput.setAttribute('autocomplete','new-password');
-  }
+  accountNameInput.value = name || '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
@@ -3425,78 +3159,31 @@ function openAccountModal(force = false) {
   setTimeout(() => accountNameInput.focus(), 50);
 }
 
-async function finishAccountLogin() {
-  const enteredName = String(accountNameInput.value || '').trim().slice(0, 60);
-  const loginPassword = String(accountPasswordInput?.value || '');
-  if (!enteredName) { accountError.textContent = 'Enter your name'; accountNameInput.focus(); return; }
-  if (loginPassword.length < 1 || loginPassword.length > 100) { accountError.textContent = 'Create a password (1-100 characters)'; accountPasswordInput?.focus(); return; }
-  accountContinueBtn.disabled = true;
-  accountError.textContent = 'Saving account…';
-  try {
-    const r = await fetch('/api/account/register', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:enteredName, password:loginPassword}), cache:'no-store' });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not create account');
-    userId = String(d.user.userId || '');
-    name = String(d.user.name || enteredName).trim().slice(0,60);
-    localStorage.setItem('wa_user_id', userId);
-    localStorage.setItem('wa_name', name);
-    syncAndroidNotificationIdentity();
-    accountGenerated.textContent = `User ID: ${userId}`;
-    accountGenerated.style.display = 'block';
-    accountError.textContent = 'Account saved successfully.';
-    accountModal.classList.add('hidden');
-    updateMyNameUI();
-    updateGroupNameUI();
-    socket.emit('register-user', { userId, name, password: loginPassword, deviceId }, result => {
-      if (result?.ok) loadPrivateUsers().catch(() => {});
-    });
-    enableNotifications().then(granted => { if (granted) return setupWebPush(); }).catch(() => {});
-    pollWebNotifications().catch(() => {});
-    loadPrivateUsers().catch(() => {});
-    socket.emit('presence-login', { userId, deviceId });
-    if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
-  } catch (e) {
-    accountError.textContent = e?.message || 'Could not create account';
-  } finally {
-    accountContinueBtn.disabled = false;
-  }
+function finishAccountLogin() {
+  const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
+  if (!nextName) { accountError.textContent = 'Enter your name'; return; }
+  if (!userId) userId = generateUserId();
+  userId = normalizeUserId(userId);
+  name = nextName;
+  localStorage.setItem('wa_user_id', userId);
+  localStorage.setItem('wa_name', name);
+  syncAndroidNotificationIdentity();
+  accountModal.classList.add('hidden');
+  updateMyNameUI();
+  socket.emit('register-user', { userId, name, deviceId });
+  // The Continue button is a user gesture, so it is the safest place to both
+  // request permission and register the Web Push subscription.
+  enableNotifications().then(granted => {
+    if (granted) return setupWebPush();
+  }).catch(() => {});
+  pollWebNotifications().catch(() => {});
+  loadPrivateUsers().catch(() => {});
+  socket.emit('presence-login', { userId, deviceId });
+  if (currentGroupId && socket.connected) socket.emit('presence-ping', { groupId: currentGroupId });
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
-accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
-
-const openChangeUserPasswordBtn = document.querySelector('#openChangeUserPasswordBtn');
-const changeUserPasswordModal = document.querySelector('#changeUserPasswordModal');
-const currentUserPasswordInput = document.querySelector('#currentUserPasswordInput');
-const newUserPasswordInput = document.querySelector('#newUserPasswordInput');
-const changeUserPasswordSave = document.querySelector('#changeUserPasswordSave');
-const changeUserPasswordClose = document.querySelector('#changeUserPasswordClose');
-const changeUserPasswordError = document.querySelector('#changeUserPasswordError');
-function openChangeUserPassword(){
-  nameModal?.classList.add('hidden');
-  currentUserPasswordInput.value=''; newUserPasswordInput.value=''; changeUserPasswordError.textContent='';
-  changeUserPasswordModal?.classList.remove('hidden');
-  setTimeout(()=>currentUserPasswordInput?.focus(),40);
-}
-function closeChangeUserPassword(){ changeUserPasswordModal?.classList.add('hidden'); changeUserPasswordError.textContent=''; }
-openChangeUserPasswordBtn?.addEventListener('click', openChangeUserPassword);
-changeUserPasswordClose?.addEventListener('click', closeChangeUserPassword);
-changeUserPasswordModal?.addEventListener('click', e=>{if(e.target===changeUserPasswordModal)closeChangeUserPassword();});
-changeUserPasswordSave?.addEventListener('click', async()=>{
-  const currentPassword=String(currentUserPasswordInput?.value||'');
-  const newPassword=String(newUserPasswordInput?.value||'');
-  if(!currentPassword){changeUserPasswordError.textContent='Enter current password';return;}
-  if(newPassword.length<1||newPassword.length>100){changeUserPasswordError.textContent='New password must be 1-100 characters';return;}
-  changeUserPasswordSave.disabled=true; changeUserPasswordError.textContent='';
-  try{
-    const r=await fetch('/api/user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,currentPassword,newPassword})});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password');
-    closeChangeUserPassword(); showToast('Your user password was changed successfully');
-  }catch(e){changeUserPasswordError.textContent=e.message||'Could not change password';}
-  finally{changeUserPasswordSave.disabled=false;}
-});
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');
@@ -3552,7 +3239,7 @@ function renameRenderedMessages(nextName) {
   messages.forEach(msg => {
     if (msg.userId !== userId) return;
     msg.user = nextName;
-    const el = document.querySelector(`.message[data-id="${CSS.escape(String(msg.id))}"]`);
+    const el = document.querySelector(`.message[data-id="${CSS.escape(msg.id)}"]`);
     if (!el) return;
     const sender = el.querySelector('.sender');
     if (sender) sender.textContent = nextName;
@@ -3601,59 +3288,9 @@ function saveGroupName() {
   showToast(`Group name is now ${groupName}`);
 }
 
-async function validateLocalAccountBeforeOpening() {
-  const savedId = normalizeUserId(localStorage.getItem('wa_user_id') || '');
-  const savedName = String(localStorage.getItem('wa_name') || '').trim();
-
-  // No local identity: this is a brand-new user/device.
-  if (!savedId || !savedName) {
-    userId = '';
-    name = '';
-    openAccountModal(true);
-    return false;
-  }
-
-  try {
-    const response = await fetch('/api/account/exists?userId=' + encodeURIComponent(savedId), { cache: 'no-store' });
-    const data = await response.json();
-
-    if (data && data.ok && data.exists) {
-      // The account still exists in MongoDB, so this device can continue as
-      // that user. Do not ask for Name/Password again on every app launch.
-      userId = savedId;
-      name = String(data.name || savedName).trim().slice(0, 60);
-      localStorage.setItem('wa_user_id', userId);
-      localStorage.setItem('wa_name', name);
-      updateMyNameUI();
-      updateGroupNameUI();
-      socket.emit('register-user', { userId, name, deviceId });
-      return true;
-    }
-  } catch (error) {
-    // If the server/database is temporarily unavailable, do not destroy a
-    // valid local account. Let the normal socket reconnect logic handle it.
-    userId = savedId;
-    name = savedName;
-    updateMyNameUI();
-    updateGroupNameUI();
-    socket.emit('register-user', { userId, name, deviceId });
-    return true;
-  }
-
-  // The User ID is no longer present in MongoDB (for example Admin deleted it).
-  // Remove the old identity and force a fresh Name + Password registration.
-  try {
-    localStorage.removeItem('wa_user_id');
-    localStorage.removeItem('wa_name');
-  } catch (_) {}
-  userId = '';
-  name = '';
-  updateMyNameUI();
+if (!userId || !name) {
   openAccountModal(true);
-  return false;
 }
-
-validateLocalAccountBeforeOpening().catch(() => openAccountModal(true));
 updateMyNameUI();
 updateGroupNameUI();
 nameSave.addEventListener('click', saveUserName);

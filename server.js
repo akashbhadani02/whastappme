@@ -30,7 +30,6 @@ const CALL_RECORDINGS_COLLECTION_NAME = 'call_recordings';
 const USER_PROFILES_COLLECTION_NAME = 'user_profiles';
 const MAX_MEDIA_CHUNK = 768 * 1024;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'deoxy';
-const MESSAGE_DELETE_PASSWORD = 'deoxy';
 const DOWNLOAD_PASSWORD = process.env.DOWNLOAD_PASSWORD || 'kmkm';
 const PRIVATE_CHAT_SETTINGS_COLLECTION_NAME = 'private_chat_settings';
 const DEFAULT_GROUP_ID = 'main';
@@ -339,105 +338,25 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 });
 
 
-app.post('/api/account/register', async (req, res) => {
-  try {
-    const displayName = String(req.body?.name || '').trim().slice(0, 60);
-    const password = String(req.body?.password || '');
-    if (!displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
-    if (password.length < 1 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-
-    // If the same Name + Password already belongs to an existing account,
-    // treat this as that user's login instead of creating a duplicate account.
-    const existingAccount = await profiles.findOne(
-      { name: displayName, password },
-      { projection: { _id:1, name:1 } }
-    );
-    if (existingAccount?._id) {
-      return res.json({
-        ok:true,
-        existing:true,
-        user:{ userId:String(existingAccount._id), name:String(existingAccount.name || displayName) }
-      });
-    }
-
-    let userId = '';
-    for (let i = 0; i < 20; i++) {
-      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-      let candidate = 'WA-';
-      for (let j = 0; j < 8; j++) candidate += alphabet[Math.floor(Math.random() * alphabet.length)];
-      const exists = await profiles.findOne({ _id:candidate }, { projection:{ _id:1 } });
-      if (!exists) { userId = candidate; break; }
-    }
-    if (!userId) return res.status(500).json({ ok:false, error:'Could not generate a unique User ID.' });
-
-    const now = new Date();
-    await profiles.insertOne({
-      _id:userId,
-      name:displayName,
-      kind:'user',
-      password,
-      createdAt:now,
-      updatedAt:now
-    });
-
-    res.json({ ok:true, user:{ userId, name:displayName } });
-  } catch (error) {
-    console.error('Account registration failed:', error.message);
-    res.status(500).json({ ok:false, error:'Could not create account.' });
-  }
-});
-
-app.post('/api/account/login', async (req, res) => {
-  try {
-    const userId = String(req.body?.userId || '').trim().toUpperCase();
-    const password = String(req.body?.password || '');
-    if (!userId || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1, password:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User ID not found. Ask Admin to create your account.' });
-    if (String(profile.password || '') !== password) return res.status(403).json({ ok:false, error:'Wrong password.' });
-    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || profile._id) } });
-  } catch (error) {
-    console.error('Account login failed:', error.message);
-    res.status(500).json({ ok:false, error:'Could not login.' });
-  }
-});
-
-app.get('/api/account/exists', async (req, res) => {
-  try {
-    const userId = String(req.query?.userId || '').trim();
-    if (!userId) return res.json({ ok: true, exists: false });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok: false, exists: false, error: 'Database unavailable.' });
-    const profile = await profiles.findOne({ _id: userId }, { projection: { _id: 1, name: 1 } });
-    res.json({ ok: true, exists: !!profile, name: profile?.name || '' });
-  } catch (error) {
-    console.error('Account existence check failed:', error.message);
-    res.status(500).json({ ok: false, exists: false, error: 'Could not check account.' });
-  }
-});
-
 app.get('/api/users', async (req, res) => {
   try {
     const me = String(req.query?.userId || '').trim();
     const profiles = await getUserProfilesCollection();
+    const settings = await getPrivateChatSettingsCollection();
     if (!profiles || !me) return res.json({ ok: true, users: [] });
 
-    // Personal-chat directory: show every registered user except the current user.
-    // A personal conversation does not need a group invitation or a shared password.
-    const docs = await profiles.find(
-      { _id: { $ne: me }, name: { $exists: true, $ne: '' } },
-      { projection: { _id: 1, name: 1, updatedAt: 1, lastSeenAt: 1 } }
-    ).sort({ name: 1 }).limit(1000).toArray();
-
-    const users = docs.map(u => ({
-      userId: String(u._id),
-      name: String(u.name || u._id).slice(0, 60),
-      online: isUserOnline(String(u._id)),
-      lastSeenAt: u.lastSeenAt || null
+    // Private-chat directory is conversation-scoped. A user sees only the
+    // other participant of private chats they actually own/are part of.
+    const settingDocs = settings
+      ? await settings.find({ $or:[{ userA:me }, { userB:me }] }, { projection:{ userA:1, userB:1, _id:1, createdAt:1 } }).sort({ createdAt:-1 }).limit(500).toArray()
+      : [];
+    const peerIds = [...new Set(settingDocs.map(s => String(s.userA) === me ? String(s.userB) : String(s.userA)).filter(Boolean).filter(id => id !== me))];
+    if (!peerIds.length) return res.json({ ok:true, users:[] });
+    const docs = await profiles.find({ _id:{ $in:peerIds } }, { projection:{ _id:1, name:1, kind:1, updatedAt:1 } }).toArray();
+    const byId = new Map(docs.map(u => [String(u._id), u]));
+    const users = peerIds.filter(id => byId.has(id)).map(id => ({
+      userId:id,
+      name:String(byId.get(id)?.name || id).slice(0,60)
     }));
     res.json({ ok:true, users });
   } catch (error) {
@@ -448,37 +367,31 @@ app.get('/api/users', async (req, res) => {
 
 app.post('/api/private-chat/join', async (req, res) => {
   try {
-    const targetUserId = String(req.body?.userId || '').trim();
-    const legacyName = String(req.body?.name || '').trim().slice(0, 60);
+    const displayName = String(req.body?.name || '').trim().slice(0, 60);
     const password = String(req.body?.password || '');
-    if ((!targetUserId && !legacyName) || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
+    if (!displayName || !password) return res.status(400).json({ ok:false, error:'Name and password are required.' });
     const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-
-    let profile = targetUserId
-      ? await profiles.findOne({ _id:targetUserId }, { projection:{ _id:1, name:1, kind:1, password:1 } })
-      : null;
-    if (!profile && legacyName) profile = await profiles.findOne({ name:legacyName }, { projection:{ _id:1, name:1, kind:1, password:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User ID not found.' });
-
-    // Each private user owns ONE password. That password protects every
-    // personal conversation where this user is the selected recipient.
-    let storedPassword = String(profile.password || '');
-    if (!storedPassword) {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) {
-        const legacy = await settings.findOne({ userB:String(profile._id) }, { projection:{ password:1 } });
-        storedPassword = String(legacy?.password || '');
-      }
+    const settings = await getPrivateChatSettingsCollection();
+    if (!profiles || !settings) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const matches = await profiles.find({ kind:'private_user', name:displayName }, { projection:{ _id:1, name:1, kind:1 } }).limit(10).toArray();
+    const valid = [];
+    for (const profile of matches) {
+      const setting = await settings.findOne({ userB:String(profile._id), password });
+      if (setting) valid.push({ profile, setting });
     }
-    if (!storedPassword || storedPassword !== password) return res.status(403).json({ ok:false, error:'Wrong user password.' });
-
-    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || legacyName || profile._id) } });
+    if (valid.length === 0) return res.status(403).json({ ok:false, error:'Invalid private user name or password.' });
+    if (valid.length > 1) return res.status(409).json({ ok:false, error:'More than one private user has this name. Ask the creator for the private user ID.' });
+    const { profile, setting } = valid[0];
+    const creatorId = String(setting.userA);
+    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1, kind:1 } });
+    if (!creator) return res.status(410).json({ ok:false, error:'The private chat creator no longer exists.' });
+    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || displayName) }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId:String(setting._id) });
   } catch (error) {
-    console.error('Private user password check failed:', error.stack || error.message);
-    res.status(500).json({ ok:false, error:'Could not verify user password.' });
+    console.error('Private chat join failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not join private chat.' });
   }
 });
+
 
 function generatePrivateUserId() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -487,38 +400,6 @@ function generatePrivateUserId() {
   return out;
 }
 
-app.post('/api/admin/private-user/create', async (req, res) => {
-  try {
-    const adminPassword = String(req.body?.password || '');
-    const creatorId = String(req.body?.creatorId || 'ADMIN').trim() || 'ADMIN';
-    const displayName = String(req.body?.name || '').trim().slice(0, 60);
-    const chatPassword = String(req.body?.chatPassword || '');
-    if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
-    if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
-    if (chatPassword.length < 1 || chatPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
-    if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a user.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1 } });
-    let userId = '';
-    for (let i=0; i<8; i++) {
-      const candidate = generatePrivateUserId();
-      try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'user', password:chatPassword, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
-        userId = candidate;
-        break;
-      } catch (e) {
-        if (e?.code !== 11000) throw e;
-      }
-    }
-    if (!userId) return res.status(500).json({ ok:false, error:'Could not create user.' });
-    res.json({ ok:true, user:{ userId, name:displayName }, peer: creator ? { userId:creatorId, name:String(creator.name || creatorId) } : null });
-  } catch (error) {
-    console.error('Admin private user creation failed:', error.stack || error.message);
-    res.status(500).json({ ok:false, error:'Could not create user.' });
-  }
-});
-
 app.post('/api/private-chat/create-user', async (req, res) => {
   try {
     const creatorId = String(req.body?.creatorId || '').trim();
@@ -526,7 +407,7 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     const password = String(req.body?.password || '');
     if (!creatorId || !displayName) return res.status(400).json({ ok:false, error:'Name is required.' });
     if (creatorId.length > 200) return res.status(400).json({ ok:false, error:'Invalid creator.' });
-    if (password.length < 1 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
+    if (password.length < 4 || password.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
     if (!MONGODB_URI) return res.status(503).json({ ok:false, error:'Database is required to create a private user.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
@@ -536,7 +417,7 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
       try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'user', password:password, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
         userId = candidate;
         break;
       } catch (e) {
@@ -545,137 +426,15 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     }
     if (!userId) return res.status(500).json({ ok:false, error:'Could not create private user.' });
     const conversationId = privateConversationId(creatorId, userId);
+    const setting = await createPrivateChatSetting(conversationId, creatorId, userId, password);
+    if (!setting.ok) {
+      await profiles.deleteOne({ _id:userId });
+      return res.status(400).json(setting);
+    }
     res.json({ ok:true, user:{ userId, name:displayName }, conversationId });
   } catch (error) {
     console.error('Private user creation failed:', error.stack || error.message);
     res.status(500).json({ ok:false, error:'Could not create private user.' });
-  }
-});
-
-async function getPrivateUserPassword(userId) {
-  const uid = String(userId || '').trim();
-  if (!uid) return '';
-  const profiles = await getUserProfilesCollection();
-  if (profiles) {
-    const profile = await profiles.findOne({ _id:uid }, { projection:{ password:1 } });
-    if (profile?.password) return String(profile.password);
-    // Legacy migration: older builds stored the user's password as userB in a
-    // private-chat setting. Use it until the account password is changed.
-    const settings = await getPrivateChatSettingsCollection();
-    if (settings) {
-      const legacy = await settings.findOne({ userB:uid }, { projection:{ password:1 } });
-      if (legacy?.password) {
-        try { await profiles.updateOne({ _id:uid }, { $set:{ password:String(legacy.password), updatedAt:new Date() } }); } catch (_) {}
-        return String(legacy.password);
-      }
-    }
-  }
-  return '';
-}
-
-app.post('/api/admin/private-user/change-password', async (req, res) => {
-  try {
-    const adminPassword = String(req.body?.password || '');
-    const userId = String(req.body?.userId || '').trim();
-    const newPassword = String(req.body?.newPassword || '');
-    if (adminPassword !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
-    if (!userId) return res.status(400).json({ ok:false, error:'User ID is required.' });
-    if (newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 1-100 characters.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'Private user not found.' });
-    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
-    try {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) await settings.deleteMany({ userB:userId });
-    } catch (_) {}
-    try {
-      for (const target of io.sockets.sockets.values()) {
-        const cid = String(target.privateAuthorizedPrivateChat || '');
-        if (cid && cid.includes(`:${userId}:`)) {
-          target.leave(`private:${cid}`);
-          target.privateAuthorizedPrivateChat = '';
-          target.emit('private-password-changed', { userId, adminChanged:true });
-        }
-      }
-    } catch (_) {}
-    res.json({ ok:true, userId, name:String(profile.name || '') });
-  } catch (error) {
-    console.error('Admin private user password change failed:', error.stack || error.message);
-    res.status(500).json({ ok:false, error:'Could not change user password.' });
-  }
-});
-
-app.post('/api/user/change-password', async (req, res) => {
-  try {
-    const userId = String(req.body?.userId || '').trim();
-    const currentPassword = String(req.body?.currentPassword || '');
-    const newPassword = String(req.body?.newPassword || '');
-    if (!userId || newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 1-100 characters.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ password:1, name:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User not found.' });
-    const old = await getPrivateUserPassword(userId);
-    if (!old || old !== currentPassword) return res.status(403).json({ ok:false, error:'Current password is incorrect.' });
-    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
-    try {
-      for (const target of io.sockets.sockets.values()) {
-        const cid = String(target.privateAuthorizedPrivateChat || '');
-        if (cid && cid.includes(`:${userId}:`)) {
-          target.leave(`private:${cid}`);
-          target.privateAuthorizedPrivateChat = '';
-          target.emit('private-password-changed', { userId });
-        }
-      }
-    } catch (_) {}
-    // Remove legacy per-conversation passwords for this user so the account
-    // password is the single source of truth going forward.
-    try {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) await settings.deleteMany({ userB:userId });
-    } catch (_) {}
-    res.json({ ok:true, userId, name:String(profile.name || '') });
-  } catch (error) {
-    console.error('Private user password change failed:', error.message);
-    res.status(500).json({ ok:false, error:'Could not change password.' });
-  }
-});
-
-app.post('/api/private-user/change-password', async (req, res) => {
-  try {
-    const userId = String(req.body?.userId || '').trim();
-    const currentPassword = String(req.body?.currentPassword || '');
-    const newPassword = String(req.body?.newPassword || '');
-    if (!userId || newPassword.length < 1 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 1-100 characters.' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ password:1, name:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User not found.' });
-    const old = await getPrivateUserPassword(userId);
-    if (!old || old !== currentPassword) return res.status(403).json({ ok:false, error:'Current password is incorrect.' });
-    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
-    try {
-      for (const target of io.sockets.sockets.values()) {
-        const cid = String(target.privateAuthorizedPrivateChat || '');
-        if (cid && cid.includes(`:${userId}:`)) {
-          target.leave(`private:${cid}`);
-          target.privateAuthorizedPrivateChat = '';
-          target.emit('private-password-changed', { userId });
-        }
-      }
-    } catch (_) {}
-    // Remove legacy per-conversation passwords for this user so the account
-    // password is the single source of truth going forward.
-    try {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) await settings.deleteMany({ userB:userId });
-    } catch (_) {}
-    res.json({ ok:true, userId, name:String(profile.name || '') });
-  } catch (error) {
-    console.error('Private user password change failed:', error.message);
-    res.status(500).json({ ok:false, error:'Could not change password.' });
   }
 });
 
@@ -693,7 +452,7 @@ async function getPrivateChatSetting(conversationId) {
 
 async function createPrivateChatSetting(conversationId, userA, userB, password) {
   const clean = String(password || '');
-  if (!conversationId || !clean || clean.length < 1 || clean.length > 100) return { ok:false, error:'Password must be 1-100 characters.' };
+  if (!conversationId || !clean || clean.length < 4 || clean.length > 100) return { ok:false, error:'Password must be 4-100 characters.' };
   const collection = await getPrivateChatSettingsCollection();
   const document = { _id:String(conversationId), userA:String(userA), userB:String(userB), password:clean, createdAt:new Date() };
   if (!collection) {
@@ -714,17 +473,6 @@ app.get('/api/private-chat/access', async (req, res) => {
     const setting = await getPrivateChatSetting(conversationId);
     res.json({ ok:true, exists:!!setting });
   } catch (_) { res.status(500).json({ ok:false, error:'Could not check private chat' }); }
-});
-
-app.post('/api/private-chat/verify-user', async (req, res) => {
-  try {
-    const userId = String(req.body?.userId || '').trim();
-    const password = String(req.body?.password || '');
-    if (!userId || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
-    const stored = await getPrivateUserPassword(userId);
-    if (!stored) return res.status(404).json({ ok:false, error:'This user has not set a password yet.' });
-    res.json({ ok: stored === password });
-  } catch (_) { res.status(500).json({ ok:false, error:'Could not verify user password.' }); }
 });
 
 app.post('/api/private-chat/set-password', async (req, res) => {
@@ -814,7 +562,7 @@ app.post('/api/admin/private-chats', async (req, res) => {
     // Admin's Private Users section is ONLY for active private-user accounts.
     // The creator/normal account is a participant of the conversation but is
     // not itself a private user and must not appear in this list.
-    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids } }, { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1 } }).toArray() : [];
+    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids }, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1 } }).toArray() : [];
     const userMap = new Map(userDocs.map(u => [String(u._id), u]));
     const activePrivateIds = new Set(userDocs.map(u => String(u._id)));
     const users = ids.filter(id => activePrivateIds.has(id)).map(id => {
@@ -948,103 +696,6 @@ app.post('/api/admin/private-chats/delete', async (req, res) => {
   }
 });
 
-app.post('/api/admin/users', async (req, res) => {
-  try {
-    if (String(req.body?.password || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Unauthorized' });
-    const profiles = await getUserProfilesCollection();
-    if (!profiles) return res.status(503).json({ ok:false, users:[], error:'Database unavailable' });
-    const docs = await profiles.find(
-      {},
-      { projection:{ _id:1, name:1, kind:1, password:1, createdAt:1, updatedAt:1, lastSeenAt:1, createdBy:1 } }
-    ).sort({ createdAt:-1, name:1 }).limit(10000).toArray();
-
-    const passwordByUser = new Map();
-    for (const u of docs) {
-      if (u.password) passwordByUser.set(String(u._id), String(u.password));
-    }
-    // Legacy accounts may still have the old per-conversation password.
-    const privateIds = docs.map(u => String(u._id));
-    if (privateIds.length) {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) {
-        const rows = await settings.find({ userB:{ $in:privateIds } }, { projection:{ userB:1, password:1 } }).toArray();
-        for (const row of rows) if (!passwordByUser.has(String(row.userB))) passwordByUser.set(String(row.userB), String(row.password || ''));
-      }
-    }
-
-    res.json({ ok:true, users:docs.map(u => {
-      const id=String(u._id), kind=String(u.kind || 'user');
-      return {
-        userId:id,
-        name:String(u.name || 'User').slice(0,60),
-        kind,
-        createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
-        updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
-        lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || ''),
-        online:isUserOnline(id),
-        shareablePassword:passwordByUser.get(id) || ''
-      };
-    }) });
-  } catch (error) {
-    console.error('Admin users load failed:', error.message);
-    res.status(500).json({ ok:false, users:[], error:'Could not load users' });
-  }
-});
-
-app.post('/api/admin/users/delete', async (req, res) => {
-  try {
-    const password = String(req.body?.password || '');
-    const userId = String(req.body?.userId || '').trim();
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ ok:false, error:'Wrong admin password' });
-    if (!userId || userId.length > 200) return res.status(400).json({ ok:false, error:'Invalid user' });
-    const db = await getDb();
-    const profiles = await getUserProfilesCollection();
-    if (!db || !profiles) return res.status(503).json({ ok:false, error:'Database unavailable' });
-    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1, kind:1 } });
-    if (!profile) return res.status(404).json({ ok:false, error:'User not found' });
-    const collection = db.collection(COLLECTION_NAME);
-
-    // Keep deleted messages available to Admin in the Main Recycle Bin.
-    const userMessages = await collection.find({ userId, deletedAt:{ $exists:false } }).toArray();
-    if (userMessages.length) await movePrivateMessagesToRecycleBin(userMessages, `private:${userId}:account`, 'user-delete');
-    await collection.updateMany({ userId, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:'admin', deleteReason:'user-delete' } });
-
-    // Remove all private-chat messages where this user is either participant.
-    const privateRegex = new RegExp(`^private:(?:${escapeRegExp(userId)}):|^private:[^:]+:${escapeRegExp(userId)}$`);
-    const privateRows = await collection.find({ conversationId:{ $regex:privateRegex }, deletedAt:{ $exists:false } }).toArray();
-    if (privateRows.length) await movePrivateMessagesToRecycleBin(privateRows, `private:${userId}:account`, 'user-delete');
-    await collection.updateMany({ conversationId:{ $regex:privateRegex }, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:'admin', deleteReason:'user-delete' } });
-
-    try {
-      const settings = await getPrivateChatSettingsCollection();
-      if (settings) await settings.deleteMany({ $or:[{ userA:userId }, { userB:userId }] });
-      for (const key of Array.from(fallbackPrivateChatSettings.keys())) {
-        const parts=String(key).split(':');
-        if (parts.length===3 && (parts[1]===userId || parts[2]===userId)) fallbackPrivateChatSettings.delete(key);
-      }
-    } catch (_) {}
-
-    try { await db.collection(MEDIA_UPLOADS_COLLECTION_NAME).deleteMany({ $or:[{ userId }, { peerId:userId }, { conversationId:{ $regex:privateRegex } }] }); } catch (_) {}
-    try { await db.collection(PUSH_SUBSCRIPTIONS_COLLECTION_NAME).deleteMany({ userId }); } catch (_) {}
-    try { await db.collection('notification_access').deleteMany({ userId }); } catch (_) {}
-    try { await db.collection(EVENTS_COLLECTION_NAME).deleteMany({ $or:[{'payload.userId':userId},{'payload.privateUserId':userId}] }); } catch (_) {}
-
-    for (const target of io.sockets.sockets.values()) {
-      if (String(target.userId || '') === userId) {
-        try { target.emit('account-deleted', { userId, reason:'Deleted by administrator' }); } catch (_) {}
-        try { target.disconnect(true); } catch (_) {}
-      } else {
-        try { target.emit('private-user-deleted', { userId, name:String(profile.name || 'User') }); } catch (_) {}
-      }
-    }
-    await profiles.deleteOne({ _id:userId });
-    res.json({ ok:true, userId, name:String(profile.name || 'User') });
-  } catch (error) {
-    console.error('Admin user delete failed:', error.stack || error.message);
-    res.status(500).json({ ok:false, error:'User delete failed' });
-  }
-});
-
 app.post('/api/admin/private-users/delete', async (req, res) => {
   try {
     const suppliedPassword = String(req.body?.password || '');
@@ -1063,7 +714,7 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
     const collection = db.collection(COLLECTION_NAME);
 
     const profile = await profiles.findOne(
-      { _id:userId },
+      { _id:userId, kind:'private_user' },
       { projection:{ _id:1, name:1, kind:1 } }
     );
     if (!profile) return res.status(404).json({ ok:false, error:'Active private user not found' });
@@ -1234,8 +885,8 @@ app.get('/api/private-messages', async (req, res) => {
     const conversationId = privateConversationId(me, peer);
     const password = String(req.query?.password || '');
     if (!me || !peer || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
-    const peerPassword = await getPrivateUserPassword(peer);
-    if (!peerPassword || peerPassword !== password) return res.status(403).json({ ok:false, messages:[], error:'Personal user password required.' });
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, messages:[], error:'Private chat password required.' });
     const messages = await loadPrivateMessages(conversationId, req.query?.after || '');
     res.json({ ok:true, messages });
   } catch (error) {
@@ -1255,8 +906,8 @@ app.post('/api/private-messages', async (req, res) => {
     if (!sender || !peer || sender === peer || !msg.id || !String(msg.message || '').trim() || !conversationId) {
       return res.status(400).json({ ok:false, error:'Invalid private message' });
     }
-    const peerPassword = await getPrivateUserPassword(peer);
-    if (!peerPassword || peerPassword !== password) return res.status(403).json({ ok:false, error:'Personal user password required.' });
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting || String(setting.password || '') !== password) return res.status(403).json({ ok:false, error:'Private chat password required.' });
     msg.conversationId = conversationId;
     msg.message = String(msg.message).trim().slice(0, 5000);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -2887,11 +2538,6 @@ async function broadcastSaved(event, msg) {
 
 const lastSeenByUser = new Map(); // key: `${userId}:${groupId}`
 
-function isPresenceFresh(socket) {
-  const last = Number(socket?.lastPresencePingAt || 0);
-  return !!last && (Date.now() - last) <= PRESENCE_STALE_MS;
-}
-
 function getActiveGroupUsers(groupId) {
   const gid = normalizeGroupId(groupId);
   const users = new Map();
@@ -2900,9 +2546,7 @@ function getActiveGroupUsers(groupId) {
   for (const sid of room) {
     const member = io.sockets.sockets.get(sid);
     const uid = String(member?.userId || '').trim();
-    // A suspended/background tab that has stopped heartbeating is offline even
-    // if Socket.IO has not physically disconnected it yet.
-    if (!uid || !isPresenceFresh(member)) continue;
+    if (!uid) continue;
     if (!users.has(uid)) users.set(uid, new Set());
     users.get(uid).add(sid);
   }
@@ -3043,33 +2687,10 @@ setInterval(() => {
     // UI cannot keep showing this user as online while the app is suspended.
     try { sock.leave(`group:${gid}`); } catch (_) {}
     sock.groupId = '';
-    if (uid && gid) {
-      updateLastSeenForUser(uid, gid).catch(() => {});
-      // Notify private-chat viewers too; a suspended tab may keep its transport
-      // open even though it is no longer actively present.
-      broadcastUserPresence(uid);
-    }
+    if (uid && gid) updateLastSeenForUser(uid, gid).catch(() => {});
     setImmediate(() => emitGroupPresence(gid));
   }
 }, PRESENCE_HEARTBEAT_MS);
-
-function isUserOnline(userId) {
-  const uid = String(userId || '').trim();
-  if (!uid) return false;
-  for (const sock of io.sockets.sockets.values()) {
-    if (String(sock.userId || '').trim() === uid && isPresenceFresh(sock)) return true;
-  }
-  return false;
-}
-
-function broadcastUserPresence(userId) {
-  const uid = String(userId || '').trim();
-  if (!uid) return;
-  const payload = { userId: uid, online: isUserOnline(uid) };
-  for (const viewer of io.sockets.sockets.values()) {
-    try { viewer.emit('user-presence', payload); } catch (_) {}
-  }
-}
 
 io.on('connection', async (socket) => {
   console.log('User connected:', socket.id);
@@ -3106,39 +2727,29 @@ io.on('connection', async (socket) => {
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
-    const requestedPassword = String(data?.password || '');
-    let registrationOk = true;
     if (socket.userId) {
       try {
         const profiles = await getUserProfilesCollection();
         if (profiles) {
           const existing = await profiles.findOne({ _id: socket.userId });
-          // A browser may only register an identity that is already persisted
-          // by /api/account/register or by the Admin user-creation flow.
-          // Never create arbitrary users from a client-supplied User ID.
-          if (!existing) {
-            registrationOk = false;
-            socket.userId = '';
-          } else {
-            if (existing?.name) {
-              socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
-            }
+          if (existing?.name) {
+            socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
+          } else if (requestedName) {
+            await profiles.updateOne(
+              { _id: socket.userId },
+              { $set: { name: requestedName, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { upsert: true }
+            );
+            socket.emit('user-profile', { userId: socket.userId, name: requestedName });
           }
-        } else {
-          registrationOk = false;
         }
       } catch (error) {
-        registrationOk = false;
-        console.error('Failed to validate user profile:', error.message);
+        console.error('Failed to sync user profile:', error.message);
       }
     }
     if (socket.groupId) emitGroupPresence(socket.groupId);
     if (previousUserId !== socket.userId && socket.groupId) emitGroupPresence(socket.groupId);
-    if (registrationOk && socket.userId) {
-      if (previousUserId && previousUserId !== socket.userId) broadcastUserPresence(previousUserId);
-      broadcastUserPresence(socket.userId);
-    }
-    if (typeof ack === 'function') ack({ ok: registrationOk, userId: socket.userId, error: registrationOk ? '' : 'User account not found.' });
+    if (typeof ack === 'function') ack({ ok: true, userId: socket.userId });
   });
 
   socket.on('register-admin', (data, ack) => {
@@ -3169,39 +2780,27 @@ io.on('connection', async (socket) => {
   socket.on('join-private', async (data, ack) => {
     const me = String(socket.userId || '').trim();
     const peer = String(data?.peerId || '').trim();
+    const suppliedPassword = String(data?.password || '');
     const conversationId = privateConversationId(me, peer);
-    if (!me || !peer || me === peer || !conversationId) {
-      return typeof ack === 'function' && ack({ ok:false, error:'Personal chat authorization failed.' });
+    if (!me || !peer || !conversationId) {
+      return typeof ack === 'function' && ack({ ok:false, error:'Private chat authorization failed.' });
     }
-
+    const setting = await getPrivateChatSetting(conversationId);
+    if (!setting) return typeof ack === 'function' && ack({ ok:false, needsSetup:true, error:'Private chat password is not set.' });
+    if (String(setting.password || '') !== suppliedPassword) return typeof ack === 'function' && ack({ ok:false, error:'Wrong private chat password.' });
+    if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
+      socket.leave(`private:${socket.privateConversationId}`);
+    }
+    socket.privateConversationId = conversationId;
+    socket.privateAuthorizedPrivateChat = conversationId;
+    socket.join(`private:${conversationId}`);
     try {
-      const profiles = await getUserProfilesCollection();
-      if (profiles) {
-        const peerProfile = await profiles.findOne({ _id: peer }, { projection:{ _id:1, name:1 } });
-        if (!peerProfile) return typeof ack === 'function' && ack({ ok:false, error:'User not found.' });
-      }
-
-      // The selected user's own password authorizes the personal chat. The
-      // password belongs to the recipient account, not to this conversation.
-      const password = String(data?.password || '');
-      const peerPassword = await getPrivateUserPassword(peer);
-      if (!password || !peerPassword || peerPassword !== password) {
-        return typeof ack === 'function' && ack({ ok:false, error:'Wrong user password.' });
-      }
-
-      if (socket.privateConversationId && socket.privateConversationId !== conversationId) {
-        socket.leave(`private:${socket.privateConversationId}`);
-      }
-      socket.privateConversationId = conversationId;
-      socket.privateAuthorizedPrivateChat = conversationId;
-      socket.join(`private:${conversationId}`);
-
       const history = await loadPrivateMessages(conversationId);
       socket.emit('private-history', history);
-      if (typeof ack === 'function') ack({ ok:true, conversationId, peerOnline:isUserOnline(peer) });
+      if (typeof ack === 'function') ack({ ok:true, conversationId });
     } catch (error) {
       socket.emit('private-history', []);
-      if (typeof ack === 'function') ack({ ok:false, error:'Could not open personal chat.' });
+      if (typeof ack === 'function') ack({ ok:false });
     }
   });
 
@@ -3489,41 +3088,25 @@ io.on('connection', async (socket) => {
   socket.on('delete-message', async (data, ack) => {
     if (!data || !data.id) return;
     const groupId = normalizeGroupId(socket.groupId);
-    const id = String(data.id).trim();
-    const uid = String(socket.userId || '').trim();
-    if (!groupId || !uid) {
-      if (typeof ack === 'function') ack({ ok:false, error:'You must be signed in to delete a message.' });
-      return;
-    }
+    const deleteEvent = { id: data.id, groupId };
     try {
       const collection = await getCollection();
-      let existing = null;
       if (collection) {
         const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
-        existing = await collection.findOne({ $and: [groupFilter, { id }, { deletedAt: { $exists:false } }] });
-        if (!existing) {
-          if (typeof ack === 'function') ack({ ok:false, error:'Message not found or already deleted.' });
-          return;
+        const existing = await collection.findOne({ $and: [groupFilter, { id: String(data.id) }, { deletedAt: { $exists:false } }] });
+        if (existing) {
+          await moveMessagesToRecycleBin([existing], groupId, 'message-delete');
+          await collection.updateOne({ _id: existing._id }, { $set: { deletedAt: new Date(), deletedBy: String(socket.userId || ''), deleteReason: 'message-delete' } });
         }
-        if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
-          if (typeof ack === 'function') ack({ ok:false, error:'Wrong delete password.' });
-          return;
-        }
-        await moveMessagesToRecycleBin([existing], groupId, 'message-delete');
-        await collection.updateOne(
-          { _id: existing._id },
-          { $set: { deletedAt: new Date(), deletedBy: uid, deleteReason: 'message-delete' } }
-        );
       }
-      const deleteEvent = { id, groupId, deletedBy: uid };
-      // Persist first, then broadcast to EVERY currently connected member in
-      // this exact group. Other groups never receive this event.
+      // Persist first, then broadcast. This prevents another Vercel instance's
+      // reconciliation request from briefly re-adding a just-deleted message.
       io.to(`group:${groupId}`).emit('delete-message', deleteEvent);
       publishRealtimeEvent('delete-message', deleteEvent);
       if (typeof ack === 'function') ack({ ok: true });
     } catch (error) {
       console.error('Failed to delete message:', error.message);
-      if (typeof ack === 'function') ack({ ok: false, error:'Delete could not be synced.' });
+      if (typeof ack === 'function') ack({ ok: false });
     }
   });
 
@@ -3535,76 +3118,49 @@ io.on('connection', async (socket) => {
       if (typeof ack === 'function') ack({ ok: true, count: 0 });
       return;
     }
+
     const groupId = normalizeGroupId(socket.groupId);
-    const uid = String(socket.userId || '').trim();
-    if (!groupId || !uid) {
-      if (typeof ack === 'function') ack({ ok:false, error:'You must be signed in to delete messages.' });
-      return;
-    }
     try {
       const collection = await getCollection();
-      let deletableIds = ids;
       if (collection) {
         const groupFilter = { $or: [{ groupId }, ...(groupId === DEFAULT_GROUP_ID ? [{ groupId: { $exists: false } }] : [])] };
+        // Only archive messages that are actually being deleted now.
+        // Already-deleted records must never be copied into Recycle Bin again.
         const existing = await collection.find(
           { $and: [groupFilter, { id: { $in: ids } }, { deletedAt: { $exists:false } }] }
         ).toArray();
-        // Anyone in the current group may delete any selected messages, but only
-        // after supplying the shared delete password.
-        if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
-          if (typeof ack === 'function') ack({ ok:false, count:0, error:'Wrong delete password.' });
-          return;
-        }
-        const deletableMessages = existing;
-        deletableIds = deletableMessages.map(m => String(m.id));
-        if (deletableMessages.length) {
-          await moveMessagesToRecycleBin(deletableMessages, groupId, 'message-delete');
-          await collection.updateMany(
-            { $and: [groupFilter, { id: { $in: deletableIds } }, { deletedAt: { $exists:false } }] },
-            { $set: { deletedAt: new Date(), deletedBy: uid, deleteReason: 'message-delete' } }
-          );
+
+        if (existing.length) {
+          await moveMessagesToRecycleBin(existing, groupId, 'message-delete');
+          await collection.updateMany({ $and: [groupFilter, { id: { $in: ids } }, { deletedAt: { $exists:false } }] }, { $set: { deletedAt: new Date(), deletedBy: String(socket.userId || ''), deleteReason: 'message-delete' } });
         }
       }
-      if (!deletableIds.length) {
-        if (typeof ack === 'function') ack({ ok:false, count:0, error:'No active messages found.' });
-        return;
-      }
-      const event = { ids: deletableIds, groupId, deletedBy: uid };
+
+      const event = { ids, groupId };
       io.to(`group:${groupId}`).emit('delete-messages', event);
       publishRealtimeEvent('delete-messages', event);
-      if (typeof ack === 'function') ack({ ok: true, count: deletableIds.length });
+      if (typeof ack === 'function') ack({ ok: true, count: ids.length });
     } catch (error) {
       console.error('Failed to delete multiple messages:', error.message);
-      if (typeof ack === 'function') ack({ ok: false, error:'Messages could not be synced.' });
+      if (typeof ack === 'function') ack({ ok: false });
     }
   });
 
   socket.on('private-delete-message', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const id = String(data?.id || '').trim();
-    const uid = String(socket.userId || '').trim();
-    if (!conversationId || !id || !uid) {
-      return typeof ack === 'function' && ack({ok:false, error:'Personal chat authorization required.'});
+    if (!conversationId || !id || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
     }
     try {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
-      const parts = conversationId.split(':');
-      const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
-      if (!participants.has(uid)) {
-        return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
-      }
-      if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
-        return typeof ack === 'function' && ack({ok:false, error:'Wrong delete password.'});
-      }
       const existing = await collection.findOne({ id, conversationId, deletedAt:{ $exists:false } });
-      if (!existing) return typeof ack === 'function' && ack({ok:false, error:'Message not found or already deleted.'});
-      await movePrivateMessagesToRecycleBin([existing], conversationId, 'private-message-delete');
-      await collection.updateOne(
-        { _id:existing._id },
-        { $set:{ deletedAt:new Date(), deletedBy:uid, deleteReason:'private-message-delete', recycleStage:'main' } }
-      );
-      io.to(`private:${conversationId}`).emit('private-message-deleted', { id, conversationId, deletedBy:uid });
+      if (existing) {
+        await movePrivateMessagesToRecycleBin([existing], conversationId, 'private-message-delete');
+        await collection.updateOne({ _id:existing._id }, { $set:{ deletedAt:new Date(), deletedBy:String(socket.userId || ''), deleteReason:'private-message-delete', recycleStage:'main' } });
+      }
+      io.to(`private:${conversationId}`).emit('private-message-deleted', { id, conversationId });
       if (typeof ack === 'function') ack({ok:true});
     } catch (error) {
       console.error('Private message delete failed:', error.message);
@@ -3615,36 +3171,19 @@ io.on('connection', async (socket) => {
   socket.on('private-delete-messages', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
     const ids = Array.isArray(data?.ids) ? [...new Set(data.ids.map(x=>String(x||'').trim()).filter(Boolean))].slice(0,500) : [];
-    const uid = String(socket.userId || '').trim();
-    if (!conversationId || !ids.length || !uid) {
-      return typeof ack === 'function' && ack({ok:false, error:'Personal chat authorization required.'});
+    if (!conversationId || !ids.length || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
     }
     try {
       const collection = await getCollection();
       if (!collection) return typeof ack === 'function' && ack({ok:false});
-      const parts = conversationId.split(':');
-      const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
-      if (!participants.has(uid)) {
-        return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
-      }
       const existing = await collection.find({ id:{ $in:ids }, conversationId, deletedAt:{ $exists:false } }).toArray();
-      if (String(data.password || '') !== MESSAGE_DELETE_PASSWORD) {
-        return typeof ack === 'function' && ack({ok:false,count:0,error:'Wrong delete password.'});
+      if (existing.length) {
+        await movePrivateMessagesToRecycleBin(existing, conversationId, 'private-message-delete');
+        await collection.updateMany({ id:{ $in:existing.map(x=>x.id) }, conversationId, deletedAt:{ $exists:false } }, { $set:{ deletedAt:new Date(), deletedBy:String(socket.userId || ''), deleteReason:'private-message-delete', recycleStage:'main' } });
       }
-      const deletableMessages = existing;
-      const deletableIds = deletableMessages.map(x => String(x.id));
-      if (deletableMessages.length) {
-        await movePrivateMessagesToRecycleBin(deletableMessages, conversationId, 'private-message-delete');
-        await collection.updateMany(
-          { id:{ $in:deletableIds }, conversationId, deletedAt:{ $exists:false } },
-          { $set:{ deletedAt:new Date(), deletedBy:uid, deleteReason:'private-message-delete', recycleStage:'main' } }
-        );
-      }
-      if (!deletableIds.length) {
-        return typeof ack === 'function' && ack({ok:false,count:0,error:'No active messages found.'});
-      }
-      io.to(`private:${conversationId}`).emit('private-messages-deleted', { ids:deletableIds, conversationId, deletedBy:uid });
-      if (typeof ack === 'function') ack({ok:true,count:deletableIds.length});
+      io.to(`private:${conversationId}`).emit('private-messages-deleted', { ids, conversationId });
+      if (typeof ack === 'function') ack({ok:true,count:existing.length});
     } catch (error) {
       console.error('Private messages delete failed:', error.message);
       if (typeof ack === 'function') ack({ok:false});
@@ -3653,14 +3192,8 @@ io.on('connection', async (socket) => {
 
   socket.on('private-clear-chat', async (data, ack) => {
     const conversationId = String(data?.conversationId || socket.privateAuthorizedPrivateChat || '').trim();
-    const uid = String(socket.userId || '').trim();
-    const parts = conversationId.split(':');
-    const participants = new Set(parts[0] === 'private' ? parts.slice(1) : parts);
-    if (!conversationId || !uid || !participants.has(uid)) {
-      return typeof ack === 'function' && ack({ok:false, error:'You are not a participant in this chat.'});
-    }
-    if (String(data?.password || '') !== MESSAGE_DELETE_PASSWORD) {
-      return typeof ack === 'function' && ack({ok:false, error:'Wrong delete password.'});
+    if (!conversationId || socket.privateAuthorizedPrivateChat !== conversationId) {
+      return typeof ack === 'function' && ack({ok:false, error:'Private chat password required.'});
     }
     try {
       const collection = await getCollection();
@@ -3755,11 +3288,7 @@ io.on('connection', async (socket) => {
     publishRealtimeEvent('message-delivered', deliveredEvent);
   });
 
-  socket.on('clear-chat', async (data, ack) => {
-    if (String(data?.password || '') !== MESSAGE_DELETE_PASSWORD) {
-      if (typeof ack === 'function') ack({ok:false,error:'Wrong delete password.'});
-      return;
-    }
+  socket.on('clear-chat', async () => {
     try {
       const collection = await getCollection();
       if (collection) {
@@ -3775,7 +3304,6 @@ io.on('connection', async (socket) => {
       const clearEvent = { groupId: normalizeGroupId(socket.groupId) };
       io.to(`group:${clearEvent.groupId}`).emit('clear-chat', clearEvent);
       publishRealtimeEvent('clear-chat', clearEvent);
-      if (typeof ack === 'function') ack({ok:true});
     } catch (error) {
       console.error('Failed to clear chat:', error.message);
     }
@@ -3914,12 +3442,10 @@ io.on('connection', async (socket) => {
       setImmediate(async () => {
         await updateLastSeenForUser(disconnectedUserId, disconnectedGroupId);
         await emitGroupPresence(disconnectedGroupId);
-        broadcastUserPresence(disconnectedUserId);
       });
     }
     removeSocketFromCalls(socket);
     for (const upload of uploads.values()) { try { upload.stream.destroy(); } catch (_) {} }
-    if (!disconnectedGroupId && disconnectedUserId) setImmediate(() => broadcastUserPresence(disconnectedUserId));
     uploads.clear();
     // Socket.IO removes the socket from its rooms before/around disconnect; defer
     // the calculation one tick so the departed user is definitely excluded.
