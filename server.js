@@ -373,9 +373,9 @@ app.post('/api/private-chat/join', async (req, res) => {
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
 
     let profile = targetUserId
-      ? await profiles.findOne({ _id:targetUserId, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, password:1 } })
+      ? await profiles.findOne({ _id:targetUserId }, { projection:{ _id:1, name:1, kind:1, password:1 } })
       : null;
-    if (!profile && legacyName) profile = await profiles.findOne({ name:legacyName, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, password:1 } });
+    if (!profile && legacyName) profile = await profiles.findOne({ name:legacyName }, { projection:{ _id:1, name:1, kind:1, password:1 } });
     if (!profile) return res.status(404).json({ ok:false, error:'User ID not found.' });
 
     // Each private user owns ONE password. That password protects every
@@ -422,7 +422,7 @@ app.post('/api/admin/private-user/create', async (req, res) => {
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
       try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', password:chatPassword, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'user', password:chatPassword, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
         userId = candidate;
         break;
       } catch (e) {
@@ -455,7 +455,7 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
       try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', password:password, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'user', password:password, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
         userId = candidate;
         break;
       } catch (e) {
@@ -476,7 +476,7 @@ async function getPrivateUserPassword(userId) {
   if (!uid) return '';
   const profiles = await getUserProfilesCollection();
   if (profiles) {
-    const profile = await profiles.findOne({ _id:uid, kind:'private_user' }, { projection:{ password:1 } });
+    const profile = await profiles.findOne({ _id:uid }, { projection:{ password:1 } });
     if (profile?.password) return String(profile.password);
     // Legacy migration: older builds stored the user's password as userB in a
     // private-chat setting. Use it until the account password is changed.
@@ -502,9 +502,9 @@ app.post('/api/admin/private-user/change-password', async (req, res) => {
     if (newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'Password must be 4-100 characters.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId, kind:'private_user' }, { projection:{ _id:1, name:1 } });
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ _id:1, name:1 } });
     if (!profile) return res.status(404).json({ ok:false, error:'Private user not found.' });
-    await profiles.updateOne({ _id:userId, kind:'private_user' }, { $set:{ password:newPassword, updatedAt:new Date() } });
+    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
     try {
       const settings = await getPrivateChatSettingsCollection();
       if (settings) await settings.deleteMany({ userB:userId });
@@ -534,7 +534,7 @@ app.post('/api/private-user/change-password', async (req, res) => {
     if (!userId || newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 4-100 characters.' });
     const profiles = await getUserProfilesCollection();
     if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const profile = await profiles.findOne({ _id:userId, kind:'private_user' }, { projection:{ password:1, name:1 } });
+    const profile = await profiles.findOne({ _id:userId }, { projection:{ password:1, name:1 } });
     if (!profile) return res.status(404).json({ ok:false, error:'User not found.' });
     const old = await getPrivateUserPassword(userId);
     if (!old || old !== currentPassword) return res.status(403).json({ ok:false, error:'Current password is incorrect.' });
@@ -697,7 +697,7 @@ app.post('/api/admin/private-chats', async (req, res) => {
     // Admin's Private Users section is ONLY for active private-user accounts.
     // The creator/normal account is a participant of the conversation but is
     // not itself a private user and must not appear in this list.
-    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids }, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1 } }).toArray() : [];
+    const userDocs = ids.length ? await profiles.find({ _id:{ $in:ids } }, { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1 } }).toArray() : [];
     const userMap = new Map(userDocs.map(u => [String(u._id), u]));
     const activePrivateIds = new Set(userDocs.map(u => String(u._id)));
     const users = ids.filter(id => activePrivateIds.has(id)).map(id => {
@@ -843,10 +843,10 @@ app.post('/api/admin/users', async (req, res) => {
 
     const passwordByUser = new Map();
     for (const u of docs) {
-      if (String(u.kind || '') === 'private_user' && u.password) passwordByUser.set(String(u._id), String(u.password));
+      if (u.password) passwordByUser.set(String(u._id), String(u.password));
     }
     // Legacy accounts may still have the old per-conversation password.
-    const privateIds = docs.filter(u => String(u.kind || '') === 'private_user').map(u => String(u._id));
+    const privateIds = docs.map(u => String(u._id));
     if (privateIds.length) {
       const settings = await getPrivateChatSettingsCollection();
       if (settings) {
@@ -864,7 +864,7 @@ app.post('/api/admin/users', async (req, res) => {
         createdAt:u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt || ''),
         updatedAt:u.updatedAt instanceof Date ? u.updatedAt.toISOString() : String(u.updatedAt || ''),
         lastSeenAt:u.lastSeenAt instanceof Date ? u.lastSeenAt.toISOString() : String(u.lastSeenAt || ''),
-        shareablePassword:kind==='private_user' ? (passwordByUser.get(id) || '') : ''
+        shareablePassword:passwordByUser.get(id) || ''
       };
     }) });
   } catch (error) {
@@ -945,7 +945,7 @@ app.post('/api/admin/private-users/delete', async (req, res) => {
     const collection = db.collection(COLLECTION_NAME);
 
     const profile = await profiles.findOne(
-      { _id:userId, kind:'private_user' },
+      { _id:userId },
       { projection:{ _id:1, name:1, kind:1 } }
     );
     if (!profile) return res.status(404).json({ ok:false, error:'Active private user not found' });
@@ -2958,17 +2958,23 @@ io.on('connection', async (socket) => {
     if (data && data.peerId) socket.callPeerId = String(data.peerId).slice(0,240);
     if (data && data.deviceId) socket.callDeviceId = String(data.deviceId).slice(0,160);
     const requestedName = String(data?.name || '').trim().slice(0, 40);
+    const requestedPassword = String(data?.password || '');
     if (socket.userId) {
       try {
         const profiles = await getUserProfilesCollection();
         if (profiles) {
           const existing = await profiles.findOne({ _id: socket.userId });
           if (existing?.name) {
+            if (!existing.password && requestedPassword.length >= 4) {
+              await profiles.updateOne({ _id: socket.userId }, { $set: { password: requestedPassword, kind: existing.kind || 'user', updatedAt: new Date() } });
+            }
             socket.emit('user-profile', { userId: socket.userId, name: String(existing.name).slice(0,40) });
           } else if (requestedName) {
+            const set = { name: requestedName, kind: 'user', updatedAt: new Date() };
+            if (requestedPassword.length >= 4) set.password = requestedPassword;
             await profiles.updateOne(
               { _id: socket.userId },
-              { $set: { name: requestedName, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+              { $set: set, $setOnInsert: { createdAt: new Date(), kind: 'user' } },
               { upsert: true }
             );
             socket.emit('user-profile', { userId: socket.userId, name: requestedName });

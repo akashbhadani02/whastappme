@@ -252,7 +252,7 @@ async function saveAdminChangeUserPassword(){
   adminChangeUserPasswordSave.disabled=true;
   if(adminChangeUserPasswordError) adminChangeUserPasswordError.textContent='';
   try{
-    const r=await fetch('/api/admin/private-user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:adminChangePasswordUserId,newPassword})});
+    const r=await fetch('/api/admin/user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:adminChangePasswordUserId,newPassword})});
     const d=await r.json();
     if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password.');
     closeAdminChangeUserPassword();
@@ -636,8 +636,8 @@ passwordSubmit.addEventListener('click', async () => {
       valid = !!d.ok;
       if (!valid && d.needsSetup && pendingPasswordType === 'private-verify') {
         pendingPasswordType = 'private-setup';
-        passwordTitle.textContent = 'Set private chat password';
-        passwordText.textContent = 'Set a password for this private chat. Share it with the other person.';
+        passwordTitle.textContent = 'Set personal chat password';
+        passwordText.textContent = 'Set a password for this personal chat. Share it with the other person.';
         passwordInput.value = '';
         passwordError.textContent = '';
         setTimeout(() => passwordInput.focus(), 40);
@@ -916,7 +916,7 @@ function renderMessage(msg, direction) {
   const del=document.createElement('button'); del.textContent='Delete for everyone';
   del.addEventListener('click', () => {
     menu.classList.remove('open');
-    requestPassword('Delete for everyone', activeChatType === 'private' ? 'Enter this private chat password. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id), activeChatType === 'private' ? 'private-action' : 'admin');
+    requestPassword('Delete for everyone', activeChatType === 'private' ? 'Enter this personal chat password. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to delete this message for everyone in this group.', () => deleteMessage(msg.id), activeChatType === 'private' ? 'private-action' : 'admin');
   });
   menu.appendChild(del);
   // Render the message menu at document/body level so it can never be clipped by
@@ -1045,7 +1045,7 @@ function clearChat(broadcast=true) {
   }
 }
 
-clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', activeChatType === 'private' ? 'Enter this private chat password to clear the chat. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to clear this chat.', () => {
+clearChatBtn.addEventListener('click', () => requestPassword('Clear chat', activeChatType === 'private' ? 'Enter this personal chat password to clear the chat. Deleted photos, videos and audio will be kept in the Admin Main Recycle Bin.' : 'Enter password to clear this chat.', () => {
   if (activeChatType === 'private' && privateChatPasswordForCurrent()) clearChat(true); else clearChat(true);
 }, activeChatType === 'private' ? 'private-action' : 'admin'));
 
@@ -1521,7 +1521,7 @@ socket.on('private-chat-deleted', data => {
   if (typeof loadPrivateUsers === 'function') loadPrivateUsers().catch(() => {});
 });
 
-socket.on('private-user-deleted', data => {
+socket.on('user-deleted', data => {
   const deletedId = String(data?.userId || '');
   if (!deletedId) return;
 
@@ -1547,7 +1547,7 @@ socket.on('private-user-deleted', data => {
     }
   }
   renderGroupList();
-  showToast(`${String(data?.name || 'Private user')} was deleted`);
+  showToast(`${String(data?.name || 'User')} was deleted`);
 });
 
 socket.on('private-message', msg => {
@@ -1879,7 +1879,7 @@ function renderPrivateUserList(filter='') {
   list.forEach(user => {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'private-user-row';
+    row.className = 'user-row';
     row.innerHTML = `<div class="avatar group-avatar private-avatar"></div><div><strong></strong></div>`;
     row.querySelector('.avatar').textContent = firstCharacter(user.name);
     row.querySelector('strong').textContent = user.name;
@@ -1913,7 +1913,7 @@ async function openPrivateChat(user, providedPassword='') {
   window.privateChatPasswords = window.privateChatPasswords || {};
   let password = String(providedPassword || '');
 
-  // Every time a private chat is opened, verify the selected user's own
+  // Every time a personal chat is opened, verify the selected user's own
   // password. It is NOT a shared conversation password.
   if (!password) {
     password = await askPrivatePassword(user, 'verify');
@@ -2222,7 +2222,7 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, name, deviceId });
+  socket.emit('register-user', { userId, name, password: nextPassword, deviceId });
   setupWebPush().catch(() => {});
   pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
@@ -2373,10 +2373,10 @@ window.addEventListener('popstate', () => {
 document.querySelector('#newChatBtn')?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  // The + button is the direct Create New User button.
-  // Do not show the old New Chat choice screen.
+  // The + button opens the general personal-chat user directory.
+  // New accounts are created only during first-time onboarding.
   appMenu?.classList.add('hidden');
-  openPrivateUserCreateModal();
+  openPrivatePicker();
 });
 newChatChoiceClose?.addEventListener('click', () => newChatChoiceModal?.classList.add('hidden'));
 newChatChoiceModal?.addEventListener('click', e => { if (e.target === newChatChoiceModal) newChatChoiceModal.classList.add('hidden'); });
@@ -2451,7 +2451,7 @@ async function createPrivateUserAndOpen() {
   privateUserCreateError.textContent = '';
   try {
     const adminMode = !!adminUnlocked;
-    const endpoint = adminMode ? '/api/admin/private-user/create' : '/api/private-chat/create-user';
+    const endpoint = adminMode ? '/api/admin/user/create' : '/api/private-chat/create-user';
     const body = adminMode
       ? { password:PASSWORD, creatorId:userId, name:newName, chatPassword:password }
       : { creatorId:userId, name:newName, password };
@@ -2471,10 +2471,10 @@ async function createPrivateUserAndOpen() {
       // shown immediately so they can be shared with the other person.
       alert(`New user created successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nShare these credentials with the person who should use this account.`);
       await openPrivateChat(created, password);
-      showToast(`Private chat user created: ${created.name}`);
+      showToast(`User created: ${created.name}`);
     }
   } catch (e) {
-    privateUserCreateError.textContent = e?.message || 'Could not create private user';
+    privateUserCreateError.textContent = e?.message || 'Could not create user';
   } finally { privateUserCreateSave.disabled = false; }
 }
 privateUserCreateSave?.addEventListener('click', createPrivateUserAndOpen);
@@ -2629,7 +2629,7 @@ adminAllUsersDeleteSelected?.addEventListener('click', async () => {
   if (!adminUnlocked) return requestAdminThen(() => adminAllUsersDeleteSelected?.click());
   const selected = [...(adminAllUsersList?.querySelectorAll('.admin-user-select:checked') || [])].map(cb => String(cb.dataset.userId || '')).filter(Boolean);
   if (!selected.length) { showToast('Select at least one user'); return; }
-  if (!confirm(`Delete ${selected.length} selected user(s)? Their account, private-chat password/settings and private data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
+  if (!confirm(`Delete ${selected.length} selected user(s)? Their account and personal chat data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
   adminAllUsersDeleteSelected.disabled = true;
   try {
     const results = await Promise.all(selected.map(userId => fetch('/api/admin/users/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD,userId})}).then(async r => ({ok:r.ok, data:await r.json()}))));
@@ -2647,7 +2647,7 @@ adminPrivateChatsRefresh?.addEventListener('click', () => loadAdminPrivateChats(
 
 async function adminDeleteAllUsers() {
   if (!adminUnlocked) return requestAdminThen(adminDeleteAllUsers);
-  const ok = confirm('Delete ALL user accounts permanently? This will delete every account and private chat data. Main Recycle Bin data will NOT be deleted. This cannot be undone.');
+  const ok = confirm('Delete ALL user accounts permanently? This will delete every account and personal chat data. Main Recycle Bin data will NOT be deleted. This cannot be undone.');
   if (!ok) return;
   try {
     const r = await fetch('/api/admin/delete-all-users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD}) });
@@ -2796,16 +2796,16 @@ async function loadAdminAllUsers(){
     users.forEach(user=>{
       const row=document.createElement('div'); row.className='admin-private-chat-row admin-user-row';
       const created=user.createdAt?new Date(user.createdAt).toLocaleString():'';
-      const kind=user.kind==='private_user'?'Private user':'User';
+      const kind='User';
       row.innerHTML='<label class="admin-user-check"><input type="checkbox" class="admin-user-select"><span class="admin-private-chat-info"><span class="admin-private-chat-users"></span><span class="admin-private-chat-meta"></span></span></label><div class="admin-user-row-actions"><button type="button" class="mini-btn admin-password-btn single-user-password">🔑 Change Password</button><button type="button" class="mini-btn admin-delete-btn single-user-delete">🗑 Delete User</button></div>';
       const cb=row.querySelector('.admin-user-select'); cb.dataset.userId=String(user.userId||'');
       row.querySelector('.admin-private-chat-users').textContent=String(user.name||'User');
-      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''}${user.kind==='private_user' ? ' • Login ID: '+String(user.userId||'-')+' • Password: '+String(user.shareablePassword||'-') : ''}`;
+      row.querySelector('.admin-private-chat-meta').textContent=`${kind}${created?' • Created '+created:''} • Login ID: ${String(user.userId||'-')} • Password: ${String(user.shareablePassword||'-')}`;
       row.querySelector('.single-user-password')?.addEventListener('click',()=>{
         openAdminChangeUserPassword(user.userId,user.name);
       });
       row.querySelector('.single-user-delete').addEventListener('click', async()=>{
-        if (!confirm(`Delete ${String(user.name||'User')}? Their account, private-chat password/settings and private data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
+        if (!confirm(`Delete ${String(user.name||'User')}? Their account and personal chat data will be deleted. Deleted messages remain in the Main Recycle Bin.`)) return;
         try{
           const rr=await fetch('/api/admin/users/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:PASSWORD,userId:user.userId})});
           const dd=await rr.json(); if(!rr.ok||!dd.ok) throw new Error(dd.error||'Delete failed');
@@ -2838,14 +2838,14 @@ function openAdminPrivateChats() {
   adminGroupsModal?.classList.add('hidden');
   adminPrivateChatsModal?.classList.remove('hidden');
   const title = adminPrivateChatsModal?.querySelector('h3');
-  if (title) title.textContent = 'Private Chats';
+  if (title) title.textContent = 'Personal Chats';
   loadAdminPrivateChats(false);
 }
 
 async function loadAdminPrivateChats(deleteMode = false) {
   if (!adminPrivateChatsList) return;
   adminPrivateChatsError.textContent = '';
-  adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading private users…</div>';
+  adminPrivateChatsList.innerHTML = '<div class="admin-group-row">Loading users…</div>';
   try {
     let privatePasswordSettings = [];
     if (adminPrivatePassword) {
@@ -2854,7 +2854,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
       privatePasswordSettings = Array.isArray(pd.passwords) ? pd.passwords : [];
       adminPrivatePassword.textContent = privatePasswordSettings.length
         ? privatePasswordSettings.map(x => `${x.userAName || x.userA} ↔ ${x.userBName || x.userB}: ${x.password}`).join('  •  ')
-        : 'No private chat passwords set';
+        : 'No personal chat passwords set';
     }
     const r = await fetch('/api/admin/private-chats', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD})
@@ -2864,7 +2864,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
     const users = Array.isArray(d.users) ? d.users : [];
     const chats = Array.isArray(d.chats) ? d.chats : privatePasswordSettings;
     if (!users.length && !chats.length) {
-      adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No private users found.</div>';
+      adminPrivateChatsList.innerHTML = '<div class="admin-group-row">No users found.</div>';
       return;
     }
     adminPrivateChatsList.innerHTML = '';
@@ -2881,7 +2881,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
         row.querySelector('.admin-private-chat-meta').textContent = chat.createdAt ? `Created ${new Date(chat.createdAt).toLocaleString()}` : 'Private chat';
         row.querySelector('.admin-private-chat-password').textContent = `🔑 ${String(chat.password || '')}`;
         row.querySelector('.admin-delete-btn').addEventListener('click', () => {
-          requestPassword('Delete private chat', `Delete this private chat and move its messages/photos/videos/audio to the Main Recycle Bin? The private users will NOT be deleted. Only Admin can permanently delete those recycle-bin items.`, async () => {
+          requestPassword('Delete personal chat', `Delete this personal chat and move its messages/photos/videos/audio to the Main Recycle Bin? The users will NOT be deleted. Only Admin can permanently delete those recycle-bin items.`, async () => {
             try {
               const rr = await fetch('/api/admin/private-chats/delete', {
                 method:'POST', headers:{'Content-Type':'application/json'},
@@ -2900,7 +2900,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
     if (users.length) {
       const heading = document.createElement('div');
       heading.className = 'admin-group-row';
-      heading.textContent = deleteMode ? '🗑 Select a user to delete' : '👤 Private users';
+      heading.textContent = deleteMode ? '🗑 Select a user to delete' : '👤 Users';
       adminPrivateChatsList.appendChild(heading);
     }
     users.forEach(user => {
@@ -2915,7 +2915,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
       row.querySelector('.admin-delete-btn').addEventListener('click', () => {
         requestPassword('Delete user permanently', `Delete ${String(user.name || user.userId || 'this user')} account and move their private photos/videos/audio/messages to the Main Recycle Bin? Enter the Admin password. Only Admin can permanently delete recycle-bin items.`, async () => {
           try {
-            const rr = await fetch('/api/admin/private-users/delete', {
+            const rr = await fetch('/api/admin/users/delete', {
               method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:PASSWORD, userId:user.userId})
             });
             const dd = await rr.json();
@@ -2932,7 +2932,7 @@ async function loadAdminPrivateChats(deleteMode = false) {
     });
   } catch (e) {
     adminPrivateChatsList.innerHTML = '';
-    adminPrivateChatsError.textContent = e.message || 'Could not load private users.';
+    adminPrivateChatsError.textContent = e.message || 'Could not load users.';
   }
 }
 
@@ -3062,7 +3062,7 @@ async function renderAdminRecycleGroupFilters(items) {
 
 
 function recycleItemGroupId(item){ return item?.recycleType === 'private' ? `private:${String(item?.privateConversationId || item?.message?.conversationId || 'unknown')}` : String(item?.deletedGroupId || item?.message?.groupId || 'main'); }
-function recycleItemGroupName(item){ return item?.recycleType === 'private' ? `Private Chat • ${String(item?.privateConversationId || item?.message?.conversationId || 'Private')}` : String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
+function recycleItemGroupName(item){ return item?.recycleType === 'private' ? `Personal Chat • ${String(item?.privateConversationId || item?.message?.conversationId || 'Private')}` : String(item?.deletedGroupName || item?.message?.groupName || recycleItemGroupId(item)); }
 
 function openRecycleChatView(items, groupName, targetId='') {
   const view = document.querySelector('#adminRecycleChatView');
@@ -3327,6 +3327,7 @@ const nameHelp = document.querySelector('#nameHelp');
 const meAvatar = document.querySelector('#profileAvatar');
 const accountModal = document.querySelector('#accountModal');
 const accountNameInput = document.querySelector('#accountNameInput');
+const accountPasswordInput = document.querySelector('#accountPasswordInput');
 const accountContinueBtn = document.querySelector('#accountContinueBtn');
 const accountError = document.querySelector('#accountError');
 const accountGenerated = document.querySelector('#accountGenerated');
@@ -3338,6 +3339,7 @@ function normalizeUserId(value) {
 function openAccountModal(force = false) {
   if (!force && userId && name) return;
   accountNameInput.value = name || '';
+  if (accountPasswordInput) accountPasswordInput.value = '';
   accountError.textContent = '';
   accountGenerated.style.display = 'none';
   accountGenerated.textContent = '';
@@ -3348,6 +3350,8 @@ function openAccountModal(force = false) {
 function finishAccountLogin() {
   const nextName = String(accountNameInput.value || '').trim().slice(0, 60);
   if (!nextName) { accountError.textContent = 'Enter your name'; return; }
+  const nextPassword = String(accountPasswordInput?.value || '');
+  if (nextPassword.length < 4 || nextPassword.length > 100) { accountError.textContent = 'Create a password (4-100 characters)'; accountPasswordInput?.focus(); return; }
   if (!userId) userId = generateUserId();
   userId = normalizeUserId(userId);
   name = nextName;
@@ -3356,7 +3360,7 @@ function finishAccountLogin() {
   syncAndroidNotificationIdentity();
   accountModal.classList.add('hidden');
   updateMyNameUI();
-  socket.emit('register-user', { userId, name, deviceId });
+  socket.emit('register-user', { userId, name, password: nextPassword, deviceId });
   // The Continue button is a user gesture, so it is the safest place to both
   // request permission and register the Web Push subscription.
   enableNotifications().then(granted => {
@@ -3369,6 +3373,7 @@ function finishAccountLogin() {
 }
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
+accountPasswordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
 
 const openChangeUserPasswordBtn = document.querySelector('#openChangeUserPasswordBtn');
@@ -3395,7 +3400,7 @@ changeUserPasswordSave?.addEventListener('click', async()=>{
   if(newPassword.length<4||newPassword.length>100){changeUserPasswordError.textContent='New password must be 4-100 characters';return;}
   changeUserPasswordSave.disabled=true; changeUserPasswordError.textContent='';
   try{
-    const r=await fetch('/api/private-user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,currentPassword,newPassword})});
+    const r=await fetch('/api/user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,currentPassword,newPassword})});
     const d=await r.json().catch(()=>({}));
     if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password');
     closeChangeUserPassword(); showToast('Your user password was changed successfully');
