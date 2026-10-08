@@ -809,3 +809,28 @@ button,input,textarea{touch-action:manipulation}
 .admin-user-check .admin-private-chat-info{min-width:0}
 .admin-user-select{width:18px;height:18px;flex:0 0 auto}
 @media(max-width:600px){.admin-users-toolbar{display:grid;grid-template-columns:1fr 1fr}.admin-users-toolbar .admin-select-all{grid-column:1/-1;margin:0}.admin-users-toolbar button{width:100%;font-size:12px;padding:9px 7px}.admin-user-row{align-items:flex-start}.admin-user-row .single-user-delete{font-size:11px;padding:8px 7px;flex:0 0 auto}.admin-user-check{align-items:flex-start}.admin-user-check .admin-private-chat-info{overflow:hidden}.admin-user-check .admin-private-chat-users,.admin-user-check .admin-private-chat-meta{white-space:normal;overflow-wrap:anywhere}}
+
+/* ===== Responsive scrolling: long lists/modals ===== */
+.modal{overflow-y:auto;overscroll-behavior:contain}
+.modal-card{max-height:calc(100dvh - 32px);overflow:auto;overscroll-behavior:contain}
+.admin-users-card{width:min(94vw,980px);max-height:calc(100dvh - 32px);display:flex;flex-direction:column}
+.admin-users-card .admin-users-toolbar{position:sticky;top:0;z-index:3;background:inherit;padding:4px 0 10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.admin-users-card #adminAllUsersList{max-height:58dvh;overflow-y:auto;overflow-x:hidden;padding:2px 4px 8px 0;scrollbar-width:thin}
+.admin-users-card #adminAllUsersList .admin-group-row{flex:0 0 auto}
+.admin-users-card .admin-user-row{min-height:64px}
+.admin-groups-list{scrollbar-width:thin}
+#adminGroupsModal .admin-groups-list,#adminPrivateChatsModal .admin-groups-list,#adminCallRecordingsModal .admin-groups-list,#adminGroupMediaModal .admin-groups-list,#adminRecycleModal .admin-groups-list{max-height:58dvh;overflow-y:auto;overflow-x:hidden;padding-right:4px}
+#adminMediaViewModal .modal-card{max-height:calc(100dvh - 24px);overflow:auto}
+@media(max-width:760px){
+  .modal{padding:8px;align-items:flex-start}
+  .modal-card{width:min(100%,430px);max-height:calc(100dvh - 16px);overflow:auto}
+  .admin-users-card{width:100%;max-height:calc(100dvh - 16px)}
+  .admin-users-card .admin-users-toolbar{position:sticky;top:0}
+  .admin-users-card #adminAllUsersList{max-height:calc(100dvh - 245px);min-height:120px}
+  #adminGroupsModal .admin-groups-list,#adminPrivateChatsModal .admin-groups-list,#adminCallRecordingsModal .admin-groups-list,#adminGroupMediaModal .admin-groups-list,#adminRecycleModal .admin-groups-list{max-height:calc(100dvh - 230px)}
+}
+@media(max-width:420px){
+  .admin-users-card .admin-users-toolbar{display:grid;grid-template-columns:1fr 1fr}
+  .admin-users-card .admin-users-toolbar .admin-select-all{grid-column:1/-1}
+  .admin-users-card .admin-users-toolbar button{width:100%;min-height:42px}
+}
