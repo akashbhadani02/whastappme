@@ -837,3 +837,6 @@ button,input,textarea{touch-action:manipulation}
 /* Add User form: make credentials fields easy to use on mobile/desktop */
 #privateUserCreateModal .modal-card input{width:100%;box-sizing:border-box;min-height:46px}
 #privateUserCreateModal .primary-btn{width:100%;min-height:46px}
+
+.small-modal{max-width:430px;width:calc(100vw - 32px)}
+.small-modal .modal-help{line-height:1.45;opacity:.8}

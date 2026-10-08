@@ -1457,6 +1457,7 @@ socket.on('private-history', history => {
   history.forEach(msg => receivePrivateMessage(msg, {history:true}));
   if (history.length) requestAnimationFrame(() => scrollToBottom());
 });
+socket.on('private-password-changed', data => { if (activeChatType === 'private' && currentPrivateUser?.userId === String(data?.userId || '')) { showToast('User password changed. Re-enter the new password.'); closeChat(); } });
 socket.on('private-chat-deleted', data => {
   const conversationId = String(data?.conversationId || '');
   if (!conversationId) return;
@@ -1857,10 +1858,10 @@ function askPrivatePassword(user, mode='verify') {
     if (!peerId) return resolve('');
     window.pendingPrivatePeerId = peerId;
     requestPassword(
-      mode === 'setup' ? 'Set personal chat password' : 'Personal chat password',
+      mode === 'setup' ? 'Set your user password' : 'User password required',
       mode === 'setup'
-        ? `Create one password for your chat with ${String(user?.name || 'this person')}. The other person must enter this same password.`
-        : `Enter the same password shared by ${String(user?.name || 'this person')}. The chat will not open without it.`,
+        ? `Set the password for user ${String(user?.name || 'this person')}. Anyone who wants to chat with this user must enter this password.`
+        : `Enter the password set by ${String(user?.name || 'this person')}. The chat will not open without it.`,
       () => resolve(String(window.privatePasswordForOpen || '')),
       mode === 'setup' ? 'private-setup' : 'private-verify'
     );
@@ -1870,52 +1871,24 @@ function askPrivatePassword(user, mode='verify') {
 async function openPrivateChat(user, providedPassword='') {
   if (!user || !user.userId || String(user.userId) === String(userId)) return;
   const peerId = String(user.userId);
-
-  // Every opening must be authorized. The password is kept only in memory for
-  // the current page session; it is never stored in localStorage.
   window.privateChatPasswords = window.privateChatPasswords || {};
-  let password = String(providedPassword || window.privateChatPasswords[peerId] || '');
+  let password = String(providedPassword || '');
 
-  // Existing conversation: require the shared password. New conversation: the
-  // first person sets the password; the second person must enter that same one.
-  try {
-    const access = await fetch(`/api/private-chat/access?userId=${encodeURIComponent(userId)}&peerId=${encodeURIComponent(peerId)}`, {cache:'no-store'});
-    const accessData = await access.json().catch(() => ({}));
-    if (!password) {
-      if (!accessData.exists) password = await askPrivatePassword(user, 'setup');
-      else password = await askPrivatePassword(user, 'verify');
-      if (!password) return;
-    }
-  } catch (_) {
-    showToast('Could not check personal chat password');
-    return;
+  // Every time a private chat is opened, verify the selected user's own
+  // password. It is NOT a shared conversation password.
+  if (!password) {
+    password = await askPrivatePassword(user, 'verify');
+    if (!password) return;
   }
 
   try {
-    const verify = await fetch('/api/private-chat/verify', {
+    const verify = await fetch('/api/private-chat/verify-user', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({userId, peerId, password})
+      body:JSON.stringify({ userId:peerId, password })
     });
     const verifyData = await verify.json().catch(() => ({}));
-    if (!verifyData.ok) {
-      if (verifyData.needsSetup) {
-        password = await askPrivatePassword(user, 'setup');
-        if (!password) return;
-        const setResponse = await fetch('/api/private-chat/set-password', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({userId, peerId, password})
-        });
-        const setData = await setResponse.json().catch(() => ({}));
-        if (!setData.ok) { showToast(setData.error || 'Could not set password'); return; }
-      } else {
-        showToast('Wrong personal chat password');
-        return;
-      }
-    }
-  } catch (_) {
-    showToast('Could not verify personal chat password');
-    return;
-  }
+    if (!verifyData.ok) { showToast('Wrong user password'); return; }
+  } catch (_) { showToast('Could not verify user password'); return; }
 
   window.privateChatPasswords[peerId] = password;
   activeChatType = 'private';
@@ -2394,37 +2367,23 @@ function closePrivateUserJoinModal() {
   if (privateUserJoinError) privateUserJoinError.textContent = '';
 }
 async function joinPrivateUserAndOpen() {
-  const joinName = String(privateUserJoinName?.value || '').trim().slice(0,60);
+  const joinId = normalizeUserId(privateUserJoinName?.value || '');
   const password = String(privateUserJoinPassword?.value || '');
-  if (!joinName) { privateUserJoinError.textContent = 'Enter the private user name'; privateUserJoinName.focus(); return; }
-  if (!password) { privateUserJoinError.textContent = 'Enter the private chat password'; privateUserJoinPassword.focus(); return; }
+  if (!joinId) { privateUserJoinError.textContent = 'Enter the user ID'; privateUserJoinName.focus(); return; }
+  if (!password) { privateUserJoinError.textContent = 'Enter that user\'s password'; privateUserJoinPassword.focus(); return; }
   privateUserJoinSave.disabled = true;
   privateUserJoinError.textContent = '';
   try {
-    const r = await fetch('/api/private-chat/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name:joinName, password }) });
+    const r = await fetch('/api/private-chat/join', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:joinId, password }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok || !d.user || !d.peer) throw new Error(d.error || 'Could not join private chat');
-    // The shared private user is a real private account. Logging in with its
-    // name/password makes the second person use the same conversation identity
-    // that the creator shared with them.
-    userId = normalizeUserId(d.user.userId);
-    name = String(d.user.name || joinName).slice(0,60);
-    localStorage.setItem('wa_user_id', userId);
-    localStorage.setItem('wa_name', name);
-    syncAndroidNotificationIdentity();
+    if (!r.ok || !d.ok || !d.user) throw new Error(d.error || 'Could not verify user');
     closePrivateUserJoinModal();
-    socket.emit('register-user', { userId, name, deviceId });
-    setupWebPush().catch(() => {});
-    socket.emit('presence-login', { userId, deviceId });
-    const peer = { userId:String(d.peer.userId), name:String(d.peer.name || d.peer.userId) };
-    privateUsers = [peer, ...privateUsers.filter(u => String(u.userId) !== peer.userId)];
-    window.privateChatPasswords = window.privateChatPasswords || {};
-    window.privateChatPasswords[peer.userId] = password;
-    await openPrivateChat(peer, password);
+    privateUsers = [d.user, ...privateUsers.filter(u => String(u.userId) !== String(d.user.userId))];
+    await openPrivateChat(d.user, password);
     await loadPrivateUsers();
-    showToast(`Joined private chat with ${peer.name}`);
+    showToast(`Chat unlocked for ${d.user.name}`);
   } catch (e) {
-    privateUserJoinError.textContent = e?.message || 'Could not join private chat';
+    privateUserJoinError.textContent = e?.message || 'Could not verify user';
   } finally { privateUserJoinSave.disabled = false; }
 }
 privateUserJoinSave?.addEventListener('click', joinPrivateUserAndOpen);
@@ -3365,6 +3324,38 @@ function finishAccountLogin() {
 
 accountContinueBtn?.addEventListener('click', finishAccountLogin);
 accountNameInput?.addEventListener('keydown', e => { if (e.key === 'Enter') finishAccountLogin(); });
+
+const openChangeUserPasswordBtn = document.querySelector('#openChangeUserPasswordBtn');
+const changeUserPasswordModal = document.querySelector('#changeUserPasswordModal');
+const currentUserPasswordInput = document.querySelector('#currentUserPasswordInput');
+const newUserPasswordInput = document.querySelector('#newUserPasswordInput');
+const changeUserPasswordSave = document.querySelector('#changeUserPasswordSave');
+const changeUserPasswordClose = document.querySelector('#changeUserPasswordClose');
+const changeUserPasswordError = document.querySelector('#changeUserPasswordError');
+function openChangeUserPassword(){
+  nameModal?.classList.add('hidden');
+  currentUserPasswordInput.value=''; newUserPasswordInput.value=''; changeUserPasswordError.textContent='';
+  changeUserPasswordModal?.classList.remove('hidden');
+  setTimeout(()=>currentUserPasswordInput?.focus(),40);
+}
+function closeChangeUserPassword(){ changeUserPasswordModal?.classList.add('hidden'); changeUserPasswordError.textContent=''; }
+openChangeUserPasswordBtn?.addEventListener('click', openChangeUserPassword);
+changeUserPasswordClose?.addEventListener('click', closeChangeUserPassword);
+changeUserPasswordModal?.addEventListener('click', e=>{if(e.target===changeUserPasswordModal)closeChangeUserPassword();});
+changeUserPasswordSave?.addEventListener('click', async()=>{
+  const currentPassword=String(currentUserPasswordInput?.value||'');
+  const newPassword=String(newUserPasswordInput?.value||'');
+  if(!currentPassword){changeUserPasswordError.textContent='Enter current password';return;}
+  if(newPassword.length<4||newPassword.length>100){changeUserPasswordError.textContent='New password must be 4-100 characters';return;}
+  changeUserPasswordSave.disabled=true; changeUserPasswordError.textContent='';
+  try{
+    const r=await fetch('/api/private-user/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,currentPassword,newPassword})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok) throw new Error(d.error||'Could not change password');
+    closeChangeUserPassword(); showToast('Your user password was changed successfully');
+  }catch(e){changeUserPasswordError.textContent=e.message||'Could not change password';}
+  finally{changeUserPasswordSave.disabled=false;}
+});
 
 const groupNameModal = document.querySelector('#groupNameModal');
 const groupNameInput = document.querySelector('#groupNameInput');

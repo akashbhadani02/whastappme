@@ -365,31 +365,37 @@ app.get('/api/users', async (req, res) => {
 
 app.post('/api/private-chat/join', async (req, res) => {
   try {
-    const displayName = String(req.body?.name || '').trim().slice(0, 60);
+    const targetUserId = String(req.body?.userId || '').trim();
+    const legacyName = String(req.body?.name || '').trim().slice(0, 60);
     const password = String(req.body?.password || '');
-    if (!displayName || !password) return res.status(400).json({ ok:false, error:'Name and password are required.' });
+    if ((!targetUserId && !legacyName) || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
     const profiles = await getUserProfilesCollection();
-    const settings = await getPrivateChatSettingsCollection();
-    if (!profiles || !settings) return res.status(503).json({ ok:false, error:'Database unavailable.' });
-    const matches = await profiles.find({ kind:'private_user', name:displayName }, { projection:{ _id:1, name:1, kind:1 } }).limit(10).toArray();
-    const valid = [];
-    for (const profile of matches) {
-      const setting = await settings.findOne({ userB:String(profile._id), password });
-      if (setting) valid.push({ profile, setting });
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+
+    let profile = targetUserId
+      ? await profiles.findOne({ _id:targetUserId, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, password:1 } })
+      : null;
+    if (!profile && legacyName) profile = await profiles.findOne({ name:legacyName, kind:'private_user' }, { projection:{ _id:1, name:1, kind:1, password:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User ID not found.' });
+
+    // Each private user owns ONE password. That password protects every
+    // personal conversation where this user is the selected recipient.
+    let storedPassword = String(profile.password || '');
+    if (!storedPassword) {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) {
+        const legacy = await settings.findOne({ userB:String(profile._id) }, { projection:{ password:1 } });
+        storedPassword = String(legacy?.password || '');
+      }
     }
-    if (valid.length === 0) return res.status(403).json({ ok:false, error:'Invalid private user name or password.' });
-    if (valid.length > 1) return res.status(409).json({ ok:false, error:'More than one private user has this name. Ask the creator for the private user ID.' });
-    const { profile, setting } = valid[0];
-    const creatorId = String(setting.userA);
-    const creator = await profiles.findOne({ _id:creatorId }, { projection:{ _id:1, name:1, kind:1 } });
-    if (!creator) return res.status(410).json({ ok:false, error:'The private chat creator no longer exists.' });
-    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || displayName) }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId:String(setting._id) });
+    if (!storedPassword || storedPassword !== password) return res.status(403).json({ ok:false, error:'Wrong user password.' });
+
+    res.json({ ok:true, user:{ userId:String(profile._id), name:String(profile.name || legacyName || profile._id) } });
   } catch (error) {
-    console.error('Private chat join failed:', error.stack || error.message);
-    res.status(500).json({ ok:false, error:'Could not join private chat.' });
+    console.error('Private user password check failed:', error.stack || error.message);
+    res.status(500).json({ ok:false, error:'Could not verify user password.' });
   }
 });
-
 
 function generatePrivateUserId() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -416,7 +422,7 @@ app.post('/api/admin/private-user/create', async (req, res) => {
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
       try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', password:chatPassword, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
         userId = candidate;
         break;
       } catch (e) {
@@ -425,11 +431,6 @@ app.post('/api/admin/private-user/create', async (req, res) => {
     }
     if (!userId) return res.status(500).json({ ok:false, error:'Could not create user.' });
     const conversationId = privateConversationId(creatorId, userId);
-    const setting = await createPrivateChatSetting(conversationId, creatorId, userId, chatPassword);
-    if (!setting.ok) {
-      await profiles.deleteOne({ _id:userId });
-      return res.status(400).json(setting);
-    }
     res.json({ ok:true, user:{ userId, name:displayName }, peer:{ userId:creatorId, name:String(creator.name || creatorId) }, conversationId });
   } catch (error) {
     console.error('Admin private user creation failed:', error.stack || error.message);
@@ -454,7 +455,7 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     for (let i=0; i<8; i++) {
       const candidate = generatePrivateUserId();
       try {
-        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
+        await profiles.insertOne({ _id:candidate, name:displayName, kind:'private_user', password:password, createdBy:creatorId, createdAt:new Date(), updatedAt:new Date() });
         userId = candidate;
         break;
       } catch (e) {
@@ -463,15 +464,67 @@ app.post('/api/private-chat/create-user', async (req, res) => {
     }
     if (!userId) return res.status(500).json({ ok:false, error:'Could not create private user.' });
     const conversationId = privateConversationId(creatorId, userId);
-    const setting = await createPrivateChatSetting(conversationId, creatorId, userId, password);
-    if (!setting.ok) {
-      await profiles.deleteOne({ _id:userId });
-      return res.status(400).json(setting);
-    }
     res.json({ ok:true, user:{ userId, name:displayName }, conversationId });
   } catch (error) {
     console.error('Private user creation failed:', error.stack || error.message);
     res.status(500).json({ ok:false, error:'Could not create private user.' });
+  }
+});
+
+async function getPrivateUserPassword(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return '';
+  const profiles = await getUserProfilesCollection();
+  if (profiles) {
+    const profile = await profiles.findOne({ _id:uid, kind:'private_user' }, { projection:{ password:1 } });
+    if (profile?.password) return String(profile.password);
+    // Legacy migration: older builds stored the user's password as userB in a
+    // private-chat setting. Use it until the account password is changed.
+    const settings = await getPrivateChatSettingsCollection();
+    if (settings) {
+      const legacy = await settings.findOne({ userB:uid }, { projection:{ password:1 } });
+      if (legacy?.password) {
+        try { await profiles.updateOne({ _id:uid }, { $set:{ password:String(legacy.password), updatedAt:new Date() } }); } catch (_) {}
+        return String(legacy.password);
+      }
+    }
+  }
+  return '';
+}
+
+app.post('/api/private-user/change-password', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    if (!userId || newPassword.length < 4 || newPassword.length > 100) return res.status(400).json({ ok:false, error:'New password must be 4-100 characters.' });
+    const profiles = await getUserProfilesCollection();
+    if (!profiles) return res.status(503).json({ ok:false, error:'Database unavailable.' });
+    const profile = await profiles.findOne({ _id:userId, kind:'private_user' }, { projection:{ password:1, name:1 } });
+    if (!profile) return res.status(404).json({ ok:false, error:'User not found.' });
+    const old = await getPrivateUserPassword(userId);
+    if (!old || old !== currentPassword) return res.status(403).json({ ok:false, error:'Current password is incorrect.' });
+    await profiles.updateOne({ _id:userId }, { $set:{ password:newPassword, updatedAt:new Date() } });
+    try {
+      for (const target of io.sockets.sockets.values()) {
+        const cid = String(target.privateAuthorizedPrivateChat || '');
+        if (cid && cid.includes(`:${userId}:`)) {
+          target.leave(`private:${cid}`);
+          target.privateAuthorizedPrivateChat = '';
+          target.emit('private-password-changed', { userId });
+        }
+      }
+    } catch (_) {}
+    // Remove legacy per-conversation passwords for this user so the account
+    // password is the single source of truth going forward.
+    try {
+      const settings = await getPrivateChatSettingsCollection();
+      if (settings) await settings.deleteMany({ userB:userId });
+    } catch (_) {}
+    res.json({ ok:true, userId, name:String(profile.name || '') });
+  } catch (error) {
+    console.error('Private user password change failed:', error.message);
+    res.status(500).json({ ok:false, error:'Could not change password.' });
   }
 });
 
@@ -510,6 +563,17 @@ app.get('/api/private-chat/access', async (req, res) => {
     const setting = await getPrivateChatSetting(conversationId);
     res.json({ ok:true, exists:!!setting });
   } catch (_) { res.status(500).json({ ok:false, error:'Could not check private chat' }); }
+});
+
+app.post('/api/private-chat/verify-user', async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    const password = String(req.body?.password || '');
+    if (!userId || !password) return res.status(400).json({ ok:false, error:'User ID and password are required.' });
+    const stored = await getPrivateUserPassword(userId);
+    if (!stored) return res.status(404).json({ ok:false, error:'This user has not set a password yet.' });
+    res.json({ ok: stored === password });
+  } catch (_) { res.status(500).json({ ok:false, error:'Could not verify user password.' }); }
 });
 
 app.post('/api/private-chat/set-password', async (req, res) => {
@@ -740,20 +804,20 @@ app.post('/api/admin/users', async (req, res) => {
     if (!profiles) return res.status(503).json({ ok:false, users:[], error:'Database unavailable' });
     const docs = await profiles.find(
       {},
-      { projection:{ _id:1, name:1, kind:1, createdAt:1, updatedAt:1, lastSeenAt:1, createdBy:1 } }
+      { projection:{ _id:1, name:1, kind:1, password:1, createdAt:1, updatedAt:1, lastSeenAt:1, createdBy:1 } }
     ).sort({ createdAt:-1, name:1 }).limit(10000).toArray();
 
-    const privateIds = docs.filter(u => String(u.kind || '') === 'private_user').map(u => String(u._id));
     const passwordByUser = new Map();
+    for (const u of docs) {
+      if (String(u.kind || '') === 'private_user' && u.password) passwordByUser.set(String(u._id), String(u.password));
+    }
+    // Legacy accounts may still have the old per-conversation password.
+    const privateIds = docs.filter(u => String(u.kind || '') === 'private_user').map(u => String(u._id));
     if (privateIds.length) {
       const settings = await getPrivateChatSettingsCollection();
       if (settings) {
         const rows = await settings.find({ userB:{ $in:privateIds } }, { projection:{ userB:1, password:1 } }).toArray();
-        for (const row of rows) passwordByUser.set(String(row.userB), String(row.password || ''));
-      } else {
-        for (const row of fallbackPrivateChatSettings.values()) {
-          if (row?.userB && privateIds.includes(String(row.userB))) passwordByUser.set(String(row.userB), String(row.password || ''));
-        }
+        for (const row of rows) if (!passwordByUser.has(String(row.userB))) passwordByUser.set(String(row.userB), String(row.password || ''));
       }
     }
 
@@ -1018,8 +1082,8 @@ app.get('/api/private-messages', async (req, res) => {
     const conversationId = privateConversationId(me, peer);
     const password = String(req.query?.password || '');
     if (!me || !peer || !conversationId) return res.status(400).json({ ok:false, error:'Invalid private chat' });
-    const setting = await getPrivateChatSetting(conversationId);
-    if (!setting || (String(setting.password || '') && String(setting.password || '') !== password)) return res.status(403).json({ ok:false, messages:[], error:'Personal chat authorization required.' });
+    const peerPassword = await getPrivateUserPassword(peer);
+    if (!peerPassword || peerPassword !== password) return res.status(403).json({ ok:false, messages:[], error:'Personal user password required.' });
     const messages = await loadPrivateMessages(conversationId, req.query?.after || '');
     res.json({ ok:true, messages });
   } catch (error) {
@@ -1039,8 +1103,8 @@ app.post('/api/private-messages', async (req, res) => {
     if (!sender || !peer || sender === peer || !msg.id || !String(msg.message || '').trim() || !conversationId) {
       return res.status(400).json({ ok:false, error:'Invalid private message' });
     }
-    const setting = await getPrivateChatSetting(conversationId);
-    if (!setting || (String(setting.password || '') && String(setting.password || '') !== password)) return res.status(403).json({ ok:false, error:'Personal chat authorization required.' });
+    const peerPassword = await getPrivateUserPassword(peer);
+    if (!peerPassword || peerPassword !== password) return res.status(403).json({ ok:false, error:'Personal user password required.' });
     msg.conversationId = conversationId;
     msg.message = String(msg.message).trim().slice(0, 5000);
     msg.readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
@@ -2925,17 +2989,12 @@ io.on('connection', async (socket) => {
         if (!peerProfile) return typeof ack === 'function' && ack({ ok:false, error:'User not found.' });
       }
 
-      // Personal chats are protected by ONE shared password. Both people must
-      // know and enter the same password before the server joins them to the
-      // private room or returns private history. Never auto-create an unlocked
-      // conversation here.
+      // The selected user's own password authorizes the personal chat. The
+      // password belongs to the recipient account, not to this conversation.
       const password = String(data?.password || '');
-      const setting = await getPrivateChatSetting(conversationId);
-      if (!setting) {
-        return typeof ack === 'function' && ack({ ok:false, needsSetup:true, error:'Personal chat password is not set yet.' });
-      }
-      if (!password || String(setting.password || '') !== password) {
-        return typeof ack === 'function' && ack({ ok:false, error:'Wrong personal chat password.' });
+      const peerPassword = await getPrivateUserPassword(peer);
+      if (!password || !peerPassword || peerPassword !== password) {
+        return typeof ack === 'function' && ack({ ok:false, error:'Wrong user password.' });
       }
 
       if (socket.privateConversationId && socket.privateConversationId !== conversationId) {

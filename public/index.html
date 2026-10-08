@@ -145,6 +145,7 @@
       <input id="nameInput" type="text" maxlength="60" autocomplete="off" placeholder="Your name">
       <div class="password-error" id="nameError"></div>
       <button class="primary-btn" id="nameSave">Save name</button>
+      <button class="secondary-btn" id="openChangeUserPasswordBtn" type="button">🔑 Change my password</button>
     </div>
   </div>
 
@@ -282,7 +283,7 @@
       <h3>＋ Create New User</h3>
       <p>Create a personal chat account. Enter the name and set the password yourself. A unique Login ID will be generated automatically.</p>
       <input id="privateUserCreateName" type="text" maxlength="60" autocomplete="off" placeholder="User name">
-      <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="Private chat password" style="margin-top:10px">
+      <input id="privateUserCreatePassword" type="password" maxlength="100" autocomplete="new-password" placeholder="User password" style="margin-top:10px">
       <div class="password-error" id="privateUserCreateError"></div>
       <button class="primary-btn" id="privateUserCreateSave">＋ Add User</button>
     </div>
@@ -295,8 +296,8 @@
       <div class="lock-icon">🔑</div>
       <h3>Join private chat</h3>
       <p>Enter the private user name and the password shared by the chat creator.</p>
-      <input id="privateUserJoinName" type="text" maxlength="60" autocomplete="off" placeholder="Private user name">
-      <input id="privateUserJoinPassword" type="password" maxlength="100" autocomplete="current-password" placeholder="Private chat password" style="margin-top:10px">
+      <input id="privateUserJoinName" type="text" maxlength="60" autocomplete="off" placeholder="User ID">
+      <input id="privateUserJoinPassword" type="password" maxlength="100" autocomplete="current-password" placeholder="User password" style="margin-top:10px">
       <div class="password-error" id="privateUserJoinError"></div>
       <button class="primary-btn" id="privateUserJoinSave">Join & Open Chat</button>
     </div>
@@ -363,5 +364,17 @@
 <div class="toast" id="toast"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js?v=20261008-1130"></script>
+
+  <div class="modal hidden" id="changeUserPasswordModal" role="dialog" aria-modal="true" aria-label="Change your user password">
+    <div class="modal-card small-modal">
+      <button class="modal-close" id="changeUserPasswordClose" aria-label="Close">×</button>
+      <h3>🔑 Change My User Password</h3>
+      <p class="modal-help">This password protects your user ID. Anyone who wants to chat with you must enter this password.</p>
+      <input id="currentUserPasswordInput" type="password" maxlength="100" autocomplete="current-password" placeholder="Current password">
+      <input id="newUserPasswordInput" type="password" maxlength="100" autocomplete="new-password" placeholder="New password" style="margin-top:10px">
+      <div class="password-error" id="changeUserPasswordError"></div>
+      <button class="primary-btn" id="changeUserPasswordSave">Change Password</button>
+    </div>
+  </div>
 </body>
 </html>
