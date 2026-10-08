@@ -2459,15 +2459,16 @@ async function createPrivateUserAndOpen() {
     privateUsers = [created, ...privateUsers.filter(u => String(u.userId) !== created.userId)];
     closePrivateUserCreateModal();
     if (adminMode) {
-      // Admin-created users are credentials for the other person to use in
-      // New Chat -> Join Private Chat. Do not automatically switch the admin
-      // identity into the new account.
+      // Admin-created users are credentials for the other person to use.
       alert(`User added successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nGive this Login ID + Password to the other person.`);
       await loadAdminAllUsers();
     } else {
-      alert(`User created successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nShare this Login ID + Password with the other person so they can join your personal chat.`);
+      // Any normal user can create a new private-chat account from the + button.
+      // The creator keeps their current identity; the new user's credentials are
+      // shown immediately so they can be shared with the other person.
+      alert(`New user created successfully!\n\nName: ${created.name}\nLogin ID: ${created.userId}\nPassword: ${password}\n\nShare these credentials with the person who should use this account.`);
       await openPrivateChat(created, password);
-      showToast(`Private chat created for ${created.name}`);
+      showToast(`Private chat user created: ${created.name}`);
     }
   } catch (e) {
     privateUserCreateError.textContent = e?.message || 'Could not create private user';

@@ -64,3 +64,8 @@
 }
 #adminAllUsersModal .admin-users-toolbar #adminAllUsersAddUser{white-space:nowrap}
 @media(max-width:600px){#adminAllUsersModal .admin-users-toolbar{grid-template-columns:1fr 1fr}#adminAllUsersModal .admin-users-toolbar #adminAllUsersAddUser{width:100%}}
+
+/* Personal user creation: clear mobile/desktop form */
+#privateUserCreateModal .modal-card{width:min(94vw,480px);max-height:90dvh;overflow:auto}
+#privateUserCreateModal input{box-sizing:border-box;width:100%}
+@media(max-width:600px){#privateUserCreateModal .modal-card{width:calc(100vw - 20px);padding:20px 16px}}
