@@ -11,3 +11,56 @@
 .admin-users-card .admin-private-chat-row{gap:12px}
 .admin-users-card .admin-private-chat-info{min-width:0;flex:1}
 @media (max-width:600px){.admin-users-card{width:calc(100vw - 20px);max-height:88vh}.admin-users-card .admin-private-chat-row{align-items:flex-start}.admin-users-card .admin-private-chat-row .admin-delete-btn{flex:0 0 auto;white-space:nowrap}.admin-users-card .admin-private-chat-users{overflow-wrap:anywhere}}
+
+/* Final All Users layout fix: keep name/details visible on desktop and mobile. */
+#adminAllUsersModal .admin-users-card{box-sizing:border-box;overflow:hidden}
+#adminAllUsersModal #adminAllUsersList{min-width:0;overflow-x:hidden;overflow-y:auto;padding:2px 4px 10px}
+#adminAllUsersModal .admin-user-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  width:100%;
+  box-sizing:border-box;
+  min-width:0;
+}
+#adminAllUsersModal .admin-user-check{
+  display:grid;
+  grid-template-columns:24px minmax(0,1fr);
+  align-items:center;
+  min-width:0;
+  width:100%;
+}
+#adminAllUsersModal .admin-user-check .admin-private-chat-info{
+  display:block;
+  min-width:0;
+  width:100%;
+  color:#111b21;
+}
+#adminAllUsersModal .admin-user-check .admin-private-chat-users{
+  display:block;
+  color:#111b21 !important;
+  font-size:15px;
+  font-weight:700;
+  line-height:1.25;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+#adminAllUsersModal .admin-user-check .admin-private-chat-meta{
+  display:block;
+  color:#667781 !important;
+  font-size:12px;
+  line-height:1.35;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+#adminAllUsersModal .single-user-delete{white-space:nowrap;min-width:116px}
+@media(max-width:600px){
+  #adminAllUsersModal .admin-user-row{grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px}
+  #adminAllUsersModal .single-user-delete{min-width:92px;font-size:11px;padding:8px 7px}
+  #adminAllUsersModal .admin-user-check .admin-private-chat-users{font-size:14px}
+  #adminAllUsersModal .admin-user-check .admin-private-chat-meta{font-size:11px}
+}
+#adminAllUsersModal .admin-users-toolbar #adminAllUsersAddUser{white-space:nowrap}
+@media(max-width:600px){#adminAllUsersModal .admin-users-toolbar{grid-template-columns:1fr 1fr}#adminAllUsersModal .admin-users-toolbar #adminAllUsersAddUser{width:100%}}

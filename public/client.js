@@ -221,6 +221,7 @@ const adminAllUsersClose = document.querySelector('#adminAllUsersClose');
 const adminAllUsersList = document.querySelector('#adminAllUsersList');
 const adminAllUsersError = document.querySelector('#adminAllUsersError');
 const adminAllUsersRefresh = document.querySelector('#adminAllUsersRefresh');
+const adminAllUsersAddUser = document.querySelector('#adminAllUsersAddUser');
 const adminAllUsersSelectAll = document.querySelector('#adminAllUsersSelectAll');
 const adminAllUsersDeleteSelected = document.querySelector('#adminAllUsersDeleteSelected');
 const adminAllUsersBack = document.querySelector('#adminAllUsersBack');
@@ -2594,6 +2595,7 @@ adminPrivateChatsClose?.addEventListener('click', () => adminPrivateChatsModal?.
 adminAllUsersClose?.addEventListener('click', () => adminAllUsersModal?.classList.add('hidden'));
 adminAllUsersModal?.addEventListener('click', e => { if(e.target===adminAllUsersModal) adminAllUsersModal.classList.add('hidden'); });
 adminAllUsersRefresh?.addEventListener('click', loadAdminAllUsers);
+adminAllUsersAddUser?.addEventListener('click', () => { if (!adminUnlocked) return requestAdminThen(() => adminAllUsersAddUser?.click()); openPrivateUserCreateModal(); });
 adminAllUsersBack?.addEventListener('click', () => {
   adminAllUsersModal?.classList.add('hidden');
   if (adminUnlocked) { adminGroupsModal?.classList.remove('hidden'); loadAdminGroups?.(); }
