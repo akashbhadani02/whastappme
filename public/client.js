@@ -2241,7 +2241,9 @@ socket.on('connect', () => {
   // Never show online merely because THIS browser connected.
   otherGroupMemberOnline = false;
   setOnlineStatus('offline');
-  socket.emit('register-user', { userId, name, deviceId });
+  socket.emit('register-user', { userId, name, deviceId }, result => {
+    if (result?.ok) loadPrivateUsers().catch(() => {});
+  });
   setupWebPush().catch(() => {});
   pollWebNotifications().catch(() => {});
   loadPrivateUsers().catch(() => {});
@@ -3379,7 +3381,19 @@ function finishAccountLogin() {
   syncAndroidNotificationIdentity();
   accountModal.classList.add('hidden');
   updateMyNameUI();
-  socket.emit('register-user', { userId, name, password: nextPassword, deviceId });
+  // Register only after the user has supplied BOTH name and password.
+  // The server creates the profile at this point, so the account immediately
+  // becomes visible to Admin > All Users and to other users' chat directories.
+  socket.emit('register-user', { userId, name, password: nextPassword, deviceId }, result => {
+    if (!result?.ok) {
+      accountError.textContent = result?.error || 'Could not create your account.';
+      accountModal.classList.remove('hidden');
+      return;
+    }
+    // Refresh after MongoDB registration completes so the new user appears
+    // immediately in the sidebar/chat directory and Admin can see the account.
+    loadPrivateUsers().catch(() => {});
+  });
   // The Continue button is a user gesture, so it is the safest place to both
   // request permission and register the Web Push subscription.
   enableNotifications().then(granted => {
