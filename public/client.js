@@ -2394,12 +2394,12 @@ privateUserCreateClose?.addEventListener('click', closePrivateUserCreateModal);
 privateUserCreateModal?.addEventListener('click', e => { if (e.target === privateUserCreateModal) closePrivateUserCreateModal(); });
 newGroupChoice?.addEventListener('click', () => {
   newChatChoiceModal?.classList.add('hidden');
-  requestAdminThen(() => openGroupEditor());
+  openGroupEditor();
 });
 privateChatClose?.addEventListener('click', () => privateChatModal?.classList.add('hidden'));
 privateChatModal?.addEventListener('click', e => { if (e.target === privateChatModal) privateChatModal.classList.add('hidden'); });
 privateChatSearch?.addEventListener('input', () => renderPrivateUserList(privateChatSearch.value));
-newGroupBtn?.addEventListener('click', () => requestAdminThen(() => openGroupEditor()));
+newGroupBtn?.addEventListener('click', () => openGroupEditor());
 document.querySelector('#statusBtn').addEventListener('click', () => showToast('Status')); 
 async function requestAdminThen(action) {
   requestPassword('Admin password', 'Enter the admin password to manage groups and passwords.', async () => {
@@ -3096,12 +3096,17 @@ async function saveNewGroup() {
   if (!nameValue || !passwordValue) { groupEditError.textContent = 'Group name and password are required'; return; }
   groupEditError.textContent = 'Saving…';
   try {
-    const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminPassword: PASSWORD, name: nameValue, password: passwordValue }) });
+    const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nameValue, password: passwordValue }) });
     const data = await response.json();
-    if (!data.ok) { groupEditError.textContent = data.error || 'Could not create group'; return; }
+    if (!response.ok || !data.ok || !data.group?.id) { groupEditError.textContent = data.error || 'Could not create group'; return; }
     groupEditModal.classList.add('hidden');
     await loadGroups();
-    showToast(`Group ${nameValue} created`);
+    const createdGroup = groups.find(g => g.id === data.group.id) || { id: data.group.id, name: data.group.name || nameValue };
+    if (!groups.some(g => g.id === createdGroup.id)) groups.push(createdGroup);
+    setVerifiedGroupPassword(createdGroup.id, passwordValue);
+    renderGroupList();
+    await joinGroup(createdGroup.id, true);
+    showToast(`Group ${nameValue} created and opened`);
   } catch (_) {
     groupEditError.textContent = 'Server connection failed. Please try again.';
   }

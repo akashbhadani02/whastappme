@@ -979,7 +979,8 @@ app.post('/api/groups/verify', async (req, res) => {
 
 app.post('/api/groups', async (req, res) => {
   try {
-    if (String(req.body?.adminPassword || '') !== ADMIN_PASSWORD) return res.status(403).json({ ok: false });
+    // Group creation is available from the + / New Group flow. The group password
+    // protects access to the newly created group; admin credentials are not required.
     const name = String(req.body?.name || '').trim().slice(0, 60);
     const password = String(req.body?.password || '').trim();
     if (!name || !password) return res.status(400).json({ ok: false });
