@@ -116,6 +116,29 @@ document.addEventListener('keydown', e => {
   }
 }, true);
 
+// Day / night theme: remember the visitor's choice on this device.
+const THEME_STORAGE_KEY = 'wa_theme_preference';
+const themeToggle = document.getElementById('themeToggle');
+function applyTheme(theme) {
+  const isNight = theme === 'dark';
+  document.documentElement.dataset.theme = isNight ? 'dark' : 'light';
+  if (themeToggle) {
+    themeToggle.textContent = isNight ? '☀️' : '🌙';
+    themeToggle.title = isNight ? 'Switch to day mode' : 'Switch to night mode';
+    themeToggle.setAttribute('aria-label', themeToggle.title);
+  }
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeMeta) themeMeta.setAttribute('content', isNight ? '#111b21' : '#00a884');
+}
+let savedTheme = 'light';
+try { savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'light'; } catch (_) {}
+applyTheme(savedTheme);
+themeToggle?.addEventListener('click', () => {
+  const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(nextTheme);
+  try { localStorage.setItem(THEME_STORAGE_KEY, nextTheme); } catch (_) {}
+});
+
 const app = document.querySelector('.app-shell');
 const messageArea = document.querySelector('#messageArea');
 const textarea = document.querySelector('#textarea');
