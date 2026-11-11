@@ -1,4 +1,4 @@
-const CACHE = 'whatsapp-pwa-v30-group-push';
+const CACHE = 'whatsapp-pwa-v31-group-push';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

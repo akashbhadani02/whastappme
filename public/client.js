@@ -28,7 +28,7 @@ let userId = localStorage.getItem('wa_user_id') || '';
 // notification permission, the same PushSubscription can receive messages
 // for every group the User ID has previously joined.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js?v=29', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
+  navigator.serviceWorker.register('/sw.js?v=31', { scope: '/' }).then(reg => reg.update().catch(() => {})).catch(() => {});
 }
 
 function syncAndroidNotificationIdentity() {
@@ -204,6 +204,7 @@ const menuBtn = document.querySelector('#menuBtn');
 const appMenu = document.querySelector('#appMenu');
 const installAppBtn = document.querySelector('#installAppBtn');
 const adminGroupsBtn = document.querySelector('#adminGroupsBtn');
+const enableNotificationsBtn = document.querySelector('#enableNotificationsBtn');
 const newGroupBtn = document.querySelector('#newGroupBtn');
 const adminGroupsModal = document.querySelector('#adminGroupsModal');
 const adminGroupsClose = document.querySelector('#adminGroupsClose');
@@ -287,6 +288,32 @@ installAppBtn?.addEventListener('click', () => {
   } else {
     showToast('Android phone પર આ shortcutથી WhatsApp APK install કરો.');
   }
+});
+
+// A visible, user-initiated control makes notification setup clear and reliable
+// on browsers that only allow permission prompts after a deliberate tap/click.
+enableNotificationsBtn?.addEventListener('click', async () => {
+  appMenu?.classList.add('hidden');
+  if (!userId) { showToast('પહેલા તમારું એકાઉન્ટ ખોલો.'); return; }
+  if (window.AndroidBridge) {
+    showToast('Android એપમાં નોટિફિકેશન સર્વિસ આપમેળે ચાલુ થાય છે.');
+    return;
+  }
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    showToast('આ બ્રાઉઝરમાં Push Notification ઉપલબ્ધ નથી.');
+    return;
+  }
+  const granted = await enableNotifications();
+  if (!granted) {
+    showToast(Notification.permission === 'denied' ? 'Browser settings માં Notifications Allow કરો.' : 'Notification permission મળી નથી.');
+    return;
+  }
+  const subscribed = await setupWebPush();
+  if (!subscribed) {
+    showToast('નોટિફિકેશન સેટઅપ થયું નથી. Internet અને server database તપાસો.');
+    return;
+  }
+  showToast('નોટિફિકેશન ચાલુ થઈ ગયું! ગ્રુપના નવા મેસેજની જાણ મળશે.');
 });
 
 let pendingAction = null;
@@ -391,7 +418,7 @@ async function setupWebPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
     if (Notification.permission !== 'granted') return false;
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=29', { scope: '/' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=31', { scope: '/' });
       await registration.update().catch(() => {});
       await navigator.serviceWorker.ready;
       const response = await fetch('/api/push/public-key', { cache: 'no-store' });
